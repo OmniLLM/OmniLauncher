@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="OmniLauncher Settings"
-        Width="500" Height="460"
+        Width="520" Height="640"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -22,60 +22,108 @@
 
             <!-- Title -->
             <TextBlock Grid.Row="0" Text="⚙️  Settings" Foreground="#CBA6F7"
-                       FontSize="18" FontWeight="Bold" Margin="0,0,0,20"/>
+                       FontSize="18" FontWeight="Bold" Margin="0,0,0,16"/>
 
-            <!-- Settings grid -->
-            <StackPanel Grid.Row="1">
+            <!-- Scrollable settings body -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
 
-                <!-- Hotkey -->
-                <TextBlock Text="Global Hotkey" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
-                <ComboBox x:Name="HotkeyCombo" Margin="0,0,0,16"
-                          Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A">
-                    <ComboBoxItem Content="Alt + Space" Tag="AltSpace"/>
-                    <ComboBoxItem Content="Ctrl + Space" Tag="CtrlSpace"/>
-                    <ComboBoxItem Content="Win + Space" Tag="WinSpace"/>
-                    <ComboBoxItem Content="Ctrl + Alt + Space" Tag="CtrlAltSpace"/>
-                </ComboBox>
+                    <!-- ── GENERAL ───────────────────────────────────── -->
+                    <TextBlock Text="GENERAL" Foreground="#6C7086" FontSize="10" FontWeight="Bold"
+                               Margin="0,0,0,8" LetterSpacing="1"/>
 
-                <!-- Theme -->
-                <TextBlock Text="Theme" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
-                <ComboBox x:Name="ThemeCombo" Margin="0,0,0,16"
-                          Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A">
-                    <ComboBoxItem Content="Catppuccin Mocha (Dark)" Tag="dark"/>
-                    <ComboBoxItem Content="Catppuccin Latte (Light)" Tag="light"/>
-                </ComboBox>
+                    <!-- Hotkey -->
+                    <TextBlock Text="Global Hotkey" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="HotkeyBox" Grid.Column="0"
+                                 Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A"
+                                 Padding="8,6" IsReadOnly="True"
+                                 KeyDown="HotkeyBox_KeyDown" PreviewKeyDown="HotkeyBox_PreviewKeyDown"
+                                 GotFocus="HotkeyBox_GotFocus" LostFocus="HotkeyBox_LostFocus"/>
+                        <Button x:Name="RecordBtn" Grid.Column="1" Content="Record"
+                                Width="70" Height="30" Margin="6,0,0,0"
+                                Background="#313244" Foreground="#CDD6F4" BorderThickness="0"
+                                Cursor="Hand" Click="RecordBtn_Click"/>
+                    </Grid>
+                    <TextBlock x:Name="HotkeyHint" Text="Click 'Record' then press a modifier+key combination"
+                               Foreground="#6C7086" FontSize="10" Margin="0,0,0,16"/>
 
-                <!-- OmniLLM URL -->
-                <TextBlock Text="OmniLLM Base URL" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
-                <TextBox x:Name="OmniLLMUrl" Text="http://localhost:5000"
-                         Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A"
-                         Padding="8,6" Margin="0,0,0,16"/>
+                    <!-- Theme -->
+                    <TextBlock Text="Theme" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="ThemeCombo" Margin="0,0,0,16"
+                              Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A">
+                        <ComboBoxItem Content="Catppuccin Mocha (Dark)"  Tag="dark"/>
+                        <ComboBoxItem Content="Catppuccin Latte (Light)" Tag="light"/>
+                    </ComboBox>
 
-                <!-- OmniLLM Model -->
-                <TextBlock Text="OmniLLM Model" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
-                <TextBox x:Name="OmniLLMModel" Text="auto"
-                         Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A"
-                         Padding="8,6" Margin="0,0,0,16"/>
+                    <!-- Max results -->
+                    <TextBlock Text="Max Results" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
+                    <Slider x:Name="MaxResultsSlider" Minimum="3" Maximum="15" Value="8"
+                            TickFrequency="1" IsSnapToTickEnabled="True"
+                            Foreground="#CBA6F7" Margin="0,0,0,4"/>
+                    <TextBlock Text="{Binding ElementName=MaxResultsSlider, Path=Value, StringFormat={}{0:0} results}"
+                               Foreground="#7F849C" FontSize="11" Margin="0,0,0,16"/>
 
-                <!-- Max results -->
-                <TextBlock Text="Max Results" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
-                <Slider x:Name="MaxResultsSlider" Minimum="3" Maximum="15" Value="8"
-                        TickFrequency="1" IsSnapToTickEnabled="True"
-                        Foreground="#CBA6F7" Margin="0,0,0,4"/>
-                <TextBlock Text="{Binding ElementName=MaxResultsSlider, Path=Value, StringFormat={}{0:0} results}"
-                           Foreground="#7F849C" FontSize="11" Margin="0,0,0,16"/>
+                    <!-- Start on boot -->
+                    <CheckBox x:Name="StartOnBoot" Content="Start on Windows login"
+                              Foreground="#CDD6F4" Margin="0,0,0,8"/>
 
-                <!-- Start on boot -->
-                <CheckBox x:Name="StartOnBoot" Content="Start on Windows login"
-                          Foreground="#CDD6F4" Margin="0,0,0,8"/>
+                    <!-- Hide on launch -->
+                    <CheckBox x:Name="HideOnLaunch" Content="Start hidden (hotkey to show)"
+                              Foreground="#CDD6F4" Margin="0,0,0,20" IsChecked="True"/>
 
-                <!-- Hide on launch -->
-                <CheckBox x:Name="HideOnLaunch" Content="Start hidden (hotkey to show)"
-                          Foreground="#CDD6F4" IsChecked="True"/>
-            </StackPanel>
+                    <!-- ── AI / LLM PROVIDER ──────────────────────────── -->
+                    <TextBlock Text="AI / LLM PROVIDER" Foreground="#6C7086" FontSize="10" FontWeight="Bold"
+                               Margin="0,0,0,8" LetterSpacing="1"/>
+
+                    <!-- Provider -->
+                    <TextBlock Text="Provider" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="ProviderCombo" Margin="0,0,0,16"
+                              Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A"
+                              SelectionChanged="ProviderCombo_SelectionChanged">
+                        <ComboBoxItem Content="OmniLLM (local)"  Tag="omnillm"   IsSelected="True"/>
+                        <ComboBoxItem Content="OpenAI"           Tag="openai"/>
+                        <ComboBoxItem Content="Azure OpenAI"     Tag="azure"/>
+                        <ComboBoxItem Content="Custom"           Tag="custom"/>
+                    </ComboBox>
+
+                    <!-- Base URL -->
+                    <TextBlock Text="Base URL" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
+                    <TextBox x:Name="OmniLLMUrl" Text="http://localhost:5000"
+                             Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A"
+                             Padding="8,6" Margin="0,0,0,16"/>
+
+                    <!-- API Key -->
+                    <TextBlock Text="API Key" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
+                    <PasswordBox x:Name="ApiKeyBox"
+                                 Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A"
+                                 Padding="8,6" Margin="0,0,0,4"/>
+                    <TextBlock Text="Leave blank to use ~/.config/omnillm/api-key"
+                               Foreground="#6C7086" FontSize="10" Margin="0,0,0,16"/>
+
+                    <!-- Model -->
+                    <TextBlock Text="Model" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
+                    <TextBox x:Name="OmniLLMModel" Text="auto"
+                             Background="#181825" Foreground="#CDD6F4" BorderBrush="#45475A"
+                             Padding="8,6" Margin="0,0,0,16"/>
+
+                    <!-- Max Tokens -->
+                    <TextBlock Text="Max Tokens (AI Response)" Foreground="#7F849C" FontSize="11" Margin="0,0,0,4"/>
+                    <Slider x:Name="MaxTokensSlider" Minimum="128" Maximum="2048" Value="512"
+                            TickFrequency="128" IsSnapToTickEnabled="True"
+                            Foreground="#CBA6F7" Margin="0,0,0,4"/>
+                    <TextBlock Text="{Binding ElementName=MaxTokensSlider, Path=Value, StringFormat={}{0:0} tokens}"
+                               Foreground="#7F849C" FontSize="11" Margin="0,0,0,8"/>
+
+                </StackPanel>
+            </ScrollViewer>
 
             <!-- Buttons -->
-            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
                 <Button Content="Cancel" Width="80" Height="32" Margin="0,0,8,0"
                         Background="#313244" Foreground="#CDD6F4" BorderThickness="0"
                         Cursor="Hand" Click="CancelBtn_Click"/>

@@ -85,31 +85,35 @@ Results are ordered by score — exact-prefix matches score higher than substrin
 ## Configuration
 
 Settings are stored at `%APPDATA%\OmniLauncher\settings.json`.  
-Edit via **Ctrl+,** or directly in the file:
+Edit via **Ctrl+,** (Settings window) or directly in the file.
 
 ```json
 {
-  "hotkey":       "AltSpace",
-  "theme":        "dark",
-  "omniLLMUrl":   "http://localhost:5000",
-  "omniLLMModel": "auto",
-  "omniLLMApiKey": "",
-  "maxResults":   8,
-  "startOnBoot":  false,
-  "hideOnLaunch": true
+  "hotkey":           "Alt+Space",
+  "theme":            "dark",
+  "provider":         "omnillm",
+  "omniLLMUrl":       "http://localhost:5000",
+  "omniLLMApiKey":    "",
+  "omniLLMModel":     "auto",
+  "omniLLMMaxTokens": 512,
+  "maxResults":       8,
+  "startOnBoot":      false,
+  "hideOnLaunch":     true
 }
 ```
 
 | Key | Values | Default | Notes |
 |-----|--------|---------|-------|
-| `hotkey` | `AltSpace` · `CtrlSpace` · `WinSpace` · `CtrlAltSpace` | `AltSpace` | Requires restart. If the combo is already claimed by another app, OmniLauncher logs a warning and starts without a hotkey — use the tray icon instead. |
-| `theme` | `dark` · `light` | `dark` | Requires restart |
-| `omniLLMUrl` | Any URL | `http://localhost:5000` | |
-| `omniLLMModel` | Model name or `auto` | `auto` | Passed as `model` in the API request |
-| `omniLLMApiKey` | API key string | *(empty)* | Falls back to `~/.config/omnillm/api-key` |
-| `maxResults` | integer | `8` | Cap on results shown per query |
-| `startOnBoot` | bool | `false` | Writes/removes `HKCU\...\Run` registry key |
-| `hideOnLaunch` | bool | `true` | When false, window is visible on startup |
+| `hotkey` | Any `Modifier+Key` string | `"Alt+Space"` | Use the **Record** button in Settings to capture any combo. Legacy values (`AltSpace`, `CtrlSpace`, `WinSpace`, `CtrlAltSpace`) are auto-migrated. Requires restart. If the combo is taken by another app, OmniLauncher logs a warning and falls back to the tray icon. |
+| `theme` | `dark` · `light` | `dark` | Catppuccin Mocha / Latte. Requires restart. |
+| `provider` | `omnillm` · `openai` · `azure` · `custom` | `omnillm` | Switching provider pre-fills `omniLLMUrl` with the correct base URL. |
+| `omniLLMUrl` | Any base URL | `http://localhost:5000` | Endpoint for `/v1/chat/completions` requests. |
+| `omniLLMApiKey` | API key string | *(empty)* | Falls back to `~/.config/omnillm/api-key` if blank. |
+| `omniLLMModel` | Model name or `auto` | `auto` | Passed as `model` in the API request. |
+| `omniLLMMaxTokens` | 128 – 2048 | `512` | `max_tokens` for AI responses. |
+| `maxResults` | 3 – 15 | `8` | Cap on results shown per query. |
+| `startOnBoot` | bool | `false` | Writes/removes `HKCU\...\Run` registry key. |
+| `hideOnLaunch` | bool | `true` | When `false`, window is visible on startup. |
 
 ### OmniLLM API key resolution
 

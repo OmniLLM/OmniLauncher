@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
@@ -31,16 +32,18 @@ public partial class MainWindow : Window, IPublicAPI
         base.OnSourceInitialized(e);
         var helper = new WindowInteropHelper(this);
 
-        var (mod, vk) = _cfg.Hotkey switch
-        {
-            "CtrlSpace"    => (HotkeyManager.MOD_CONTROL, 0x20u),
-            "WinSpace"     => (HotkeyManager.MOD_WIN, 0x20u),
-            "CtrlAltSpace" => (HotkeyManager.MOD_CONTROL | HotkeyManager.MOD_ALT, 0x20u),
-            _              => (HotkeyManager.MOD_ALT, 0x20u), // default Alt+Space
-        };
+        var (mod, vk) = _cfg.ParseHotkey();
 
-        _hotkey = new HotkeyManager(helper.Handle, HOTKEY_ID, mod, vk);
-        _hotkey.HotkeyPressed += ToggleWindow;
+        try
+        {
+            _hotkey = new HotkeyManager(helper.Handle, HOTKEY_ID, mod, vk);
+            _hotkey.HotkeyPressed += ToggleWindow;
+        }
+        catch (InvalidOperationException ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Hotkey registration failed: {ex.Message}");
+        }
+
         HwndSource.FromHwnd(helper.Handle)!.AddHook(WndProc);
     }
 
