@@ -70,12 +70,19 @@ public partial class MainWindow : Window, IPublicAPI
     private void LoadAllPlugins()
     {
         var ctx = new PluginInitContext(AppDomain.CurrentDomain.BaseDirectory, this);
-        PluginManager.RegisterPlugin(new AppLauncherPlugin(),  ctx);
-        PluginManager.RegisterPlugin(new WebSearchPlugin(),    ctx);
-        PluginManager.RegisterPlugin(new CalculatorPlugin(),   ctx);
-        PluginManager.RegisterPlugin(new FileSearchPlugin(),   ctx);
-        PluginManager.RegisterPlugin(new ClipboardPlugin(),    ctx);
-        PluginManager.RegisterPlugin(new OmniLLMPlugin(),      ctx);
+        PluginManager.RegisterPlugin(new AppLauncherPlugin(),     ctx);
+        PluginManager.RegisterPlugin(new WebSearchPlugin(),     ctx);
+        PluginManager.RegisterPlugin(new CalculatorPlugin(),    ctx);
+        PluginManager.RegisterPlugin(new FileSearchPlugin(),    ctx);
+        PluginManager.RegisterPlugin(new ClipboardPlugin(),     ctx);
+        PluginManager.RegisterPlugin(new OmniLLMPlugin(),       ctx);
+        PluginManager.RegisterPlugin(new ShellPlugin(),         ctx);
+        PluginManager.RegisterPlugin(new WindowWalkerPlugin(),  ctx);
+        PluginManager.RegisterPlugin(new SystemCommandsPlugin(),ctx);
+        PluginManager.RegisterPlugin(new ProcessKillerPlugin(), ctx);
+        PluginManager.RegisterPlugin(new ColorPlugin(),         ctx);
+        PluginManager.RegisterPlugin(new UnitConverterPlugin(), ctx);
+        PluginManager.RegisterPlugin(new TimerPlugin(),         ctx);
 
         // Load external plugins from Plugins/ directory
         var pluginDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Plugins");

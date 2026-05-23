@@ -17,7 +17,14 @@ Built on .NET 8 WPF with a Catppuccin Mocha dark theme.
 | 📁 **File Search** | Finds files and folders across your user profile directories |
 | 📋 **Clipboard History** | In-memory ring of last 50 clips, searchable and re-pasteable |
 | 🤖 **OmniLLM AI** | Sends prompts to your local OmniLLM proxy, shows response in a popup |
-| ⚙️ **Settings UI** | Hotkey, theme, OmniLLM URL/model, max results, startup on boot |
+| 💻 **Shell** | Run commands in CMD or PowerShell (`> `) |
+| 🪟 **Window Walker** | Switch to any open window (`ww `) |
+| ⚙️ **System Commands** | lock · sleep · restart · shutdown · empty trash |
+| ☠️ **Process Killer** | Kill processes by name (`kill `) |
+| 🎨 **Color Converter** | Convert hex/rgb/hsl, copy result (`# `) |
+| 📐 **Unit Converter** | Length · weight · temperature · data (`conv `) |
+| ⏱️ **Timer** | Set a notification timer (`timer 25m`) |
+| ⚙️ **Settings UI** | Hotkey recorder, theme, AI provider/model/key, startup |
 | 🖥️ **System Tray** | Runs silently in the tray; double-click or use the hotkey to show |
 | 🌙 **Themes** | Catppuccin Mocha (dark) · Catppuccin Latte (light) |
 | 🔌 **Plugin system** | Drop `OmniLauncher.Plugin.*.dll` in `Plugins/` to extend |
@@ -65,9 +72,10 @@ dotnet publish src/OmniLauncher -c Release -r win-x64 --self-contained
 ## Search Syntax
 
 | Prefix | Plugin | What it does | Example |
-|--------|--------|--------------|---------|
+|--------|--------|--------------|---------|\
 | *(none)* | App Launcher | Searches Start Menu shortcuts | `notepad` |
-| *(none, no match)* | Web Search | Falls back to Google | `what is SOLID` |
+| *(none)* | System Commands | lock · sleep · restart · shutdown | `lock`, `sleep` |
+| *(no match)* | Web Search | Falls back to Google | `what is SOLID` |
 | `g ` | Google | Opens Google search | `g rust async book` |
 | `yt ` | YouTube | Opens YouTube search | `yt lo-fi beats` |
 | `gh ` | GitHub | Opens GitHub search | `gh omnillm` |
@@ -76,6 +84,12 @@ dotnet publish src/OmniLauncher -c Release -r win-x64 --self-contained
 | `open ` | File Search | Same as `f ` | `open Downloads` |
 | `cb ` | Clipboard History | Searches last 50 clipboard entries | `cb api key` |
 | `ai ` | OmniLLM AI | Sends prompt to OmniLLM, shows response | `ai explain SOLID principles` |
+| `> ` | Shell | Run in CMD or PowerShell | `> ipconfig /all` |
+| `ww ` | Window Walker | Switch to an open window | `ww chrome` |
+| `kill ` | Process Killer | Kill a process by name | `kill chrome` |
+| `# ` | Color | Convert hex/rgb/hsl, copy to clipboard | `#1e1e2e` |
+| `conv ` | Unit Converter | Convert length/weight/temp/data | `conv 5 km to miles` |
+| `timer ` | Timer | Notification after a delay | `timer 25m pomodoro` |
 
 **Scoring:** App Launcher returns up to 6 results; File Search returns up to 8.  
 Results are ordered by score — exact-prefix matches score higher than substring matches.
