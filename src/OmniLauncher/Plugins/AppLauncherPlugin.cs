@@ -22,7 +22,7 @@ public class AppLauncherPlugin : IPlugin
             Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
             Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "Microsoft\Windows\Start Menu"),
+                @"Microsoft\Windows\Start Menu"),
         };
 
         foreach (var dir in dirs.Where(Directory.Exists))

@@ -1,5 +1,4 @@
 using System.Data;
-using OmniLauncher.Windows;
 using OmniLauncher.Core;
 
 namespace OmniLauncher.Plugins;

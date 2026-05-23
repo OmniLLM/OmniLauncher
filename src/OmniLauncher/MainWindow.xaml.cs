@@ -1,10 +1,10 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using OmniLauncher.Core;
 using OmniLauncher.Plugins;
-using OmniLauncher.Windows;
 
 namespace OmniLauncher;
 
@@ -36,11 +36,19 @@ public partial class MainWindow : Window, IPublicAPI
             "CtrlSpace"    => (HotkeyManager.MOD_CONTROL, 0x20u),
             "WinSpace"     => (HotkeyManager.MOD_WIN, 0x20u),
             "CtrlAltSpace" => (HotkeyManager.MOD_CONTROL | HotkeyManager.MOD_ALT, 0x20u),
-            _              => (HotkeyManager.MOD_ALT, 0x20u), // default Alt+Space
+            _              => (HotkeyManager.MOD_ALT, 0x20u),
         };
 
-        _hotkey = new HotkeyManager(helper.Handle, HOTKEY_ID, mod, vk);
-        _hotkey.HotkeyPressed += ToggleWindow;
+        try
+        {
+            _hotkey = new HotkeyManager(helper.Handle, HOTKEY_ID, mod, vk);
+            _hotkey.HotkeyPressed += ToggleWindow;
+        }
+        catch (InvalidOperationException ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Hotkey registration failed: {ex.Message}");
+        }
+
         HwndSource.FromHwnd(helper.Handle)!.AddHook(WndProc);
     }
 
