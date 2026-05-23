@@ -3,37 +3,44 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using OmniLauncher.Core;
+using OmniLauncher.Plugins;
+using OmniLauncher.Windows;
 
 namespace OmniLauncher;
 
 public partial class MainWindow : Window, IPublicAPI
 {
     private const int HOTKEY_ID = 1;
-    private const uint VK_SPACE = 0x20;
     private HotkeyManager? _hotkey;
+    private readonly AppSettings _cfg;
 
     public PluginManager PluginManager { get; }
 
     public MainWindow()
     {
         InitializeComponent();
+        _cfg = AppSettings.Load();
         PluginManager = new PluginManager(this);
+        LoadAllPlugins();
 
-        // Load built-in + external plugins
-        LoadBuiltinPlugins();
-        var pluginDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Plugins");
-        PluginManager.LoadPluginsFromDirectory(pluginDir);
-
-        Deactivated += (_, _) => Hide();
+        Deactivated += (_, _) => { if (IsVisible) Hide(); };
     }
 
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
         var helper = new WindowInteropHelper(this);
-        _hotkey = new HotkeyManager(helper.Handle, HOTKEY_ID, HotkeyManager.MOD_ALT, VK_SPACE);
-        _hotkey.HotkeyPressed += ToggleWindow;
 
+        var (mod, vk) = _cfg.Hotkey switch
+        {
+            "CtrlSpace"    => (HotkeyManager.MOD_CONTROL, 0x20u),
+            "WinSpace"     => (HotkeyManager.MOD_WIN, 0x20u),
+            "CtrlAltSpace" => (HotkeyManager.MOD_CONTROL | HotkeyManager.MOD_ALT, 0x20u),
+            _              => (HotkeyManager.MOD_ALT, 0x20u), // default Alt+Space
+        };
+
+        _hotkey = new HotkeyManager(helper.Handle, HOTKEY_ID, mod, vk);
+        _hotkey.HotkeyPressed += ToggleWindow;
         HwndSource.FromHwnd(helper.Handle)!.AddHook(WndProc);
     }
 
@@ -44,7 +51,7 @@ public partial class MainWindow : Window, IPublicAPI
         return IntPtr.Zero;
     }
 
-    private void ToggleWindow()
+    public void ToggleWindow()
     {
         if (IsVisible) { Hide(); }
         else
@@ -57,12 +64,19 @@ public partial class MainWindow : Window, IPublicAPI
         }
     }
 
-    private void LoadBuiltinPlugins()
+    private void LoadAllPlugins()
     {
         var ctx = new PluginInitContext(AppDomain.CurrentDomain.BaseDirectory, this);
-        PluginManager.RegisterPlugin(new OmniLauncher.Plugins.AppLauncherPlugin(), ctx);
-        PluginManager.RegisterPlugin(new OmniLauncher.Plugins.WebSearchPlugin(), ctx);
-        PluginManager.RegisterPlugin(new OmniLauncher.Plugins.CalculatorPlugin(), ctx);
+        PluginManager.RegisterPlugin(new AppLauncherPlugin(),  ctx);
+        PluginManager.RegisterPlugin(new WebSearchPlugin(),    ctx);
+        PluginManager.RegisterPlugin(new CalculatorPlugin(),   ctx);
+        PluginManager.RegisterPlugin(new FileSearchPlugin(),   ctx);
+        PluginManager.RegisterPlugin(new ClipboardPlugin(),    ctx);
+        PluginManager.RegisterPlugin(new OmniLLMPlugin(),      ctx);
+
+        // Load external plugins from Plugins/ directory
+        var pluginDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Plugins");
+        PluginManager.LoadPluginsFromDirectory(pluginDir);
     }
 
     private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -76,7 +90,7 @@ public partial class MainWindow : Window, IPublicAPI
         ResultsList.Items.Clear();
         if (string.IsNullOrWhiteSpace(query)) return;
 
-        foreach (var r in PluginManager.QueryAll(query).Take(8))
+        foreach (var r in PluginManager.QueryAll(query).Take(_cfg.MaxResults))
             ResultsList.Items.Add(r);
 
         if (ResultsList.Items.Count > 0)
@@ -87,6 +101,12 @@ public partial class MainWindow : Window, IPublicAPI
     {
         if (e.Key == Key.Escape) { Hide(); e.Handled = true; }
         if (e.Key == Key.Enter) { ExecuteSelected(); e.Handled = true; }
+        // Ctrl+, opens settings
+        if (e.Key == Key.OemComma && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            new SettingsWindow().Show();
+            e.Handled = true;
+        }
     }
 
     private void SearchBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -120,7 +140,6 @@ public partial class MainWindow : Window, IPublicAPI
 
     protected override void OnClosed(EventArgs e) { _hotkey?.Dispose(); base.OnClosed(e); }
 
-    // IPublicAPI
     public void ChangeQuery(string query, bool requery = false)
     {
         SearchBox.Text = query;

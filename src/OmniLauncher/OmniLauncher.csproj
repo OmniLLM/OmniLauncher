@@ -3,11 +3,11 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>OmniLauncher</AssemblyName>
     <RootNamespace>OmniLauncher</RootNamespace>
-    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <StartupObject>OmniLauncher.App</StartupObject>
   </PropertyGroup>
   <ItemGroup>

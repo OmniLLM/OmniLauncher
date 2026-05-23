@@ -3,16 +3,18 @@
 A fast, extensible application launcher for Windows — inspired by Flow.Launcher.
 Summon it anywhere with **Alt+Space**.
 
-![OmniLauncher dark theme](docs/screenshot.png)
-
 ## Features
 
-- 🚀 **Instant app launch** — searches Start Menu shortcuts
-- 🔍 **Web search** — `g ` Google · `yt ` YouTube · `gh ` GitHub
-- 🧮 **Calculator** — prefix `=` evaluates any expression, copies result
-- 🔌 **Plugin system** — drop a `OmniLauncher.Plugin.*.dll` in the `Plugins/` folder
+- 🚀 **App Launcher** — searches Start Menu shortcuts instantly
+- 🔍 **Web Search** — `g ` Google · `yt ` YouTube · `gh ` GitHub
+- 🧮 **Calculator** — prefix `=`, evaluates expression, copies result to clipboard
+- 📁 **File Search** — prefix `f ` or `open ` to find files and folders
+- 📋 **Clipboard History** — prefix `cb ` to search and paste previous clips
+- 🤖 **OmniLLM AI** — prefix `ai ` to ask questions via your local OmniLLM proxy
+- ⚙️ **Settings UI** — `Ctrl+,` — hotkey, theme, OmniLLM URL, max results, startup
+- 🖥️ **System Tray** — lives in tray, double-click or hotkey to show
 - 🌙 **Dark theme** — Catppuccin Mocha palette
-- ⌨️ **Global hotkey** — `Alt+Space` (configurable)
+- 🔌 **Plugin system** — drop `OmniLauncher.Plugin.*.dll` in `Plugins/` to extend
 
 ## Quick Start
 
@@ -22,13 +24,12 @@ Summon it anywhere with **Alt+Space**.
 # Prerequisites: .NET 8 SDK, Windows 10+
 git clone https://github.com/OmniLLM/OmniLauncher
 cd OmniLauncher
-dotnet build src/OmniLauncher/OmniLauncher.csproj -c Release
 dotnet run --project src/OmniLauncher
 ```
 
-The window starts hidden. Press **Alt+Space** to toggle it.
+The app starts in the system tray. Press **Alt+Space** to show the launcher.
 
-### Keyboard shortcuts
+## Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
@@ -36,16 +37,21 @@ The window starts hidden. Press **Alt+Space** to toggle it.
 | `↑` / `↓` | Navigate results |
 | `Enter` | Execute selected |
 | `Escape` | Hide |
+| `Ctrl+,` | Open settings |
 
-### Search syntax
+## Search syntax
 
-| Prefix | Action |
-|--------|--------|
-| *(none)* | App search + Google |
-| `g ` | Google search |
-| `yt ` | YouTube search |
-| `gh ` | GitHub search |
-| `= ` | Calculator (e.g. `= 2+2*3`) |
+| Prefix | Plugin | Example |
+|--------|--------|---------|
+| *(none)* | App Launcher + Google | `notepad` |
+| `g ` | Google | `g rust async book` |
+| `yt ` | YouTube | `yt lo-fi beats` |
+| `gh ` | GitHub | `gh omnillm` |
+| `= ` | Calculator | `= (100 * 1.2) / 3` |
+| `f ` | File Search | `f quarterly report` |
+| `open ` | File Search | `open Downloads` |
+| `cb ` | Clipboard History | `cb api key` |
+| `ai ` | OmniLLM AI | `ai explain SOLID principles` |
 
 ## Plugin Development
 
@@ -62,20 +68,31 @@ public class MyPlugin : IPlugin
 
     public IList<Result> Query(Query query)
     {
-        return new[] { new Result { Title = "Hello!", Action = _ => { /* do thing */ return true; } } };
+        return new[] { new Result {
+            Title = "Hello!",
+            SubTitle = "from MyPlugin",
+            Action = _ => { /* do thing */ return true; }
+        }};
     }
 }
 ```
 
-Build the DLL and drop it in `<install>/Plugins/YourPlugin/`. OmniLauncher auto-discovers it on next launch.
+Build the DLL and drop it in `<install>/Plugins/MyPlugin/`. OmniLauncher auto-discovers on next launch.
 
-## Roadmap
+## OmniLLM Integration
 
-- [ ] Settings UI (hotkey customization, theme picker)
-- [ ] File search plugin
-- [ ] Clipboard history plugin
-- [ ] OmniLLM AI chat plugin (query local LLMs via OmniLLM proxy)
-- [ ] Plugin marketplace
+The AI plugin connects to [OmniLLM](https://github.com/OmniLLM) — a local OpenAI-compatible proxy.
+
+Configure via `Ctrl+,` Settings or `%APPDATA%\OmniLauncher\settings.json`:
+
+```json
+{
+  "omniLLMUrl": "http://localhost:5000",
+  "omniLLMModel": "auto"
+}
+```
+
+The plugin auto-reads `~/.config/omnillm/api-key` if present.
 
 ## License
 
