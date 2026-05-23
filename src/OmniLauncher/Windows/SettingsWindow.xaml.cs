@@ -177,7 +177,7 @@ public partial class SettingsWindow : Window
         StopRecording(cancel: false);
     }
 
-    private void HotkeyBox_KeyDown(object sender, KeyEventArgs e) => e.Handled = _recording;
+
 
     // ── Provider preset URLs ─────────────────────────────────────────────────
 
