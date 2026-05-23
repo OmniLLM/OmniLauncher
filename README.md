@@ -54,7 +54,7 @@ dotnet publish src/OmniLauncher -c Release -r win-x64 --self-contained
 
 | Key | Action |
 |-----|--------|
-| `Alt+Space` | Show / hide launcher |
+| `Alt+Space` | Show / hide launcher (default; configurable — see Settings) |
 | `↑` / `↓` | Navigate results |
 | `Enter` | Execute selected result |
 | `Escape` | Hide launcher |
@@ -102,7 +102,7 @@ Edit via **Ctrl+,** or directly in the file:
 
 | Key | Values | Default | Notes |
 |-----|--------|---------|-------|
-| `hotkey` | `AltSpace` · `CtrlSpace` · `WinSpace` · `CtrlAltSpace` | `AltSpace` | Requires restart |
+| `hotkey` | `AltSpace` · `CtrlSpace` · `WinSpace` · `CtrlAltSpace` | `AltSpace` | Requires restart. If the combo is already claimed by another app, OmniLauncher logs a warning and starts without a hotkey — use the tray icon instead. |
 | `theme` | `dark` · `light` | `dark` | Requires restart |
 | `omniLLMUrl` | Any URL | `http://localhost:5000` | |
 | `omniLLMModel` | Model name or `auto` | `auto` | Passed as `model` in the API request |
