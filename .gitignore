@@ -1,7 +1,7 @@
-bin/
-obj/
-*.user
-.vs/
-publish/
-*.suo
-*.userprefs
+# OmniLauncher
+node_modules/
+dist/
+src-tauri/target/
+.env
+*.ico
+*.icns
