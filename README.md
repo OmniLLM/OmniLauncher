@@ -1,49 +1,58 @@
 # OmniLauncher
 
-A fast, extensible application launcher for Windows — inspired by Flow.Launcher.
-Summon it anywhere with **Alt+Space**.
+A fast, extensible Windows launcher inspired by Flow.Launcher.
+By default it starts in the system tray and opens with **Alt+Space**.
 
 ## Features
 
-- 🚀 **App Launcher** — searches Start Menu shortcuts instantly
-- 🔍 **Web Search** — `g ` Google · `yt ` YouTube · `gh ` GitHub
-- 🧮 **Calculator** — prefix `=`, evaluates expression, copies result to clipboard
-- 📁 **File Search** — prefix `f ` or `open ` to find files and folders
-- 📋 **Clipboard History** — prefix `cb ` to search and paste previous clips
-- 🤖 **OmniLLM AI** — prefix `ai ` to ask questions via your local OmniLLM proxy
-- ⚙️ **Settings UI** — `Ctrl+,` — hotkey, theme, OmniLLM URL, max results, startup
-- 🖥️ **System Tray** — lives in tray, double-click or hotkey to show
-- 🌙 **Dark theme** — Catppuccin Mocha palette
-- 🔌 **Plugin system** — drop `OmniLauncher.Plugin.*.dll` in `Plugins/` to extend
+- App launcher via Start Menu shortcut indexing
+- Web search with `g `, `yt `, and `gh ` prefixes
+- Calculator with `=` prefix and clipboard copy on execute
+- File and folder search with `f `, `open `, or direct rooted paths
+- Clipboard history with `cb ` prefix
+- OmniLLM AI integration with `ai ` prefix
+- Settings window on `Ctrl+,`
+- System tray icon with show, settings, and exit actions
+- Plugin loading from the `Plugins/` directory
+- Catppuccin Mocha dark theme
 
 ## Quick Start
 
 ### Build & Run
 
-```bash
-# Prerequisites: .NET 8 SDK, Windows 10+
+```powershell
+# Prerequisites: Windows 10+ and .NET 8 SDK
 git clone https://github.com/OmniLLM/OmniLauncher
 cd OmniLauncher
-dotnet run --project src/OmniLauncher
+dotnet build .\src\OmniLauncher\OmniLauncher.csproj
+dotnet run --project .\src\OmniLauncher\OmniLauncher.csproj
 ```
 
-The app starts in the system tray. Press **Alt+Space** to show the launcher.
+By default the app starts hidden in the system tray. Use the configured hotkey or double-click the tray icon to show the launcher.
+If the selected global hotkey is already taken, the app stays running and can still be opened from the tray icon.
 
 ## Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
-| `Alt+Space` | Show / hide |
+| `Alt+Space` | Default show / hide hotkey |
 | `↑` / `↓` | Navigate results |
-| `Enter` | Execute selected |
-| `Escape` | Hide |
+| `Enter` | Execute selected result |
+| `Escape` | Hide launcher |
 | `Ctrl+,` | Open settings |
+
+Available hotkey options in settings:
+
+- `Alt+Space` (default)
+- `Ctrl+Space`
+- `Win+Space`
+- `Ctrl+Alt+Space`
 
 ## Search syntax
 
 | Prefix | Plugin | Example |
 |--------|--------|---------|
-| *(none)* | App Launcher + Google | `notepad` |
+| *(none)* | App Launcher + Google fallback | `notepad` |
 | `g ` | Google | `g rust async book` |
 | `yt ` | YouTube | `yt lo-fi beats` |
 | `gh ` | GitHub | `gh omnillm` |
@@ -52,6 +61,29 @@ The app starts in the system tray. Press **Alt+Space** to show the launcher.
 | `open ` | File Search | `open Downloads` |
 | `cb ` | Clipboard History | `cb api key` |
 | `ai ` | OmniLLM AI | `ai explain SOLID principles` |
+
+## Settings
+
+Settings are stored at `%APPDATA%\OmniLauncher\settings.json`.
+
+Example:
+
+```json
+{
+  "hotkey": "AltSpace",
+  "theme": "dark",
+  "omniLLMUrl": "http://localhost:5000",
+  "omniLLMModel": "auto",
+  "maxResults": 8,
+  "startOnBoot": false,
+  "hideOnLaunch": true
+}
+```
+
+Notes:
+
+- The settings UI exposes a light theme option, but the app currently ships with `Themes/Dark.xaml` loaded by default.
+- `Start on Windows login` writes the launcher to `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`.
 
 ## Plugin Development
 
@@ -77,18 +109,20 @@ public class MyPlugin : IPlugin
 }
 ```
 
-Build the DLL and drop it in `<install>/Plugins/MyPlugin/`. OmniLauncher auto-discovers on next launch.
+Build the DLL and drop it in `Plugins/`. OmniLauncher loads plugins from `<app base directory>\Plugins` on startup.
 
 ## OmniLLM Integration
 
 The AI plugin connects to [OmniLLM](https://github.com/OmniLLM) — a local OpenAI-compatible proxy.
 
-Configure via `Ctrl+,` Settings or `%APPDATA%\OmniLauncher\settings.json`:
+Configure via `Ctrl+,` settings or `%APPDATA%\OmniLauncher\settings.json`:
 
 ```json
 {
+  "hotkey": "AltSpace",
   "omniLLMUrl": "http://localhost:5000",
-  "omniLLMModel": "auto"
+  "omniLLMModel": "auto",
+  "maxResults": 8
 }
 ```
 
