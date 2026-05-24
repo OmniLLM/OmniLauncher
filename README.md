@@ -1,199 +1,211 @@
 # OmniLauncher 2.0
 
-A cross-platform, AI-native application launcher built with **Tauri v2** + **Rust** backend and **React + TypeScript** frontend.
+> An AI-native, cross-platform application launcher — type anything, press **Alt+Space**.
 
-> Legacy Windows/WPF version is preserved in [`legacy/`](./legacy/)
-
----
-
-## ✨ Features
-
-- **Plugin System** — extensible Rust trait-based plugin architecture
-- **App Launcher** — indexes installed apps (Linux `.desktop`, macOS `.app`, Windows Start Menu)
-- **Web Search** — prefix `g ` for Google, `yt ` for YouTube, `gh ` for GitHub
-- **Calculator** — prefix `= ` to evaluate math expressions (`= (2+3)*4^2`)
-- **File Search** — prefix `f ` or `open ` to find files in your home directory
-- **Shell Runner** — prefix `> ` to run any shell command
-- **System Commands** — prefix `sys ` for lock/sleep/shutdown/restart
-- **AI Router** — natural language queries automatically routed to an OpenAI-compatible LLM with tool calling
-- **Catppuccin Mocha** dark theme (+ light theme toggle)
-- **Keyboard-first** — arrow keys, Enter, Escape, Ctrl+,
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)
+![Rust](https://img.shields.io/badge/rust-2021_edition-orange)
+![Tauri](https://img.shields.io/badge/tauri-v2-brightgreen)
+![Version](https://img.shields.io/badge/version-2.0.0-informational)
 
 ---
 
-## 🚀 Getting Started
+## What is OmniLauncher?
+
+OmniLauncher is an AI-native, cross-platform launcher built with Tauri v2 and Rust. Hit **Alt+Space** to summon the bar, then type — short keyword queries are dispatched instantly to the right plugin, while natural-language input is routed to an AI that calls the same plugins as tools and streams the answer back. One interface, every action.
+
+---
+
+## Features
+
+### Plugins
+
+| Emoji | Plugin | Trigger / Prefix | What it does |
+|-------|--------|-----------------|--------------|
+| 🔍 | **Web Search** | `g <query>` | Search Google |
+| ▶️ | **Web Search** | `yt <query>` | Search YouTube |
+| 🐙 | **Web Search** | `gh <query>` | Search GitHub |
+| 🔍 | **Web Search** | *(bare query)* | Fallback Google search (score 30) |
+| 🧮 | **Calculator** | `= <expr>` | Evaluate math expressions (`+`, `-`, `*`, `/`, `^`, parentheses); copies result |
+| 📁📄 | **File Search** | `f <name>` or `open <name>` | Walk home dir (depth 5) for matching files/folders |
+| 🚀 | **App Launcher** | *(bare query)* | Fuzzy match installed apps (`.desktop` on Linux, `.app` on macOS, Start Menu `.lnk` on Windows) |
+| ⏻ | **System Commands** | `sys <cmd>` | `lock`, `sleep`, `shutdown`, `restart` — cross-platform shell commands |
+| 💻 | **Shell** | `> <command>` | Run any shell command directly |
+| 📋 | **Clipboard** | `cb <term>` | Search clipboard history (last 50 entries, deduped) |
+
+### AI Features
+
+- Natural-language queries are detected automatically and routed to the AI
+- The AI calls plugins as **OpenAI-compatible function/tool calls**
+- Responses are streamed to the frontend via Tauri events (`ai-stream`, `ai-tool-call`, `ai-stream-done`)
+- Multi-turn conversation with up to **10 turns** of context (`ConversationContext`)
+- Works with any OpenAI-compatible endpoint (local or remote)
+
+---
+
+## How It Works
+
+OmniLauncher operates in two modes:
+
+```
+User input
+    │
+    ├─ Keyword query ──► PluginManager.query_all()
+    │                        • Match plugin keyword prefix (e.g. "= ", "> ", "sys ", "cb")
+    │                        • Or no-prefix plugins (app_launcher, web_search fallback)
+    │                        • Results sorted by score, top 10 returned
+    │
+    └─ Natural language ─► AI Router
+                              • Collect tool schemas from all plugins
+                              • POST to /v1/chat/completions with tools
+                              • Execute any returned tool_calls via PluginManager
+                              • Stream content back via Tauri window events
+```
+
+Each plugin implements the `Plugin` trait which exposes both a `query()` method (for keyword mode) and an optional `tool_schema()` + `execute_tool()` pair (for AI function-calling mode). The `PluginManager` collects all schemas via `all_tool_schemas()` and dispatches tool calls by matching `plugin.name()`.
+
+Conversation history is maintained in `ConversationContext`, which stores `user`, `assistant`, and `tool` role messages and trims to the last `max_turns * 2` messages automatically.
+
+---
+
+## AI Native
+
+### Natural Language Detection
+
+`Router::is_natural_language()` applies a simple heuristic (no external model needed):
+
+| Condition | Examples |
+|-----------|---------|
+| Contains English question/action words | `what`, `how`, `why`, `when`, `where`, `who`, `find`, `show`, `open`, `search`, `list`, `get` |
+| Contains Chinese keywords | `帮`, `找`, `打开`, `搜索`, `显示`, `什么`, `怎么` |
+| 4 or more whitespace-separated words | `send me the latest report` |
+| Contains `?` or `？` | `where is my notes file?` |
+
+Single-word inputs always bypass AI and go directly to keyword routing.
+
+### Tool Calling Flow
+
+1. Query classified as natural language → `Router::ai_route()` is invoked
+2. All plugin `tool_schema()` values are collected and sent with the request
+3. The AI responds with `tool_calls` (OpenAI function-calling format)
+4. Each tool call is dispatched: `PluginManager::execute_tool(name, args)`
+5. Tool results are merged into the final response content
+6. Frontend receives streamed `ai-stream` events and a final `ai-stream-done`
+
+### Multi-Turn Context
+
+`ConversationContext` (default `max_turns = 10`) stores the rolling conversation. Each `ai_query` Tauri command appends the user message before routing and the assistant reply after, so follow-up questions have full context. Call `clear_conversation` to reset.
+
+---
+
+## Getting Started
 
 ### Prerequisites
 
+- **Rust** — install via [rustup.rs](https://rustup.rs)
+- **Node.js 18+** and npm/pnpm/yarn
+- **Tauri CLI v2** — `cargo install tauri-cli --version "^2"`
+- **Linux only** — additional system libraries:
+
 ```bash
-# Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Node 18+
-# macOS: brew install node
-# Linux: sudo apt install nodejs npm
-
-# Linux system deps (Ubuntu/Debian)
 sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
-  libssl-dev libappindicator3-dev libglib2.0-dev
+                 patchelf libssl-dev libayatana-appindicator3-dev
 ```
 
-### Build & Run
+### Clone & Run
 
 ```bash
-# Install frontend deps
+git clone https://github.com/your-org/OmniLauncher.git
+cd OmniLauncher
 npm install
 
-# Development (hot reload)
-npm run tauri dev
+# Development (hot-reload)
+cargo tauri dev
 
 # Production build
-npm run tauri build
+cargo tauri build
 ```
 
-### Run tests (Rust only, no GUI required)
+### Run Tests
 
 ```bash
-source "$HOME/.cargo/env"
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 ---
 
-## 🔌 Plugins
+## Configuration
 
-| Prefix | Plugin | Example |
-|--------|--------|---------|
-| `g `  | Google Search | `g rust async await` |
-| `yt ` | YouTube Search | `yt lofi hip hop` |
-| `gh ` | GitHub Search | `gh tauri examples` |
-| `= `  | Calculator | `= sqrt(16) + 2^8` |
-| `f `  | File Search | `f resume.pdf` |
-| `open ` | File Search | `open config.toml` |
-| `> `  | Shell Command | `> ls -la ~/Documents` |
-| `sys ` | System Commands | `sys shutdown` |
-| *(none)* | App Launcher + Google fallback | `firefox` |
+Settings are stored at:
 
----
+```
+~/.config/omnilauncher/settings.json
+```
 
-## 🤖 AI Features
+(On macOS: `~/Library/Application Support/omnilauncher/settings.json`; on Windows: `%APPDATA%\omnilauncher\settings.json`)
 
-Natural language queries are automatically detected and routed to an OpenAI-compatible API:
+| Field | Default | Description |
+|-------|---------|-------------|
+| `ai_base_url` | `"http://localhost:5000"` | Base URL of the OpenAI-compatible API |
+| `ai_model` | `"auto"` | Model name passed to the API |
+| `ai_api_key` | `""` | API key (Bearer token); leave empty for local endpoints |
+| `theme` | `"dark"` | UI theme (`"dark"` or `"light"`) |
+| `hotkey` | `"Alt+Space"` | Global hotkey to summon the launcher |
+| `max_results` | `10` | Maximum plugin results returned per query |
 
-- **Detection heuristic**: query > 20 chars, OR contains NL verbs (find, show, what, how, etc.)
-- **Tool calling**: AI can invoke plugins (file_search, web_search, calculator, shell)
-- **Force AI mode**: press `Ctrl+Enter` from any query
-- **Streaming**: client supports streaming responses
-
-Configure in Settings (Ctrl+,):
-- AI Provider URL (default: `http://localhost:5000`)
-- Model name (default: `auto`)
-- API key (optional)
-
-Works with: OpenAI, Ollama, LM Studio, Nous Hermes, and any OpenAI-compatible endpoint.
-
----
-
-## 🚀 AI Native Features
-
-OmniLauncher 2.0 is fully AI-native with the following capabilities:
-
-### Streaming Responses
-- The Rust backend streams SSE responses from the LLM via `chat_stream()`
-- Each token chunk is emitted as a Tauri event (`ai-stream`)
-- The React frontend listens with `listen("ai-stream", ...)` and appends chunks live
-- A **blinking cursor** shows while the response is streaming
-- Separate events for tool calls (`ai-tool-call`) and completion (`ai-stream-done`)
-
-### Multi-turn Conversation
-- `ConversationContext` stores up to **10 turns** (configurable) of message history
-- Methods: `add_user()`, `add_assistant()`, `add_tool_result()`, `clear()`, `trim_to_max()`
-- State is stored in `AppState` under `Arc<Mutex<ConversationContext>>`
-- New Tauri command: `clear_conversation` — resets conversation history
-- Frontend shows the last 2-3 turns in a collapsible strip above the search bar
-- **"New conversation"** button resets both backend context and frontend display
-
-### Natural Language Routing
-The improved heuristic in `router.rs` detects natural language via:
-1. **Single word** → never NL (likely a command/keyword)
-2. **Question/action words** → `what`, `how`, `why`, `find`, `show`, `open`, `list`, `get`, `search`, `who`, `when`, `where`, plus Chinese: `帮`, `找`, `打开`, `搜索`, `显示`, `什么`, `怎么`
-3. **Length heuristic** → 4+ words = sentence-like query → NL
-4. **Punctuation** → `?` or `？` → NL
-5. **Auto-AI fallback** → if Enter is pressed with no plugin results, switches to AI mode automatically
-
-### Tool Calling
-- AI can invoke any registered plugin as a tool (file search, web search, calculator, shell, clipboard)
-- Tool call events are emitted in real time as badges in the UI
-- Tool results are incorporated back into the AI response
-
----
-
-## ⚙️ Settings
-
-Settings are saved to `~/.config/omnilauncher/settings.json`:
+Example `settings.json`:
 
 ```json
 {
-  "ai_base_url": "http://localhost:5000",
-  "ai_model": "auto",
-  "ai_api_key": "",
+  "ai_base_url": "https://api.openai.com",
+  "ai_model": "gpt-4o",
+  "ai_api_key": "sk-...",
   "theme": "dark",
   "hotkey": "Alt+Space",
   "max_results": 10
 }
 ```
 
----
-
-## 🖥️ Cross-Platform
-
-| Platform | App Indexing | Hotkey | Shell |
-|----------|-------------|--------|-------|
-| Linux | `.desktop` files | Alt+Space | `sh -c` |
-| macOS | `/Applications/*.app` | Alt+Space | `sh -c` |
-| Windows | Start Menu `.lnk` | Alt+Space | `cmd /C` |
+Settings can also be updated at runtime through the UI; changes are persisted immediately via the `save_settings` Tauri command.
 
 ---
 
-## 📁 Project Structure
+## Architecture
 
 ```
-OmniLauncher/
-├── src/                    # React + TypeScript frontend
-│   ├── App.tsx
-│   └── components/
-│       ├── SearchBar.tsx
-│       ├── ResultList.tsx
-│       ├── AIResponsePane.tsx
-│       └── SettingsPanel.tsx
-├── src-tauri/              # Rust backend
-│   ├── src/
-│   │   ├── lib.rs
-│   │   ├── main.rs
-│   │   ├── settings.rs
-│   │   ├── plugins/
-│   │   │   ├── mod.rs      # Plugin trait + PluginManager
-│   │   │   ├── web_search.rs
-│   │   │   ├── calculator.rs
-│   │   │   ├── file_search.rs
-│   │   │   ├── app_launcher.rs
-│   │   │   ├── system_commands.rs
-│   │   │   └── shell_plugin.rs
-│   │   └── ai/
-│   │       ├── mod.rs
-│   │       ├── client.rs   # OpenAI-compatible HTTP client
-│   │       └── router.rs   # NL detection + tool dispatch
-│   ├── tests/
-│   │   └── plugin_tests.rs
-│   └── Cargo.toml
-├── legacy/                 # Original WPF/Windows app
-├── package.json
-├── vite.config.ts
-└── index.html
+OmniLauncher 2.0
+├── src/                        React 18 + TypeScript frontend (Vite)
+│   └── ...                     Communicates via @tauri-apps/api invoke()
+│
+└── src-tauri/                  Rust backend
+    ├── src/
+    │   ├── main.rs             Tauri entry point; registers 6 commands
+    │   ├── settings.rs         Load/save AppSettings (JSON)
+    │   ├── plugins/
+    │   │   ├── mod.rs          Plugin trait, PluginManager, QueryResult
+    │   │   ├── app_launcher.rs Platform-native app discovery
+    │   │   ├── calculator.rs   Zero-dep recursive-descent math parser
+    │   │   ├── clipboard.rs    In-memory clipboard history (50 entries)
+    │   │   ├── file_search.rs  WalkDir home dir (max depth 5)
+    │   │   ├── shell_plugin.rs Execute arbitrary shell commands
+    │   │   ├── system_commands.rs Lock/sleep/shutdown/restart
+    │   │   └── web_search.rs   Google / YouTube / GitHub URL builder
+    │   └── ai/
+    │       ├── client.rs       OpenAI-compatible HTTP client + SSE streaming
+    │       └── router.rs       NL detection, tool-calling orchestration, ConversationContext
+    └── Cargo.toml              Tauri v2, reqwest 0.12, tokio, walkdir, serde
 ```
+
+**Key design points:**
+- All plugin logic runs in async Rust; `PluginManager::query_all` fans out queries concurrently.
+- The `AiClient` connects to any OpenAI-compatible endpoint; streaming is implemented via SSE (`stream: true`) and emitted as Tauri window events.
+- The frontend is a thin React layer — all business logic lives in Rust.
 
 ---
 
-## 📄 License
+## Legacy
 
-MIT — see [LICENSE](LICENSE)
+The original **WPF/Windows-only** OmniLauncher (v1) is preserved in the `legacy/` directory for historical reference. It is not built as part of the Tauri v2 project.
+
+---
+
+*OmniLauncher 2.0 — built with Tauri v2 · Rust 2021 · React 18*
