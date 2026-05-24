@@ -80,6 +80,7 @@ impl PluginManager {
 
 pub mod app_launcher;
 pub mod calculator;
+pub mod clipboard;
 pub mod file_search;
 pub mod shell_plugin;
 pub mod system_commands;

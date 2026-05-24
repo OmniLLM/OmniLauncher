@@ -1,7 +1,8 @@
 use omnilauncher_lib::plugins::calculator::evaluate;
 use omnilauncher_lib::plugins::web_search::WebSearchPlugin;
 use omnilauncher_lib::plugins::{Plugin, PluginManager, Query};
-use omnilauncher_lib::ai::router::Router;
+use omnilauncher_lib::ai::router::{Router, ConversationContext};
+use omnilauncher_lib::plugins::clipboard::ClipboardPlugin;
 use omnilauncher_lib::settings::{load_settings, save_settings, AppSettings, settings_path};
 
 // ---- Calculator tests ----
@@ -160,4 +161,105 @@ fn test_ai_router_detects_keyword_query() {
     assert!(!Router::is_natural_language("firefox"));
     assert!(!Router::is_natural_language("sys lock"));
     assert!(!Router::is_natural_language("> ls -la"));
+}
+
+// ---- New NL detection tests ----
+
+#[test]
+fn test_nl_detection_question_words() {
+    assert!(Router::is_natural_language("what time is it"));
+    assert!(Router::is_natural_language("how to install rust"));
+    assert!(Router::is_natural_language("why does this fail"));
+    assert!(Router::is_natural_language("find my documents"));
+    assert!(Router::is_natural_language("list all files here"));
+    assert!(Router::is_natural_language("is this working?"));
+}
+
+#[test]
+fn test_nl_detection_chinese() {
+    assert!(Router::is_natural_language("帮 我 找文件"));
+    assert!(Router::is_natural_language("找 rust 项目"));
+    assert!(Router::is_natural_language("打开 浏览器"));
+    assert!(Router::is_natural_language("搜索 新闻"));
+    assert!(Router::is_natural_language("显示 文件列表"));
+    assert!(Router::is_natural_language("什么 是 rust"));
+    assert!(Router::is_natural_language("怎么 安装 rust"));
+}
+
+#[test]
+fn test_nl_detection_short_query_not_nl() {
+    // Single word queries should not be NL
+    assert!(!Router::is_natural_language("firefox"));
+    assert!(!Router::is_natural_language("rust"));
+    assert!(!Router::is_natural_language("notepad"));
+    // Two-word queries without NL words and fewer than 4 words, no question mark
+    assert!(!Router::is_natural_language("g rust"));
+    assert!(!Router::is_natural_language("> ls"));
+}
+
+// ---- Conversation context tests ----
+
+#[tokio::test]
+async fn test_conversation_context_add_and_trim() {
+    let mut ctx = ConversationContext::new(3); // max 3 turns = 6 messages
+    ctx.add_user("Hello");
+    ctx.add_assistant("Hi there!");
+    ctx.add_user("How are you?");
+    ctx.add_assistant("Great!");
+    ctx.add_user("What can you do?");
+    ctx.add_assistant("Many things!");
+    // 6 messages, exactly at limit
+    assert_eq!(ctx.messages.len(), 6);
+
+    // Add one more turn, should trim to 6
+    ctx.add_user("Tell me more");
+    ctx.trim_to_max();
+    assert!(ctx.messages.len() <= 6);
+}
+
+#[tokio::test]
+async fn test_conversation_context_clear() {
+    let mut ctx = ConversationContext::default();
+    ctx.add_user("Hello");
+    ctx.add_assistant("Hi!");
+    ctx.add_tool_result("web_search", "Found 10 results");
+    assert_eq!(ctx.messages.len(), 3);
+    ctx.clear();
+    assert_eq!(ctx.messages.len(), 0);
+}
+
+// ---- Clipboard plugin tests ----
+
+#[tokio::test]
+async fn test_clipboard_plugin_query() {
+    let mut plugin = ClipboardPlugin::new();
+    plugin.add_entry("Hello World".to_string());
+    plugin.add_entry("Rust programming".to_string());
+    plugin.add_entry("Tauri framework".to_string());
+    plugin.add_entry("Hello Rust".to_string());
+
+    // Search for "hello" — should find 2 entries
+    let q = Query {
+        raw: "cb hello".to_string(),
+        terms: vec!["cb".to_string(), "hello".to_string()],
+    };
+    let results = plugin.query(&q).await;
+    assert!(!results.is_empty());
+    assert!(results.iter().any(|r| r.action_data.contains("Hello")));
+    assert!(results.iter().all(|r| r.action_type == "copy"));
+
+    // Search for "rust"
+    let q2 = Query {
+        raw: "cb rust".to_string(),
+        terms: vec!["cb".to_string(), "rust".to_string()],
+    };
+    let results2 = plugin.query(&q2).await;
+    assert!(!results2.is_empty());
+    assert!(results2.iter().any(|r| r.action_data.to_lowercase().contains("rust")));
+
+    // Ring buffer: add 50+ entries
+    for i in 0..55 {
+        plugin.add_entry(format!("entry {}", i));
+    }
+    assert!(plugin.history.len() <= 50);
 }

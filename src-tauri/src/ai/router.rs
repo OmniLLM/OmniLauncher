@@ -10,23 +10,88 @@ pub struct AiResponse {
     pub is_ai: bool,
 }
 
+/// Multi-turn conversation context.
+pub struct ConversationContext {
+    pub messages: Vec<Message>,
+    pub max_turns: usize,
+}
+
+impl Default for ConversationContext {
+    fn default() -> Self {
+        Self { messages: Vec::new(), max_turns: 10 }
+    }
+}
+
+impl ConversationContext {
+    pub fn new(max_turns: usize) -> Self {
+        Self { messages: Vec::new(), max_turns }
+    }
+
+    pub fn add_user(&mut self, text: &str) {
+        self.messages.push(Message { role: "user".to_string(), content: text.to_string() });
+        self.trim_to_max();
+    }
+
+    pub fn add_assistant(&mut self, text: &str) {
+        self.messages.push(Message { role: "assistant".to_string(), content: text.to_string() });
+    }
+
+    pub fn add_tool_result(&mut self, tool_name: &str, result: &str) {
+        self.messages.push(Message {
+            role: "tool".to_string(),
+            content: format!("[{}]: {}", tool_name, result),
+        });
+    }
+
+    pub fn clear(&mut self) {
+        self.messages.clear();
+    }
+
+    /// Keep last max_turns pairs (user + assistant = 1 turn).
+    pub fn trim_to_max(&mut self) {
+        let max_messages = self.max_turns * 2;
+        if self.messages.len() > max_messages {
+            let excess = self.messages.len() - max_messages;
+            self.messages.drain(0..excess);
+        }
+    }
+
+    pub fn get_messages_with_system(&self, system_prompt: &str) -> Vec<Message> {
+        let mut msgs = vec![Message { role: "system".to_string(), content: system_prompt.to_string() }];
+        msgs.extend(self.messages.clone());
+        msgs
+    }
+}
+
 pub struct Router;
 
 impl Router {
-    /// Heuristic: is this natural language query?
+    /// Improved heuristic: is this natural language query?
     pub fn is_natural_language(input: &str) -> bool {
+        let words: Vec<&str> = input.split_whitespace().collect();
+        if words.len() == 1 {
+            return false;
+        }
+
+        // Contains question words or action words
+        let question_words = ["what", "how", "why", "when", "where", "who",
+                              "find", "show", "open", "search", "list", "get",
+                              "帮", "找", "打开", "搜索", "显示", "什么", "怎么"];
         let lower = input.to_lowercase();
-        if input.len() > 20 {
+        if question_words.iter().any(|w| lower.contains(w)) {
             return true;
         }
-        // Check for NL verbs/words combined with spaces
-        if input.contains(' ') {
-            let nl_words = ["find", "show", "open", "search", "what", "how", "why", "who",
-                            "when", "where", "help", "get", "list", "create", "make",
-                            "tell", "explain", "translate", "calculate", "convert",
-                            "找", "帮", "搜", "查", "打开"];
-            return nl_words.iter().any(|w| lower.contains(w));
+
+        // Long enough to be sentence-like
+        if words.len() >= 4 {
+            return true;
         }
+
+        // Punctuation typical of questions
+        if input.contains('?') || input.contains('？') {
+            return true;
+        }
+
         false
     }
 
@@ -84,7 +149,6 @@ impl Router {
                         tool_results.push(result);
                     }
 
-                    // If we have tool results but no content, summarize
                     if final_content.is_empty() && !tool_results.is_empty() {
                         final_content = tool_results.join("\n\n");
                     }

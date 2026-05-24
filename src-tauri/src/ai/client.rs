@@ -1,4 +1,8 @@
 use serde::{Deserialize, Serialize};
+#[cfg(not(test))]
+use futures_util::StreamExt;
+#[cfg(not(test))]
+use tauri::Emitter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -106,5 +110,76 @@ impl AiClient {
         };
 
         Ok(ChatResponse { content, tool_calls })
+    }
+
+    /// Stream chat completions and emit Tauri events for each chunk.
+    /// In test mode this is a no-op stub.
+    #[cfg(not(test))]
+    pub async fn chat_stream(
+        &self,
+        messages: Vec<Message>,
+        window: tauri::WebviewWindow,
+    ) -> Result<(), String> {
+        let client = self.build_client()?;
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": messages.iter().map(|m| serde_json::json!({
+                "role": m.role,
+                "content": m.content
+            })).collect::<Vec<_>>(),
+            "stream": true
+        });
+
+        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+
+        let mut req = client.post(&url).json(&body);
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+
+        let response = req.send().await.map_err(|e| e.to_string())?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("API error {}: {}", status, text));
+        }
+
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.map_err(|e| e.to_string())?;
+            let text = String::from_utf8_lossy(&bytes);
+            for line in text.lines() {
+                let line = line.trim();
+                if line == "data: [DONE]" {
+                    break;
+                }
+                if let Some(json_str) = line.strip_prefix("data: ") {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        // Check for tool call
+                        if let Some(tool_name) = val["choices"][0]["delta"]["tool_calls"][0]["function"]["name"].as_str() {
+                            let _ = window.emit("ai-tool-call", tool_name.to_string());
+                        }
+                        // Text delta
+                        if let Some(delta) = val["choices"][0]["delta"]["content"].as_str() {
+                            if !delta.is_empty() {
+                                let _ = window.emit("ai-stream", delta.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = window.emit("ai-stream-done", "".to_string());
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub async fn chat_stream(
+        &self,
+        _messages: Vec<Message>,
+        _window_placeholder: (),
+    ) -> Result<(), String> {
+        Ok(())
     }
 }

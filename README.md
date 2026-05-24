@@ -94,6 +94,40 @@ Works with: OpenAI, Ollama, LM Studio, Nous Hermes, and any OpenAI-compatible en
 
 ---
 
+## 🚀 AI Native Features
+
+OmniLauncher 2.0 is fully AI-native with the following capabilities:
+
+### Streaming Responses
+- The Rust backend streams SSE responses from the LLM via `chat_stream()`
+- Each token chunk is emitted as a Tauri event (`ai-stream`)
+- The React frontend listens with `listen("ai-stream", ...)` and appends chunks live
+- A **blinking cursor** shows while the response is streaming
+- Separate events for tool calls (`ai-tool-call`) and completion (`ai-stream-done`)
+
+### Multi-turn Conversation
+- `ConversationContext` stores up to **10 turns** (configurable) of message history
+- Methods: `add_user()`, `add_assistant()`, `add_tool_result()`, `clear()`, `trim_to_max()`
+- State is stored in `AppState` under `Arc<Mutex<ConversationContext>>`
+- New Tauri command: `clear_conversation` — resets conversation history
+- Frontend shows the last 2-3 turns in a collapsible strip above the search bar
+- **"New conversation"** button resets both backend context and frontend display
+
+### Natural Language Routing
+The improved heuristic in `router.rs` detects natural language via:
+1. **Single word** → never NL (likely a command/keyword)
+2. **Question/action words** → `what`, `how`, `why`, `find`, `show`, `open`, `list`, `get`, `search`, `who`, `when`, `where`, plus Chinese: `帮`, `找`, `打开`, `搜索`, `显示`, `什么`, `怎么`
+3. **Length heuristic** → 4+ words = sentence-like query → NL
+4. **Punctuation** → `?` or `？` → NL
+5. **Auto-AI fallback** → if Enter is pressed with no plugin results, switches to AI mode automatically
+
+### Tool Calling
+- AI can invoke any registered plugin as a tool (file search, web search, calculator, shell, clipboard)
+- Tool call events are emitted in real time as badges in the UI
+- Tool results are incorporated back into the AI response
+
+---
+
 ## ⚙️ Settings
 
 Settings are saved to `~/.config/omnilauncher/settings.json`:

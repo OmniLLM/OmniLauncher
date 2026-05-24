@@ -1,15 +1,17 @@
 use omnilauncher_lib::{
     create_plugin_manager, load_settings, save_settings,
-    ai::{client::AiClient, router::Router},
+    ai::{client::AiClient, router::{Router, ConversationContext}},
     QueryResult, AppSettings,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tauri::Emitter;
 
 pub struct AppState {
     pub plugin_manager: Arc<Mutex<omnilauncher_lib::PluginManager>>,
     pub ai_client: Arc<AiClient>,
     pub settings: Arc<Mutex<AppSettings>>,
+    pub conversation: Arc<Mutex<ConversationContext>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,6 +27,7 @@ pub fn run() {
         plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
         ai_client: Arc::new(ai_client),
         settings: Arc::new(Mutex::new(settings)),
+        conversation: Arc::new(Mutex::new(ConversationContext::default())),
     };
 
     tauri::Builder::default()
@@ -35,6 +38,7 @@ pub fn run() {
             execute_result,
             get_settings,
             save_settings_cmd,
+            clear_conversation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -53,9 +57,41 @@ async fn search(
 async fn ai_query(
     query: String,
     state: tauri::State<'_, AppState>,
+    window: tauri::WebviewWindow,
 ) -> Result<omnilauncher_lib::AiResponse, String> {
+    // Add to conversation context
+    {
+        let mut ctx = state.conversation.lock().await;
+        ctx.add_user(&query);
+    }
+
     let pm = state.plugin_manager.lock().await;
-    Ok(Router::route(&query, &pm, &state.ai_client).await)
+    let response = Router::route(&query, &pm, &state.ai_client).await;
+
+    // Add assistant response to context
+    {
+        let mut ctx = state.conversation.lock().await;
+        ctx.add_assistant(&response.content);
+    }
+
+    // Emit streaming events for the response content
+    if !response.content.is_empty() {
+        // Simulate streaming by emitting chunks
+        for tool in &response.tools_used {
+            let _ = window.emit("ai-tool-call", tool.clone());
+        }
+        let _ = window.emit("ai-stream", response.content.clone());
+        let _ = window.emit("ai-stream-done", "".to_string());
+    }
+
+    Ok(response)
+}
+
+#[tauri::command]
+async fn clear_conversation(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    let mut ctx = state.conversation.lock().await;
+    ctx.clear();
+    Ok(true)
 }
 
 #[tauri::command]

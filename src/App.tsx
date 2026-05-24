@@ -22,6 +22,11 @@ interface AiResponse {
   is_ai: boolean
 }
 
+interface ConversationTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export default function App() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<QueryResult[]>([])
@@ -29,18 +34,23 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  const [conversationHistory, setConversationHistory] = useState<ConversationTurn[]>([])
+  const [showHistory, setShowHistory] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isNaturalLanguage = useCallback((input: string): boolean => {
-    if (input.length > 20) return true
-    if (input.includes(' ')) {
-      const nlWords = ['find', 'show', 'open', 'search', 'what', 'how', 'why', 'who',
-                       'when', 'where', 'help', 'get', 'list', 'create', 'make',
-                       'tell', 'explain', 'translate', 'calculate', 'convert',
-                       '找', '帮', '搜', '查', '打开']
-      const lower = input.toLowerCase()
-      return nlWords.some(w => lower.includes(w))
-    }
+    const words = input.trim().split(/\s+/)
+    if (words.length === 1) return false
+
+    const nlWords = ['what', 'how', 'why', 'when', 'where', 'who',
+                     'find', 'show', 'open', 'search', 'list', 'get',
+                     'help', 'create', 'make', 'tell', 'explain', 'translate',
+                     'calculate', 'convert',
+                     '帮', '找', '打开', '搜索', '显示', '什么', '怎么']
+    const lower = input.toLowerCase()
+    if (nlWords.some(w => lower.includes(w))) return true
+    if (words.length >= 4) return true
+    if (input.includes('?') || input.includes('？')) return true
     return false
   }, [])
 
@@ -65,13 +75,20 @@ export default function App() {
     try {
       const res = await invoke<AiResponse>('ai_query', { query: q })
       setAiResponse(res)
+      // Add to local conversation history display
+      setConversationHistory(prev => [
+        ...prev,
+        { role: 'user', content: q },
+        { role: 'assistant', content: res.content }
+      ])
     } catch (e) {
-      setAiResponse({
+      const errResp: AiResponse = {
         content: `Error: ${e}`,
         tools_used: [],
         results: [],
         is_ai: true
-      })
+      }
+      setAiResponse(errResp)
     } finally {
       setLoading(false)
     }
@@ -91,8 +108,24 @@ export default function App() {
     if (forceAi || isNaturalLanguage(value)) {
       if (debounceRef.current) clearTimeout(debounceRef.current)
       doAiQuery(value)
+    } else if (results.length === 0 && value.trim()) {
+      // Auto switch to AI mode when no results
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      doAiQuery(value)
     }
-  }, [isNaturalLanguage, doAiQuery])
+  }, [isNaturalLanguage, doAiQuery, results])
+
+  const handleNewConversation = useCallback(async () => {
+    try {
+      await invoke('clear_conversation')
+    } catch (e) {
+      console.error('clear_conversation error:', e)
+    }
+    setConversationHistory([])
+    setAiResponse(null)
+    setResults([])
+    setQuery('')
+  }, [])
 
   const handleExecute = useCallback(async (result: QueryResult) => {
     if (result.action_type === 'copy') {
@@ -130,6 +163,8 @@ export default function App() {
     ? { bg: '#1E1E2E', surface: '#313244', text: '#CDD6F4', accent: '#CBA6F7', sub: '#6C7086' }
     : { bg: '#EFF1F5', surface: '#CCD0DA', text: '#4C4F69', accent: '#8839EF', sub: '#9CA0B0' }
 
+  const recentHistory = conversationHistory.slice(-6) // last 3 turns
+
   return (
     <div style={{
       width: '680px',
@@ -144,6 +179,42 @@ export default function App() {
       display: 'flex',
       flexDirection: 'column'
     }}>
+      {/* Conversation history strip */}
+      {conversationHistory.length > 0 && (
+        <div style={{ padding: '8px 16px', borderBottom: `1px solid ${colors.surface}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <button
+              onClick={() => setShowHistory(s => !s)}
+              style={{ background: 'none', border: 'none', color: colors.sub, cursor: 'pointer', fontSize: '12px' }}
+            >
+              {showHistory ? '▲' : '▼'} History ({Math.floor(conversationHistory.length / 2)} turns)
+            </button>
+            <button
+              onClick={handleNewConversation}
+              style={{
+                background: colors.surface, border: 'none', borderRadius: '6px',
+                padding: '3px 10px', color: colors.text, cursor: 'pointer', fontSize: '12px'
+              }}
+            >
+              ✨ New conversation
+            </button>
+          </div>
+          {showHistory && (
+            <div style={{ marginTop: '8px', maxHeight: '120px', overflow: 'auto' }}>
+              {recentHistory.map((turn, i) => (
+                <div key={i} style={{
+                  fontSize: '12px', color: turn.role === 'user' ? colors.accent : colors.text,
+                  marginBottom: '4px', padding: '2px 0'
+                }}>
+                  <strong>{turn.role === 'user' ? '👤' : '🤖'}</strong>{' '}
+                  {turn.content.slice(0, 80)}{turn.content.length > 80 ? '…' : ''}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <SearchBar
         value={query}
         onChange={handleQueryChange}
