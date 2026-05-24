@@ -4,6 +4,8 @@
   "version": "2.0.0",
   "identifier": "com.omnillm.omnilauncher",
   "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420"
   },
@@ -19,7 +21,7 @@
         "decorations": false,
         "center": true,
         "alwaysOnTop": true,
-        "visible": true
+        "visible": false
       }
     ],
     "security": {

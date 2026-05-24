@@ -5,7 +5,8 @@ use omnilauncher_lib::{
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, Code, Modifiers};
 
 pub struct AppState {
     pub plugin_manager: Arc<Mutex<omnilauncher_lib::PluginManager>>,
@@ -30,8 +31,28 @@ pub fn run() {
         conversation: Arc::new(Mutex::new(ConversationContext::default())),
     };
 
+    let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyO);
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
+        .setup(move |app| {
+            let window = app.get_webview_window("main").unwrap();
+            let global_shortcut = app.global_shortcut();
+
+            global_shortcut.on_shortcut(shortcut, move |_app, _shortcut, event| {
+                if let tauri_plugin_global_shortcut::ShortcutState::Pressed = event.state() {
+                    if window.is_visible().unwrap_or(false) {
+                        let _ = window.hide();
+                    } else {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }).expect("Failed to register global shortcut");
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             search,
             ai_query,
