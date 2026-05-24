@@ -27,6 +27,19 @@ interface ConversationTurn {
   content: string
 }
 
+/**
+ * Detect if the user typed an explicit AI prefix.
+ * Mirrors Router::decide() in router.rs.
+ *
+ * Prefixes: `?`  or  `ai ` (case-insensitive)
+ *
+ * Everything else → local plugins (instant, no AI latency).
+ */
+function isAiPrefix(input: string): boolean {
+  const t = input.trim()
+  return t.startsWith('?') || t.toLowerCase().startsWith('ai ')
+}
+
 export default function App() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<QueryResult[]>([])
@@ -38,26 +51,15 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const isNaturalLanguage = useCallback((input: string): boolean => {
-    const words = input.trim().split(/\s+/)
-    if (words.length === 1) return false
-
-    const nlWords = ['what', 'how', 'why', 'when', 'where', 'who',
-                     'find', 'show', 'open', 'search', 'list', 'get',
-                     'help', 'create', 'make', 'tell', 'explain', 'translate',
-                     'calculate', 'convert',
-                     '帮', '找', '打开', '搜索', '显示', '什么', '怎么']
-    const lower = input.toLowerCase()
-    if (nlWords.some(w => lower.includes(w))) return true
-    if (words.length >= 4) return true
-    if (input.includes('?') || input.includes('？')) return true
-    return false
-  }, [])
-
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim()) {
       setResults([])
       setAiResponse(null)
+      return
+    }
+    // If user typed an AI prefix, don't run local search
+    if (isAiPrefix(q)) {
+      setResults([])
       return
     }
     try {
@@ -75,7 +77,6 @@ export default function App() {
     try {
       const res = await invoke<AiResponse>('ai_query', { query: q })
       setAiResponse(res)
-      // Add to local conversation history display
       setConversationHistory(prev => [
         ...prev,
         { role: 'user', content: q },
@@ -99,21 +100,27 @@ export default function App() {
     setAiResponse(null)
 
     if (debounceRef.current) clearTimeout(debounceRef.current)
+
+    // Debounce local search; AI is only triggered on explicit submit
     debounceRef.current = setTimeout(() => {
       doSearch(value)
-    }, 150)
+    }, 100) // tighter debounce for instant feel
   }, [doSearch])
 
+  /**
+   * Submission (Enter key):
+   * - forceAi=true  → Ctrl+Enter, always AI
+   * - isAiPrefix    → user typed `?` or `ai ` prefix
+   * - results exist → execute top result (handled in ResultList via keyboard)
+   * - no results    → do nothing (don't fall back to AI automatically)
+   */
   const handleSubmit = useCallback((value: string, forceAi: boolean) => {
-    if (forceAi || isNaturalLanguage(value)) {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-      doAiQuery(value)
-    } else if (results.length === 0 && value.trim()) {
-      // Auto switch to AI mode when no results
+    if (forceAi || isAiPrefix(value)) {
       if (debounceRef.current) clearTimeout(debounceRef.current)
       doAiQuery(value)
     }
-  }, [isNaturalLanguage, doAiQuery, results])
+    // If there are local results, Enter is handled by ResultList (execute top item)
+  }, [doAiQuery])
 
   const handleNewConversation = useCallback(async () => {
     try {
@@ -164,6 +171,14 @@ export default function App() {
     : { bg: '#EFF1F5', surface: '#CCD0DA', text: '#4C4F69', accent: '#8839EF', sub: '#9CA0B0' }
 
   const recentHistory = conversationHistory.slice(-6) // last 3 turns
+
+  // Derive hint text shown below the search bar
+  const hintText = (() => {
+    if (!query) return null
+    if (isAiPrefix(query)) return '🤖 AI mode — press Enter to send'
+    if (results.length > 0) return null
+    return null
+  })()
 
   return (
     <div style={{
@@ -219,11 +234,23 @@ export default function App() {
         value={query}
         onChange={handleQueryChange}
         onSubmit={handleSubmit}
-        isNatural={isNaturalLanguage(query)}
+        isAiMode={isAiPrefix(query)}
         loading={loading}
         colors={colors}
         onSettingsClick={() => setShowSettings(s => !s)}
       />
+
+      {/* Inline hint when AI mode is active */}
+      {hintText && (
+        <div style={{
+          padding: '4px 16px 6px',
+          fontSize: '11px',
+          color: colors.sub,
+          borderBottom: `1px solid ${colors.surface}`
+        }}>
+          {hintText}
+        </div>
+      )}
 
       {showSettings ? (
         <SettingsPanel

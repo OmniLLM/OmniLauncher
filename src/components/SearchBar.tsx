@@ -4,18 +4,24 @@ interface Props {
   value: string
   onChange: (v: string) => void
   onSubmit: (v: string, forceAi: boolean) => void
-  isNatural: boolean
+  isAiMode: boolean
   loading: boolean
   colors: Record<string, string>
   onSettingsClick: () => void
 }
 
-export default function SearchBar({ value, onChange, onSubmit, isNatural, loading, colors, onSettingsClick }: Props) {
+export default function SearchBar({ value, onChange, onSubmit, isAiMode, loading, colors, onSettingsClick }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  const icon = loading ? '⏳' : isAiMode ? '🤖' : '🔍'
+
+  const placeholder = isAiMode
+    ? 'Ask AI anything… (Enter to send)'
+    : 'Type to launch, search, calculate…  |  ? for AI'
 
   return (
     <div style={{
@@ -23,10 +29,13 @@ export default function SearchBar({ value, onChange, onSubmit, isNatural, loadin
       alignItems: 'center',
       padding: '12px 16px',
       gap: '10px',
-      borderBottom: value ? `1px solid ${colors.surface}` : 'none'
+      borderBottom: value ? `1px solid ${colors.surface}` : 'none',
+      // Highlight border when AI mode is active
+      outline: isAiMode ? `1.5px solid ${colors.accent}` : 'none',
+      borderRadius: isAiMode ? '12px 12px 0 0' : undefined,
     }}>
       <span style={{ fontSize: '18px', opacity: 0.6 }}>
-        {loading ? '⏳' : isNatural ? '🤖' : '🔍'}
+        {icon}
       </span>
       <input
         ref={inputRef}
@@ -38,7 +47,7 @@ export default function SearchBar({ value, onChange, onSubmit, isNatural, loadin
             onSubmit(value, e.ctrlKey || e.metaKey)
           }
         }}
-        placeholder="Search or ask anything..."
+        placeholder={placeholder}
         style={{
           flex: 1,
           background: 'transparent',

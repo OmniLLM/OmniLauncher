@@ -63,52 +63,71 @@ impl ConversationContext {
     }
 }
 
+/// How a query should be dispatched.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RouteDecision {
+    /// Run local plugins only — instant, no AI.
+    Local,
+    /// User explicitly asked for AI (prefix `?` or `ai ` or `Ctrl+Enter`).
+    Ai,
+}
+
 pub struct Router;
 
 impl Router {
-    /// Improved heuristic: is this natural language query?
-    pub fn is_natural_language(input: &str) -> bool {
-        let words: Vec<&str> = input.split_whitespace().collect();
-        if words.len() == 1 {
-            return false;
+    /// Decide routing purely from the query text.
+    ///
+    /// Rules (in priority order):
+    /// 1. Starts with `?` or `ai ` (case-insensitive) → AI
+    /// 2. Everything else → Local
+    ///
+    /// This keeps the fast path (app launch, calculator, file search, shell,
+    /// web search, clipboard) completely free of AI latency. Users who want
+    /// AI assistance opt in explicitly.
+    pub fn decide(input: &str) -> RouteDecision {
+        let trimmed = input.trim();
+
+        // Explicit AI prefix triggers
+        if trimmed.starts_with('?')
+            || trimmed.to_lowercase().starts_with("ai ")
+        {
+            return RouteDecision::Ai;
         }
 
-        // Contains question words or action words
-        let question_words = ["what", "how", "why", "when", "where", "who",
-                              "find", "show", "open", "search", "list", "get",
-                              "帮", "找", "打开", "搜索", "显示", "什么", "怎么"];
-        let lower = input.to_lowercase();
-        if question_words.iter().any(|w| lower.contains(w)) {
-            return true;
-        }
-
-        // Long enough to be sentence-like
-        if words.len() >= 4 {
-            return true;
-        }
-
-        // Punctuation typical of questions
-        if input.contains('?') || input.contains('？') {
-            return true;
-        }
-
-        false
+        RouteDecision::Local
     }
 
+    /// Strip the AI trigger prefix so the underlying prompt is clean.
+    pub fn strip_ai_prefix(input: &str) -> &str {
+        let trimmed = input.trim();
+        if trimmed.starts_with('?') {
+            trimmed[1..].trim()
+        } else if trimmed.len() >= 3 && trimmed[..3].to_lowercase() == "ai " {
+            trimmed[3..].trim()
+        } else {
+            trimmed
+        }
+    }
+
+    /// Main entry-point: route a query and return a response.
     pub async fn route(
         input: &str,
         plugin_manager: &PluginManager,
         ai_client: &AiClient,
     ) -> AiResponse {
-        if Self::is_natural_language(input) {
-            Self::ai_route(input, plugin_manager, ai_client).await
-        } else {
-            let results = plugin_manager.query_all(input).await;
-            AiResponse {
-                content: String::new(),
-                tools_used: vec![],
-                results,
-                is_ai: false,
+        match Self::decide(input) {
+            RouteDecision::Local => {
+                let results = plugin_manager.query_all(input).await;
+                AiResponse {
+                    content: String::new(),
+                    tools_used: vec![],
+                    results,
+                    is_ai: false,
+                }
+            }
+            RouteDecision::Ai => {
+                let prompt = Self::strip_ai_prefix(input);
+                Self::ai_route(prompt, plugin_manager, ai_client).await
             }
         }
     }
@@ -168,5 +187,37 @@ impl Router {
                 is_ai: true,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_local_routes() {
+        assert_eq!(Router::decide("chrome"), RouteDecision::Local);
+        assert_eq!(Router::decide("=2+2"), RouteDecision::Local);
+        assert_eq!(Router::decide(">git status"), RouteDecision::Local);
+        assert_eq!(Router::decide("find my notes"), RouteDecision::Local);
+        assert_eq!(Router::decide("open firefox"), RouteDecision::Local);
+        assert_eq!(Router::decide("what is rust"), RouteDecision::Local);
+    }
+
+    #[test]
+    fn test_ai_routes() {
+        assert_eq!(Router::decide("?what is the weather"), RouteDecision::Ai);
+        assert_eq!(Router::decide("? summarize my clipboard"), RouteDecision::Ai);
+        assert_eq!(Router::decide("ai help me write an email"), RouteDecision::Ai);
+        assert_eq!(Router::decide("AI explain this error"), RouteDecision::Ai);
+    }
+
+    #[test]
+    fn test_strip_prefix() {
+        assert_eq!(Router::strip_ai_prefix("?hello"), "hello");
+        assert_eq!(Router::strip_ai_prefix("? hello"), "hello");
+        assert_eq!(Router::strip_ai_prefix("ai help me"), "help me");
+        assert_eq!(Router::strip_ai_prefix("AI help me"), "help me");
+        assert_eq!(Router::strip_ai_prefix("chrome"), "chrome");
     }
 }
