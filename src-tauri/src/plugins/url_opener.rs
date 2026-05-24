@@ -55,6 +55,31 @@ impl Plugin for UrlOpenerPlugin {
     }
 
     async fn execute_tool(&self, args: serde_json::Value) -> String {
-        args["url"].as_str().unwrap_or("").to_string()
+        let url = args["url"].as_str().unwrap_or("");
+        if url.is_empty() {
+            return "Error: no URL provided".to_string();
+        }
+
+        let result = {
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/C", "start", "", url])
+                    .spawn()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open").arg(url).spawn()
+            }
+            #[cfg(target_os = "linux")]
+            {
+                std::process::Command::new("xdg-open").arg(url).spawn()
+            }
+        };
+
+        match result {
+            Ok(_) => format!("Opened {}", url),
+            Err(e) => format!("Failed to open {}: {}", url, e),
+        }
     }
 }

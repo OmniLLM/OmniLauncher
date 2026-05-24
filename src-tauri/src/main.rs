@@ -72,6 +72,7 @@ pub fn run() {
             search,
             ai_query,
             execute_result,
+            slash_preview,
             get_settings,
             save_settings_cmd,
             clear_conversation,
@@ -122,6 +123,121 @@ async fn clear_conversation(state: tauri::State<'_, AppState>) -> Result<bool, S
     let mut ctx = state.conversation.lock().await;
     ctx.clear();
     Ok(true)
+}
+
+#[tauri::command]
+async fn slash_preview(
+    query: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<QueryResult>, String> {
+    let pm = state.plugin_manager.lock().await;
+    let lower = query.to_lowercase();
+
+    // Parse command and argument
+    let (cmd, arg) = match query.split_once(' ') {
+        Some((c, a)) => (c.to_lowercase(), a.trim().to_string()),
+        None => (lower.clone(), String::new()),
+    };
+
+    if arg.is_empty() {
+        return Ok(vec![]);
+    }
+
+    match cmd.as_str() {
+        "/app" | "/a" => Ok(pm.query_all(&arg).await),
+        "/find" | "/f" => Ok(pm.query_all(&format!("f {}", arg)).await),
+        "/open" | "/o" => Ok(pm.query_all(&arg).await),
+        "/grep" | "/g" => {
+            let results = pm.query_all(&format!("grep {}", arg)).await;
+            Ok(results)
+        }
+        "/web" | "/w" => {
+            // Show web search targets as previews
+            let encoded = arg.replace(' ', "+");
+            Ok(vec![
+                QueryResult {
+                    id: "web-google".to_string(),
+                    title: format!("Google: {}", arg),
+                    subtitle: Some("Search with Google".to_string()),
+                    icon: Some("🔍".to_string()),
+                    score: 100,
+                    action_type: "url".to_string(),
+                    action_data: format!("https://www.google.com/search?q={}", encoded),
+                },
+                QueryResult {
+                    id: "web-youtube".to_string(),
+                    title: format!("YouTube: {}", arg),
+                    subtitle: Some("Search on YouTube".to_string()),
+                    icon: Some("▶️".to_string()),
+                    score: 90,
+                    action_type: "url".to_string(),
+                    action_data: format!("https://www.youtube.com/results?search_query={}", encoded),
+                },
+                QueryResult {
+                    id: "web-github".to_string(),
+                    title: format!("GitHub: {}", arg),
+                    subtitle: Some("Search on GitHub".to_string()),
+                    icon: Some("🐙".to_string()),
+                    score: 80,
+                    action_type: "url".to_string(),
+                    action_data: format!("https://github.com/search?q={}", encoded),
+                },
+            ])
+        }
+        "/kill" => {
+            // Show matching processes as previews
+            let output = if cfg!(target_os = "windows") {
+                std::process::Command::new("powershell")
+                    .args(["-NoProfile", "-Command",
+                        &format!("Get-Process | Where-Object {{ $_.Name -like '*{}*' }} | Select-Object -First 10 Id, Name, @{{N='MemMB';E={{[math]::Round($_.WorkingSet64/1MB,1)}}}} | ForEach-Object {{ \"$($_.Id)|$($_.Name)|$($_.MemMB)\" }}", arg)])
+                    .output()
+            } else {
+                std::process::Command::new("sh")
+                    .args(["-c", &format!("ps aux | grep -i '{}' | grep -v grep | head -10", arg)])
+                    .output()
+            };
+            match output {
+                Ok(out) => {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let results: Vec<QueryResult> = text.lines()
+                        .filter(|l| !l.is_empty())
+                        .enumerate()
+                        .filter_map(|(i, line)| {
+                            let parts: Vec<&str> = line.split('|').collect();
+                            if parts.len() >= 2 {
+                                Some(QueryResult {
+                                    id: format!("kill-{}", i),
+                                    title: format!("{} (PID: {})", parts[1], parts[0]),
+                                    subtitle: parts.get(2).map(|m| format!("{} MB", m)),
+                                    icon: Some("💀".to_string()),
+                                    score: 100 - i as i32,
+                                    action_type: "shell".to_string(),
+                                    action_data: if cfg!(target_os = "windows") {
+                                        format!("taskkill /F /PID {}", parts[0])
+                                    } else {
+                                        format!("kill -9 {}", parts[0])
+                                    },
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    Ok(results)
+                }
+                Err(_) => Ok(vec![]),
+            }
+        }
+        "/clip" | "/cb" => {
+            let results = pm.query_all(&format!("cb {}", arg)).await;
+            Ok(results)
+        }
+        "/calc" | "/c" => {
+            let results = pm.query_all(&format!("= {}", arg)).await;
+            Ok(results)
+        }
+        _ => Ok(vec![]),
+    }
 }
 
 #[tauri::command]

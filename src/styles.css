@@ -257,7 +257,7 @@ body {
 
 .chat-msg__content {
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.4;
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
@@ -523,8 +523,8 @@ body {
 
 /* === Markdown Rendering === */
 .md-p {
-  margin: 0 0 0.4em 0;
-  line-height: 1.5;
+  margin: 0 0 0.2em 0;
+  line-height: 1.4;
 }
 
 .md-p:last-child {
@@ -532,7 +532,7 @@ body {
 }
 
 .md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-h6 {
-  margin: 0.8em 0 0.4em 0;
+  margin: 0.2em 0 0.1em 0;
   font-weight: 600;
   color: var(--text);
 }
@@ -554,12 +554,12 @@ body {
   background: var(--surface-0, #1e1e2e);
   border: 1px solid var(--border, rgba(255,255,255,0.1));
   border-radius: 8px;
-  padding: 12px 16px;
-  margin: 8px 0;
+  padding: 8px 12px;
+  margin: 4px 0;
   overflow-x: auto;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 0.85em;
-  line-height: 1.5;
+  line-height: 1.4;
   color: var(--text, #cdd6f4);
 }
 
@@ -570,19 +570,19 @@ body {
 }
 
 .md-list {
-  margin: 4px 0;
+  margin: 2px 0;
   padding-left: 1.5em;
 }
 
 .md-list li {
-  margin: 2px 0;
-  line-height: 1.5;
+  margin: 1px 0;
+  line-height: 1.4;
 }
 
 .md-table {
   border-collapse: collapse;
   width: 100%;
-  margin: 8px 0;
+  margin: 4px 0;
   font-size: 0.9em;
 }
 
@@ -615,6 +615,14 @@ body {
 
 .md-link:hover {
   text-decoration: underline;
+}
+
+.md-spacer {
+  height: 0.1em;
+}
+
+.md-spacer + .md-spacer {
+  display: none;
 }
 
 /* === Slash Command Dropdown === */

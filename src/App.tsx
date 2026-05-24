@@ -129,7 +129,7 @@ function renderMarkdown(text: string): string {
 
     // Empty line
     if (line.trim() === '') {
-      result.push('<br/>');
+      result.push('<div class="md-spacer"></div>');
       continue;
     }
 
@@ -234,8 +234,8 @@ export default function App() {
       )
     : [];
 
-  // Live search: when user types `/app <query>`, `/find <query>`, etc., show results
-  const liveSearchPrefixes = ["/app ", "/a ", "/find ", "/f ", "/open ", "/o "];
+  // Live search: when user types any slash command with an argument, show preview results
+  const liveSearchPrefixes = ["/app ", "/a ", "/find ", "/f ", "/open ", "/o ", "/grep ", "/g ", "/web ", "/w ", "/kill ", "/clip ", "/cb ", "/calc ", "/c "];
   const isLiveSearch = liveSearchPrefixes.some((p) => query.toLowerCase().startsWith(p));
   const showLiveResults = isLiveSearch && liveResults.length > 0 && !loading;
 
@@ -257,7 +257,7 @@ export default function App() {
     if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
     liveTimerRef.current = setTimeout(async () => {
       try {
-        const results = await invoke<QueryResult[]>("search", { query: searchTerm });
+        const results = await invoke<QueryResult[]>("slash_preview", { query });
         setLiveResults(results);
         setLiveIdx(-1);
       } catch {
@@ -288,7 +288,15 @@ export default function App() {
     getCurrentWebviewWindow()
       .onFocusChanged(({ payload: focused }) => {
         if (focused) {
+          // Use multiple attempts to ensure focus lands on the input
           inputRef.current?.focus();
+          setTimeout(() => {
+            inputRef.current?.focus();
+            inputRef.current?.select();
+          }, 50);
+          setTimeout(() => {
+            inputRef.current?.focus();
+          }, 150);
         }
       })
       .then((fn) => { unlisten = fn; })
@@ -493,6 +501,7 @@ export default function App() {
         )}
         <input
           ref={inputRef}
+          autoFocus
           className="chat-input__field"
           value={query}
           onChange={(e) => {
