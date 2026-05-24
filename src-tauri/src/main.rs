@@ -1,16 +1,18 @@
 use omnilauncher_lib::{
-    create_plugin_manager, load_settings, save_settings,
-    ai::{client::AiClient, router::{Router, ConversationContext}},
-    QueryResult, AppSettings,
+    ai::{
+        client::AiClient,
+        router::{ConversationContext, Router},
+    },
+    create_plugin_manager, load_settings, save_settings, AppSettings, QueryResult,
 };
 use std::sync::Arc;
+use tauri::Manager;
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tokio::sync::Mutex;
-use tauri::{Emitter, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, Code, Modifiers};
 
 pub struct AppState {
     pub plugin_manager: Arc<Mutex<omnilauncher_lib::PluginManager>>,
-    pub ai_client: Arc<AiClient>,
+    pub ai_client: Mutex<AiClient>,
     pub settings: Arc<Mutex<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
 }
@@ -26,7 +28,7 @@ pub fn run() {
 
     let state = AppState {
         plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
-        ai_client: Arc::new(ai_client),
+        ai_client: Mutex::new(ai_client),
         settings: Arc::new(Mutex::new(settings)),
         conversation: Arc::new(Mutex::new(ConversationContext::default())),
     };
@@ -38,18 +40,31 @@ pub fn run() {
         .manage(state)
         .setup(move |app| {
             let window = app.get_webview_window("main").unwrap();
+
+            // Resize window to 1/3 of screen
+            if let Ok(Some(monitor)) = window.current_monitor() {
+                let screen_size = monitor.size();
+                let scale = monitor.scale_factor();
+                let width = (screen_size.width as f64 / scale) / 3.0;
+                let height = (screen_size.height as f64 / scale) / 3.0;
+                let _ = window.set_size(tauri::LogicalSize::new(width, height));
+                let _ = window.center();
+            }
+
             let global_shortcut = app.global_shortcut();
 
-            global_shortcut.on_shortcut(shortcut, move |_app, _shortcut, event| {
-                if let tauri_plugin_global_shortcut::ShortcutState::Pressed = event.state() {
-                    if window.is_visible().unwrap_or(false) {
-                        let _ = window.hide();
-                    } else {
-                        let _ = window.show();
-                        let _ = window.set_focus();
+            global_shortcut
+                .on_shortcut(shortcut, move |_app, _shortcut, event| {
+                    if let tauri_plugin_global_shortcut::ShortcutState::Pressed = event.state() {
+                        if window.is_visible().unwrap_or(false) {
+                            let _ = window.hide();
+                        } else {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
                     }
-                }
-            }).expect("Failed to register global shortcut");
+                })
+                .expect("Failed to register global shortcut");
 
             Ok(())
         })
@@ -78,7 +93,6 @@ async fn search(
 async fn ai_query(
     query: String,
     state: tauri::State<'_, AppState>,
-    window: tauri::WebviewWindow,
 ) -> Result<omnilauncher_lib::AiResponse, String> {
     // Add to conversation context
     {
@@ -87,22 +101,16 @@ async fn ai_query(
     }
 
     let pm = state.plugin_manager.lock().await;
-    let response = Router::route(&query, &pm, &state.ai_client).await;
+    let client = state.ai_client.lock().await;
+    let ctx = state.conversation.lock().await;
+    // Always use AI route in chat mode (bypass NL detection)
+    let response = Router::ai_route(&pm, &client, &ctx).await;
+    drop(ctx);
 
     // Add assistant response to context
     {
         let mut ctx = state.conversation.lock().await;
         ctx.add_assistant(&response.content);
-    }
-
-    // Emit streaming events for the response content
-    if !response.content.is_empty() {
-        // Simulate streaming by emitting chunks
-        for tool in &response.tools_used {
-            let _ = window.emit("ai-tool-call", tool.clone());
-        }
-        let _ = window.emit("ai-stream", response.content.clone());
-        let _ = window.emit("ai-stream-done", "".to_string());
     }
 
     Ok(response)
@@ -125,14 +133,21 @@ async fn execute_result(result: QueryResult) -> Result<bool, String> {
             #[cfg(target_os = "macos")]
             let _ = Command::new("open").arg(&result.action_data).spawn();
             #[cfg(target_os = "windows")]
-            let _ = Command::new("cmd").args(["/C", "start", &result.action_data]).spawn();
+            let _ = Command::new("cmd")
+                .args(["/C", "start", &result.action_data])
+                .spawn();
             true
         }
         "shell" => {
             #[cfg(not(target_os = "windows"))]
-            let _ = Command::new("sh").arg("-c").arg(&result.action_data).spawn();
+            let _ = Command::new("sh")
+                .arg("-c")
+                .arg(&result.action_data)
+                .spawn();
             #[cfg(target_os = "windows")]
-            let _ = Command::new("cmd").args(["/C", &result.action_data]).spawn();
+            let _ = Command::new("cmd")
+                .args(["/C", &result.action_data])
+                .spawn();
             true
         }
         "open" => {
@@ -150,9 +165,9 @@ async fn execute_result(result: QueryResult) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn get_settings(state: tauri::State<'_, AppState>) -> AppSettings {
-    let settings = state.settings.blocking_lock();
-    settings.clone()
+async fn get_settings(state: tauri::State<'_, AppState>) -> Result<AppSettings, String> {
+    let settings = state.settings.lock().await;
+    Ok(settings.clone())
 }
 
 #[tauri::command]
@@ -162,6 +177,13 @@ async fn save_settings_cmd(
 ) -> Result<bool, String> {
     let mut current = state.settings.lock().await;
     *current = settings.clone();
+    // Recreate AiClient with new settings
+    let mut client = state.ai_client.lock().await;
+    *client = AiClient::new(
+        settings.ai_base_url.clone(),
+        settings.ai_api_key.clone(),
+        settings.ai_model.clone(),
+    );
     Ok(save_settings(&settings))
 }
 

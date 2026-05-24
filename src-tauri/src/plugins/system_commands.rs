@@ -18,7 +18,12 @@ impl Plugin for SystemCommandsPlugin {
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        let term = q.raw.strip_prefix("sys ").unwrap_or("").trim().to_lowercase();
+        let term = q
+            .raw
+            .strip_prefix("sys ")
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
         let commands = vec![
             ("lock", "🔒", "Lock screen", sys_lock_cmd()),
             ("sleep", "💤", "Sleep / suspend", sys_sleep_cmd()),
@@ -28,7 +33,7 @@ impl Plugin for SystemCommandsPlugin {
 
         commands
             .into_iter()
-            .filter(|(name, _, _, _)| term.is_empty() || name.contains(&term.as_str()))
+            .filter(|(name, _, _, _)| term.is_empty() || name.contains(term.as_str()))
             .map(|(name, icon, desc, cmd)| QueryResult {
                 id: format!("sys:{}", name),
                 title: desc.to_string(),
@@ -94,10 +99,18 @@ fn sys_restart_cmd() -> String {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn sys_lock_cmd() -> String { "echo lock".to_string() }
+fn sys_lock_cmd() -> String {
+    "echo lock".to_string()
+}
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn sys_sleep_cmd() -> String { "echo sleep".to_string() }
+fn sys_sleep_cmd() -> String {
+    "echo sleep".to_string()
+}
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn sys_shutdown_cmd() -> String { "echo shutdown".to_string() }
+fn sys_shutdown_cmd() -> String {
+    "echo shutdown".to_string()
+}
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn sys_restart_cmd() -> String { "echo restart".to_string() }
+fn sys_restart_cmd() -> String {
+    "echo restart".to_string()
+}

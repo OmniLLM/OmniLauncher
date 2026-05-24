@@ -54,7 +54,12 @@ impl Plugin for WebSearchPlugin {
                 action_type: "url".to_string(),
                 action_data: format!("https://github.com/search?q={}", encoded),
             });
-        } else if !raw.is_empty() && !raw.starts_with('>') && !raw.starts_with('=') && !raw.starts_with("sys ") && !raw.starts_with("f ") {
+        } else if !raw.is_empty()
+            && !raw.starts_with('>')
+            && !raw.starts_with('=')
+            && !raw.starts_with("sys ")
+            && !raw.starts_with("f ")
+        {
             // fallback: bare query → Google
             let encoded = urlencoding(raw);
             results.push(QueryResult {

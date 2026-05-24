@@ -13,6 +13,12 @@ pub struct AppEntry {
     pub icon: Option<String>,
 }
 
+impl Default for AppLauncherPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppLauncherPlugin {
     pub fn new() -> Self {
         let apps = Self::load_apps();
@@ -55,7 +61,11 @@ impl AppLauncherPlugin {
                 for entry in entries.filter_map(|e| e.ok()) {
                     let path = entry.path();
                     if path.extension().map(|e| e == "app").unwrap_or(false) {
-                        let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                        let name = path
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
                         apps.push(AppEntry {
                             name,
                             exec: path.to_string_lossy().to_string(),
@@ -79,21 +89,29 @@ impl AppLauncherPlugin {
                 .join("Microsoft\\Windows\\Start Menu\\Programs"),
         ];
         for dir in paths {
-            if let Ok(walker) = walkdir::WalkDir::new(&dir).into_iter().try_fold(vec![], |mut acc, e| {
-                if let Ok(e) = e {
-                    if e.path().extension().map(|x| x == "lnk").unwrap_or(false) {
-                        let name = e.path().file_stem().unwrap_or_default().to_string_lossy().to_string();
-                        acc.push(AppEntry {
-                            name,
-                            exec: e.path().to_string_lossy().to_string(),
-                            icon: Some("🪟".to_string()),
-                        });
-                    }
-                }
-                Ok::<_, std::convert::Infallible>(acc)
-            }) {
-                apps.extend(walker);
-            }
+            let walker =
+                walkdir::WalkDir::new(&dir)
+                    .into_iter()
+                    .try_fold(vec![], |mut acc, e| {
+                        if let Ok(e) = e {
+                            if e.path().extension().map(|x| x == "lnk").unwrap_or(false) {
+                                let name = e
+                                    .path()
+                                    .file_stem()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string();
+                                acc.push(AppEntry {
+                                    name,
+                                    exec: e.path().to_string_lossy().to_string(),
+                                    icon: Some("🪟".to_string()),
+                                });
+                            }
+                        }
+                        Ok::<_, std::convert::Infallible>(acc)
+                    })
+                    .unwrap_or_default();
+            apps.extend(walker);
         }
         apps
     }
@@ -130,13 +148,18 @@ fn parse_desktop_file(path: &PathBuf) -> Option<AppEntry> {
         } else if let Some(v) = line.strip_prefix("Exec=") {
             if exec.is_none() {
                 // Remove field codes like %u %f %F etc
-                let e = v.split_whitespace()
+                let e = v
+                    .split_whitespace()
                     .filter(|t| !t.starts_with('%'))
                     .collect::<Vec<_>>()
                     .join(" ");
                 exec = Some(e);
             }
-        } else if line.strip_prefix("NoDisplay=").map(|v| v.trim().to_lowercase() == "true").unwrap_or(false) {
+        } else if line
+            .strip_prefix("NoDisplay=")
+            .map(|v| v.trim().to_lowercase() == "true")
+            .unwrap_or(false)
+        {
             no_display = true;
         }
     }
@@ -167,7 +190,11 @@ impl Plugin for AppLauncherPlugin {
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        if q.raw.is_empty() || q.raw.starts_with("= ") || q.raw.starts_with('>') || q.raw.starts_with("sys ") {
+        if q.raw.is_empty()
+            || q.raw.starts_with("= ")
+            || q.raw.starts_with('>')
+            || q.raw.starts_with("sys ")
+        {
             return vec![];
         }
 

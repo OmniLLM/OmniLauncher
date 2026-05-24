@@ -88,7 +88,9 @@ fn tokenize(s: &str) -> Option<Vec<Token>> {
     let mut chars = s.chars().peekable();
     while let Some(&c) = chars.peek() {
         match c {
-            ' ' | '\t' => { chars.next(); }
+            ' ' | '\t' => {
+                chars.next();
+            }
             '0'..='9' | '.' => {
                 let mut num = String::new();
                 while let Some(&d) = chars.peek() {
@@ -101,13 +103,34 @@ fn tokenize(s: &str) -> Option<Vec<Token>> {
                 }
                 tokens.push(Token::Num(num.parse().ok()?));
             }
-            '+' => { tokens.push(Token::Plus); chars.next(); }
-            '-' => { tokens.push(Token::Minus); chars.next(); }
-            '*' => { tokens.push(Token::Star); chars.next(); }
-            '/' => { tokens.push(Token::Slash); chars.next(); }
-            '^' => { tokens.push(Token::Caret); chars.next(); }
-            '(' => { tokens.push(Token::LParen); chars.next(); }
-            ')' => { tokens.push(Token::RParen); chars.next(); }
+            '+' => {
+                tokens.push(Token::Plus);
+                chars.next();
+            }
+            '-' => {
+                tokens.push(Token::Minus);
+                chars.next();
+            }
+            '*' => {
+                tokens.push(Token::Star);
+                chars.next();
+            }
+            '/' => {
+                tokens.push(Token::Slash);
+                chars.next();
+            }
+            '^' => {
+                tokens.push(Token::Caret);
+                chars.next();
+            }
+            '(' => {
+                tokens.push(Token::LParen);
+                chars.next();
+            }
+            ')' => {
+                tokens.push(Token::RParen);
+                chars.next();
+            }
             _ => return None,
         }
     }
@@ -118,8 +141,14 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Option<f64> {
     let mut left = parse_term(tokens, pos)?;
     while *pos < tokens.len() {
         match &tokens[*pos] {
-            Token::Plus => { *pos += 1; left += parse_term(tokens, pos)?; }
-            Token::Minus => { *pos += 1; left -= parse_term(tokens, pos)?; }
+            Token::Plus => {
+                *pos += 1;
+                left += parse_term(tokens, pos)?;
+            }
+            Token::Minus => {
+                *pos += 1;
+                left -= parse_term(tokens, pos)?;
+            }
             _ => break,
         }
     }
@@ -130,11 +159,16 @@ fn parse_term(tokens: &[Token], pos: &mut usize) -> Option<f64> {
     let mut left = parse_power(tokens, pos)?;
     while *pos < tokens.len() {
         match &tokens[*pos] {
-            Token::Star => { *pos += 1; left *= parse_power(tokens, pos)?; }
+            Token::Star => {
+                *pos += 1;
+                left *= parse_power(tokens, pos)?;
+            }
             Token::Slash => {
                 *pos += 1;
                 let r = parse_power(tokens, pos)?;
-                if r == 0.0 { return None; }
+                if r == 0.0 {
+                    return None;
+                }
                 left /= r;
             }
             _ => break,

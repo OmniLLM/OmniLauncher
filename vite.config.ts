@@ -1,14 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
-  resolve: {
-    alias: {
-      '@tauri-apps/api/core': path.resolve(__dirname, 'src/tauri-api.ts'),
-    },
-  },
   clearScreen: false,
   server: {
     port: 1420,
@@ -17,7 +11,7 @@ export default defineConfig({
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
     target: ['es2021', 'chrome100', 'safari13'],
-    minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
+    minify: !process.env.TAURI_DEBUG ? true : false,
     sourcemap: !!process.env.TAURI_DEBUG,
   },
 })

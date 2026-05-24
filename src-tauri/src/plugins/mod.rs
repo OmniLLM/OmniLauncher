@@ -35,6 +35,12 @@ pub struct PluginManager {
     pub plugins: Vec<Box<dyn Plugin>>,
 }
 
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginManager {
     pub fn new() -> Self {
         Self { plugins: vec![] }
@@ -59,13 +65,16 @@ impl PluginManager {
             let mut r = plugin.query(&q).await;
             results.append(&mut r);
         }
-        results.sort_by(|a, b| b.score.cmp(&a.score));
+        results.sort_by_key(|b| std::cmp::Reverse(b.score));
         results.truncate(10);
         results
     }
 
     pub fn all_tool_schemas(&self) -> Vec<serde_json::Value> {
-        self.plugins.iter().filter_map(|p| p.tool_schema()).collect()
+        self.plugins
+            .iter()
+            .filter_map(|p| p.tool_schema())
+            .collect()
     }
 
     pub async fn execute_tool(&self, name: &str, args: serde_json::Value) -> String {

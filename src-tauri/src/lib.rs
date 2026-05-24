@@ -1,10 +1,10 @@
-pub mod plugins;
 pub mod ai;
+pub mod plugins;
 pub mod settings;
 
+pub use ai::router::{AiResponse, ConversationContext, Router};
 pub use plugins::{PluginManager, QueryResult};
-pub use ai::router::{AiResponse, Router, ConversationContext};
-pub use settings::{AppSettings, load_settings, save_settings};
+pub use settings::{load_settings, save_settings, AppSettings};
 
 pub fn create_plugin_manager() -> PluginManager {
     let mut pm = PluginManager::new();

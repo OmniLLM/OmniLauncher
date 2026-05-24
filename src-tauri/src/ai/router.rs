@@ -18,22 +18,34 @@ pub struct ConversationContext {
 
 impl Default for ConversationContext {
     fn default() -> Self {
-        Self { messages: Vec::new(), max_turns: 10 }
+        Self {
+            messages: Vec::new(),
+            max_turns: 10,
+        }
     }
 }
 
 impl ConversationContext {
     pub fn new(max_turns: usize) -> Self {
-        Self { messages: Vec::new(), max_turns }
+        Self {
+            messages: Vec::new(),
+            max_turns,
+        }
     }
 
     pub fn add_user(&mut self, text: &str) {
-        self.messages.push(Message { role: "user".to_string(), content: text.to_string() });
+        self.messages.push(Message {
+            role: "user".to_string(),
+            content: text.to_string(),
+        });
         self.trim_to_max();
     }
 
     pub fn add_assistant(&mut self, text: &str) {
-        self.messages.push(Message { role: "assistant".to_string(), content: text.to_string() });
+        self.messages.push(Message {
+            role: "assistant".to_string(),
+            content: text.to_string(),
+        });
     }
 
     pub fn add_tool_result(&mut self, tool_name: &str, result: &str) {
@@ -57,7 +69,10 @@ impl ConversationContext {
     }
 
     pub fn get_messages_with_system(&self, system_prompt: &str) -> Vec<Message> {
-        let mut msgs = vec![Message { role: "system".to_string(), content: system_prompt.to_string() }];
+        let mut msgs = vec![Message {
+            role: "system".to_string(),
+            content: system_prompt.to_string(),
+        }];
         msgs.extend(self.messages.clone());
         msgs
     }
@@ -74,9 +89,10 @@ impl Router {
         }
 
         // Contains question words or action words
-        let question_words = ["what", "how", "why", "when", "where", "who",
-                              "find", "show", "open", "search", "list", "get",
-                              "帮", "找", "打开", "搜索", "显示", "什么", "怎么"];
+        let question_words = [
+            "what", "how", "why", "when", "where", "who", "find", "show", "open", "search", "list",
+            "get", "帮", "找", "打开", "搜索", "显示", "什么", "怎么",
+        ];
         let lower = input.to_lowercase();
         if question_words.iter().any(|w| lower.contains(w)) {
             return true;
@@ -99,9 +115,10 @@ impl Router {
         input: &str,
         plugin_manager: &PluginManager,
         ai_client: &AiClient,
+        context: &ConversationContext,
     ) -> AiResponse {
         if Self::is_natural_language(input) {
-            Self::ai_route(input, plugin_manager, ai_client).await
+            Self::ai_route(plugin_manager, ai_client, context).await
         } else {
             let results = plugin_manager.query_all(input).await;
             AiResponse {
@@ -113,24 +130,21 @@ impl Router {
         }
     }
 
-    async fn ai_route(
-        input: &str,
+    pub async fn ai_route(
         plugin_manager: &PluginManager,
         ai_client: &AiClient,
+        context: &ConversationContext,
     ) -> AiResponse {
         let tools = plugin_manager.all_tool_schemas();
-        let messages = vec![
-            Message {
-                role: "system".to_string(),
-                content: "You are OmniLauncher, an AI-powered application launcher. \
+
+        let system_prompt = "You are OmniLauncher, an AI-powered application launcher. \
                           Help the user find files, search the web, launch apps, or answer questions. \
-                          Use the available tools when appropriate. Be concise.".to_string(),
-            },
-            Message {
-                role: "user".to_string(),
-                content: input.to_string(),
-            },
-        ];
+                          Use the available tools when appropriate. Be concise.";
+
+        // Use conversation context (includes prior turns) + current user message
+        let messages = context.get_messages_with_system(system_prompt);
+        // The current user message is already added to context before route() is called,
+        // so it's already in get_messages_with_system output.
 
         match ai_client.chat_with_tools(messages, tools).await {
             Ok(resp) => {
@@ -143,9 +157,7 @@ impl Router {
                         tools_used.push(tc.function.name.clone());
                         let args: serde_json::Value =
                             serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                        let result = plugin_manager
-                            .execute_tool(&tc.function.name, args)
-                            .await;
+                        let result = plugin_manager.execute_tool(&tc.function.name, args).await;
                         tool_results.push(result);
                     }
 

@@ -16,9 +16,10 @@
         "title": "OmniLauncher",
         "width": 680,
         "height": 500,
-        "resizable": false,
+        "resizable": true,
         "fullscreen": false,
         "decorations": false,
+        "transparent": true,
         "center": true,
         "alwaysOnTop": true,
         "visible": false

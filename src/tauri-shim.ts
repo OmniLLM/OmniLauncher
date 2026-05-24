@@ -2,8 +2,10 @@
 // This provides the global Tauri API that @tauri-apps/api expects
 if (!(window as any).__TAURI__) {
   const invokeImpl = async (cmd: string, args?: Record<string, unknown>) => {
-    throw new Error(`Tauri not available in browser. Run the app via 'npx tauri dev' instead.`)
-  }
+    throw new Error(
+      `Tauri not available in browser. Run the app via 'npx tauri dev' instead.`,
+    );
+  };
 
   (window as any).__TAURI__ = {
     core: {
@@ -17,20 +19,20 @@ if (!(window as any).__TAURI__) {
       once: async () => () => {},
     },
     window: {
-      WebviewWindow: function() {},
+      WebviewWindow: function () {},
       getCurrent: () => ({
         listen: async () => () => {},
         emit: async () => {},
       }),
     },
     path: {
-      join: (...parts: string[]) => parts.join('/'),
-      resolve: (...parts: string[]) => parts.join('/'),
+      join: (...parts: string[]) => parts.join("/"),
+      resolve: (...parts: string[]) => parts.join("/"),
     },
     fs: {},
     shell: {},
     dialog: {},
     http: {},
     store: {},
-  }
+  };
 }

@@ -1,251 +1,254 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { invoke } from '@tauri-apps/api/core'
-import SearchBar from './components/SearchBar'
-import ResultList from './components/ResultList'
-import AIResponsePane from './components/AIResponsePane'
-import SettingsPanel from './components/SettingsPanel'
+import { useState, useEffect, useCallback, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import SettingsPanel from "./components/SettingsPanel";
 
 interface QueryResult {
-  id: string
-  title: string
-  subtitle?: string
-  icon?: string
-  score: number
-  action_type: string
-  action_data: string
+  id: string;
+  title: string;
+  subtitle?: string;
+  icon?: string;
+  score: number;
+  action_type: string;
+  action_data: string;
 }
 
 interface AiResponse {
-  content: string
-  tools_used: string[]
-  results: QueryResult[]
-  is_ai: boolean
+  content: string;
+  tools_used: string[];
+  results: QueryResult[];
+  is_ai: boolean;
 }
 
-interface ConversationTurn {
-  role: 'user' | 'assistant'
-  content: string
+interface AppSettings {
+  ai_base_url: string;
+  ai_model: string;
+  ai_api_key: string;
+  theme: string;
+  hotkey: string;
+  max_results: number;
+}
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  tools?: string[];
 }
 
 export default function App() {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<QueryResult[]>([])
-  const [aiResponse, setAiResponse] = useState<AiResponse | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
-  const [conversationHistory, setConversationHistory] = useState<ConversationTurn[]>([])
-  const [showHistory, setShowHistory] = useState(false)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const isNaturalLanguage = useCallback((input: string): boolean => {
-    const words = input.trim().split(/\s+/)
-    if (words.length === 1) return false
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
-    const nlWords = ['what', 'how', 'why', 'when', 'where', 'who',
-                     'find', 'show', 'open', 'search', 'list', 'get',
-                     'help', 'create', 'make', 'tell', 'explain', 'translate',
-                     'calculate', 'convert',
-                     '帮', '找', '打开', '搜索', '显示', '什么', '怎么']
-    const lower = input.toLowerCase()
-    if (nlWords.some(w => lower.includes(w))) return true
-    if (words.length >= 4) return true
-    if (input.includes('?') || input.includes('？')) return true
-    return false
-  }, [])
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, loading]);
 
-  const doSearch = useCallback(async (q: string) => {
-    if (!q.trim()) {
-      setResults([])
-      setAiResponse(null)
-      return
-    }
-    try {
-      const res = await invoke<QueryResult[]>('search', { query: q })
-      setResults(res)
-    } catch (e) {
-      console.error('Search error:', e)
-    }
-  }, [])
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Re-focus input when window becomes visible
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWebviewWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (focused) {
+          inputRef.current?.focus();
+        }
+      })
+      .then((fn) => { unlisten = fn; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
 
   const doAiQuery = useCallback(async (q: string) => {
-    if (!q.trim()) return
-    setLoading(true)
-    setResults([])
+    if (!q.trim()) return;
+    setMessages((prev) => [...prev, { role: "user", content: q }]);
+    setQuery("");
+    setLoading(true);
     try {
-      const res = await invoke<AiResponse>('ai_query', { query: q })
-      setAiResponse(res)
-      // Add to local conversation history display
-      setConversationHistory(prev => [
+      const res = await invoke<AiResponse>("ai_query", { query: q });
+      setMessages((prev) => [
         ...prev,
-        { role: 'user', content: q },
-        { role: 'assistant', content: res.content }
-      ])
+        { role: "assistant", content: res.content, tools: res.tools_used },
+      ]);
     } catch (e) {
-      const errResp: AiResponse = {
-        content: `Error: ${e}`,
-        tools_used: [],
-        results: [],
-        is_ai: true
-      }
-      setAiResponse(errResp)
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `Error: ${e}` },
+      ]);
     } finally {
-      setLoading(false)
+      setLoading(false);
+      // Re-focus input after response
+      setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [])
+  }, []);
 
-  const handleQueryChange = useCallback((value: string) => {
-    setQuery(value)
-    setAiResponse(null)
-
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      doSearch(value)
-    }, 150)
-  }, [doSearch])
-
-  const handleSubmit = useCallback((value: string, forceAi: boolean) => {
-    if (forceAi || isNaturalLanguage(value)) {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-      doAiQuery(value)
-    } else if (results.length === 0 && value.trim()) {
-      // Auto switch to AI mode when no results
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-      doAiQuery(value)
+  const handleSubmit = () => {
+    if (query.trim() && !loading) {
+      doAiQuery(query);
     }
-  }, [isNaturalLanguage, doAiQuery, results])
+  };
 
-  const handleNewConversation = useCallback(async () => {
+  const handleNewChat = useCallback(async () => {
     try {
-      await invoke('clear_conversation')
+      await invoke("clear_conversation");
     } catch (e) {
-      console.error('clear_conversation error:', e)
+      console.error("clear_conversation error:", e);
     }
-    setConversationHistory([])
-    setAiResponse(null)
-    setResults([])
-    setQuery('')
-  }, [])
-
-  const handleExecute = useCallback(async (result: QueryResult) => {
-    if (result.action_type === 'copy') {
-      try {
-        await navigator.clipboard.writeText(result.action_data)
-      } catch {
-        console.log('Copy:', result.action_data)
-      }
-      return
-    }
-    try {
-      await invoke('execute_result', { result })
-    } catch (e) {
-      console.error('Execute error:', e)
-    }
-  }, [])
+    setMessages([]);
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setQuery('')
-        setResults([])
-        setAiResponse(null)
+      if (e.key === "Escape") {
+        if (showSettings) setShowSettings(false);
       }
-      if (e.key === ',' && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault()
-        setShowSettings(s => !s)
+      if (e.key === "," && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setShowSettings((s) => !s);
       }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showSettings]);
 
-  const colors = theme === 'dark'
-    ? { bg: '#1E1E2E', surface: '#313244', text: '#CDD6F4', accent: '#CBA6F7', sub: '#6C7086' }
-    : { bg: '#EFF1F5', surface: '#CCD0DA', text: '#4C4F69', accent: '#8839EF', sub: '#9CA0B0' }
+  useEffect(() => {
+    invoke<AppSettings>("get_settings")
+      .then((s) => {
+        setSettings(s);
+        setTheme(s.theme as "dark" | "light");
+      })
+      .catch((e) => console.error("Failed to load settings:", e));
+  }, []);
 
-  const recentHistory = conversationHistory.slice(-6) // last 3 turns
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
 
-  return (
-    <div style={{
-      width: '680px',
-      minHeight: '60px',
-      maxHeight: '600px',
-      background: colors.bg,
-      color: colors.text,
-      fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
-      borderRadius: '12px',
-      overflow: 'hidden',
-      boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-      display: 'flex',
-      flexDirection: 'column'
-    }}>
-      {/* Conversation history strip */}
-      {conversationHistory.length > 0 && (
-        <div style={{ padding: '8px 16px', borderBottom: `1px solid ${colors.surface}` }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <button
-              onClick={() => setShowHistory(s => !s)}
-              style={{ background: 'none', border: 'none', color: colors.sub, cursor: 'pointer', fontSize: '12px' }}
-            >
-              {showHistory ? '▲' : '▼'} History ({Math.floor(conversationHistory.length / 2)} turns)
-            </button>
-            <button
-              onClick={handleNewConversation}
-              style={{
-                background: colors.surface, border: 'none', borderRadius: '6px',
-                padding: '3px 10px', color: colors.text, cursor: 'pointer', fontSize: '12px'
-              }}
-            >
-              ✨ New conversation
-            </button>
-          </div>
-          {showHistory && (
-            <div style={{ marginTop: '8px', maxHeight: '120px', overflow: 'auto' }}>
-              {recentHistory.map((turn, i) => (
-                <div key={i} style={{
-                  fontSize: '12px', color: turn.role === 'user' ? colors.accent : colors.text,
-                  marginBottom: '4px', padding: '2px 0'
-                }}>
-                  <strong>{turn.role === 'user' ? '👤' : '🤖'}</strong>{' '}
-                  {turn.content.slice(0, 80)}{turn.content.length > 80 ? '…' : ''}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <SearchBar
-        value={query}
-        onChange={handleQueryChange}
-        onSubmit={handleSubmit}
-        isNatural={isNaturalLanguage(query)}
-        loading={loading}
-        colors={colors}
-        onSettingsClick={() => setShowSettings(s => !s)}
-      />
-
-      {showSettings ? (
+  if (showSettings) {
+    return (
+      <div className="launcher">
         <SettingsPanel
-          colors={colors}
           theme={theme}
           onThemeChange={setTheme}
           onClose={() => setShowSettings(false)}
+          initialSettings={settings}
         />
-      ) : loading ? (
-        <div style={{ padding: '20px', color: colors.sub, textAlign: 'center' }}>
-          🤖 Thinking...
+      </div>
+    );
+  }
+
+  return (
+    <div className="launcher chat-layout">
+      {/* Header */}
+      <div className="chat-header">
+        <div className="chat-header__left">
+          <span className="chat-header__logo">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          </span>
+          <span className="chat-header__title">OmniLauncher</span>
         </div>
-      ) : aiResponse ? (
-        <AIResponsePane response={aiResponse} colors={colors} />
-      ) : results.length > 0 ? (
-        <ResultList
-          results={results}
-          query={query}
-          onExecute={handleExecute}
-          colors={colors}
+        <div className="chat-header__center">
+          <span className="chat-header__model">{settings?.ai_model || "auto"}</span>
+        </div>
+        <div className="chat-header__right">
+          <button className="chat-header__btn" onClick={handleNewChat} title="New chat">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button className="chat-header__btn" onClick={() => setShowSettings(true)} title="Settings">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      {/* Messages area */}
+      <div className="chat-messages">
+        {messages.length === 0 && (
+          <div className="chat-empty">
+            <div className="chat-empty__icon">◆</div>
+            <div className="chat-empty__text">Ask anything or search for apps...</div>
+            <div className="chat-empty__hint">Press Enter to send · Ctrl+, for settings</div>
+          </div>
+        )}
+        {messages.map((msg, i) => (
+          <div key={i} className={`chat-msg chat-msg--${msg.role}`}>
+            {msg.role === "user" ? (
+              <div className="chat-msg__user-bubble">{msg.content}</div>
+            ) : (
+              <div className="chat-msg__assistant">
+                {msg.tools && msg.tools.length > 0 && (
+                  <div className="chat-msg__tools">
+                    {msg.tools.map((t, j) => (
+                      <span key={j} className="chat-msg__tool-badge">{t}</span>
+                    ))}
+                  </div>
+                )}
+                <div
+                  className="chat-msg__content"
+                  dangerouslySetInnerHTML={{
+                    __html: msg.content
+                      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+                      .replace(/\*(.+?)\*/g, "<em>$1</em>")
+                      .replace(/`(.+?)`/g, "<code>$1</code>")
+                      .replace(/\n/g, "<br/>"),
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        ))}
+        {loading && (
+          <div className="chat-msg chat-msg--assistant">
+            <div className="chat-msg__assistant">
+              <div className="chat-msg__thinking">
+                <span className="loading__dot" />
+                <span className="loading__dot" />
+                <span className="loading__dot" />
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input bar at bottom */}
+      <div className="chat-input">
+        <input
+          ref={inputRef}
+          className="chat-input__field"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              handleSubmit();
+            }
+          }}
+          placeholder="Ask a follow-up question..."
+          disabled={loading}
         />
-      ) : null}
+        <button
+          className={`chat-input__send${query.trim() && !loading ? " chat-input__send--active" : ""}`}
+          onClick={handleSubmit}
+          disabled={!query.trim() || loading}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </div>
     </div>
-  )
+  );
 }

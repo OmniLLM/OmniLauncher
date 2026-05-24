@@ -1,9 +1,9 @@
+use omnilauncher_lib::ai::router::{ConversationContext, Router};
 use omnilauncher_lib::plugins::calculator::evaluate;
+use omnilauncher_lib::plugins::clipboard::ClipboardPlugin;
 use omnilauncher_lib::plugins::web_search::WebSearchPlugin;
 use omnilauncher_lib::plugins::{Plugin, PluginManager, Query};
-use omnilauncher_lib::ai::router::{Router, ConversationContext};
-use omnilauncher_lib::plugins::clipboard::ClipboardPlugin;
-use omnilauncher_lib::settings::{load_settings, save_settings, AppSettings, settings_path};
+use omnilauncher_lib::settings::{load_settings, save_settings, settings_path, AppSettings};
 
 // ---- Calculator tests ----
 
@@ -32,7 +32,11 @@ async fn test_web_search_google_prefix() {
     let plugin = WebSearchPlugin;
     let q = Query {
         raw: "g rust programming".to_string(),
-        terms: vec!["g".to_string(), "rust".to_string(), "programming".to_string()],
+        terms: vec![
+            "g".to_string(),
+            "rust".to_string(),
+            "programming".to_string(),
+        ],
     };
     let results = plugin.query(&q).await;
     assert!(!results.is_empty());
@@ -145,13 +149,23 @@ fn test_settings_save_load() {
 
 #[test]
 fn test_ai_router_detects_natural_language() {
-    assert!(Router::is_natural_language("find all rust files in my project"));
-    assert!(Router::is_natural_language("show me the latest news about AI"));
-    assert!(Router::is_natural_language("what is the capital of France?"));
-    assert!(Router::is_natural_language("how do I install Rust on Ubuntu"));
+    assert!(Router::is_natural_language(
+        "find all rust files in my project"
+    ));
+    assert!(Router::is_natural_language(
+        "show me the latest news about AI"
+    ));
+    assert!(Router::is_natural_language(
+        "what is the capital of France?"
+    ));
+    assert!(Router::is_natural_language(
+        "how do I install Rust on Ubuntu"
+    ));
     assert!(Router::is_natural_language("help me write a cover letter"));
     // Long query (> 20 chars)
-    assert!(Router::is_natural_language("this is a very long query that exceeds twenty chars"));
+    assert!(Router::is_natural_language(
+        "this is a very long query that exceeds twenty chars"
+    ));
 }
 
 #[test]
@@ -255,7 +269,9 @@ async fn test_clipboard_plugin_query() {
     };
     let results2 = plugin.query(&q2).await;
     assert!(!results2.is_empty());
-    assert!(results2.iter().any(|r| r.action_data.to_lowercase().contains("rust")));
+    assert!(results2
+        .iter()
+        .any(|r| r.action_data.to_lowercase().contains("rust")));
 
     // Ring buffer: add 50+ entries
     for i in 0..55 {

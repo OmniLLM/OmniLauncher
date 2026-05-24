@@ -1,6 +1,6 @@
 # OmniLauncher 2.0
 
-> An AI-native, cross-platform application launcher — type anything, press **Alt+Space**.
+> An AI-native, cross-platform application launcher — type anything, press **Ctrl+Shift+O**.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)
 ![Rust](https://img.shields.io/badge/rust-2021_edition-orange)
@@ -11,7 +11,7 @@
 
 ## What is OmniLauncher?
 
-OmniLauncher is an AI-native, cross-platform launcher built with Tauri v2 and Rust. Hit **Alt+Space** to summon the bar, then type — short keyword queries are dispatched instantly to the right plugin, while natural-language input is routed to an AI that calls the same plugins as tools and streams the answer back. One interface, every action.
+OmniLauncher is an AI-native, cross-platform launcher built with Tauri v2 and Rust. Hit **Ctrl+Shift+O** to summon the bar, then type — short keyword queries are dispatched instantly to the right plugin, while natural-language input is routed to an AI that calls the same plugins as tools and returns the answer. One interface, every action.
 
 ---
 
@@ -36,9 +36,9 @@ OmniLauncher is an AI-native, cross-platform launcher built with Tauri v2 and Ru
 
 - Natural-language queries are detected automatically and routed to the AI
 - The AI calls plugins as **OpenAI-compatible function/tool calls**
-- Responses are streamed to the frontend via Tauri events (`ai-stream`, `ai-tool-call`, `ai-stream-done`)
 - Multi-turn conversation with up to **10 turns** of context (`ConversationContext`)
 - Works with any OpenAI-compatible endpoint (local or remote)
+- Settings persist to `~/.config/omnilauncher/settings.json` and can be updated at runtime
 
 ---
 
@@ -58,7 +58,7 @@ User input
                               • Collect tool schemas from all plugins
                               • POST to /v1/chat/completions with tools
                               • Execute any returned tool_calls via PluginManager
-                              • Stream content back via Tauri window events
+                              • Return combined response to frontend
 ```
 
 Each plugin implements the `Plugin` trait which exposes both a `query()` method (for keyword mode) and an optional `tool_schema()` + `execute_tool()` pair (for AI function-calling mode). The `PluginManager` collects all schemas via `all_tool_schemas()` and dispatches tool calls by matching `plugin.name()`.
@@ -89,7 +89,7 @@ Single-word inputs always bypass AI and go directly to keyword routing.
 3. The AI responds with `tool_calls` (OpenAI function-calling format)
 4. Each tool call is dispatched: `PluginManager::execute_tool(name, args)`
 5. Tool results are merged into the final response content
-6. Frontend receives streamed `ai-stream` events and a final `ai-stream-done`
+6. Response returned to frontend via `ai_query` Tauri command
 
 ### Multi-Turn Context
 
@@ -116,20 +116,45 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
 ```bash
 git clone https://github.com/your-org/OmniLauncher.git
 cd OmniLauncher
-npm install
+
+# Install dependencies
+make install
 
 # Development (hot-reload)
-cargo tauri dev
+make dev
 
 # Production build
-cargo tauri build
+make release
+
+# Create installer packages
+make bundle
 ```
 
 ### Run Tests
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml
+make test
 ```
+
+### All Targets
+
+```bash
+make help
+```
+
+| Target | Description |
+|--------|-------------|
+| `dev` | Start dev server with hot reload (Vite + Tauri) |
+| `build` | Build frontend + Tauri (debug) |
+| `build-frontend` | Build frontend only (Vite) |
+| `release` | Build release binary with optimizations |
+| `bundle` | Create installer packages (MSI, NSIS, DMG, etc.) |
+| `install` | Install frontend + Rust dependencies |
+| `clean` | Remove build artifacts |
+| `lint` | Run Clippy (Rust linter) |
+| `format` | Format Rust + frontend code |
+| `check` | Run TypeScript + Rust type checks |
+| `test` | Run all tests |
 
 ---
 
@@ -141,15 +166,13 @@ Settings are stored at:
 ~/.config/omnilauncher/settings.json
 ```
 
-(On macOS: `~/Library/Application Support/omnilauncher/settings.json`; on Windows: `%APPDATA%\omnilauncher\settings.json`)
-
 | Field | Default | Description |
 |-------|---------|-------------|
 | `ai_base_url` | `"http://localhost:5000"` | Base URL of the OpenAI-compatible API |
 | `ai_model` | `"auto"` | Model name passed to the API |
 | `ai_api_key` | `""` | API key (Bearer token); leave empty for local endpoints |
 | `theme` | `"dark"` | UI theme (`"dark"` or `"light"`) |
-| `hotkey` | `"Alt+Space"` | Global hotkey to summon the launcher |
+| `hotkey` | `"Alt+Space"` | Display label for the global hotkey |
 | `max_results` | `10` | Maximum plugin results returned per query |
 
 Example `settings.json`:
@@ -165,7 +188,20 @@ Example `settings.json`:
 }
 ```
 
-Settings can also be updated at runtime through the UI; changes are persisted immediately via the `save_settings` Tauri command.
+Settings can also be updated at runtime through the UI; changes are persisted immediately and the AI client is recreated with the new configuration.
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| **Ctrl+Shift+O** | Toggle launcher window (global) |
+| **Ctrl+,** | Open settings panel |
+| **Escape** | Clear query and results |
+| **Ctrl+Enter** | Force AI mode for any query |
+| **Enter** | Execute selected result / submit query |
+| **↑/↓** | Navigate results |
 
 ---
 
@@ -197,8 +233,9 @@ OmniLauncher 2.0
 
 **Key design points:**
 - All plugin logic runs in async Rust; `PluginManager::query_all` fans out queries concurrently.
-- The `AiClient` connects to any OpenAI-compatible endpoint; streaming is implemented via SSE (`stream: true`) and emitted as Tauri window events.
+- The `AiClient` connects to any OpenAI-compatible endpoint; settings changes recreate the client at runtime.
 - The frontend is a thin React layer — all business logic lives in Rust.
+- Tauri commands: `search`, `ai_query`, `execute_result`, `get_settings`, `save_settings_cmd`, `clear_conversation`
 
 ---
 
