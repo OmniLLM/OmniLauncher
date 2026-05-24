@@ -1,6 +1,8 @@
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 pub struct AppLauncherPlugin {
     pub apps: Vec<AppEntry>,
@@ -11,6 +13,12 @@ pub struct AppEntry {
     pub name: String,
     pub exec: String,
     pub icon: Option<String>,
+}
+
+impl Default for AppLauncherPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppLauncherPlugin {
@@ -55,7 +63,11 @@ impl AppLauncherPlugin {
                 for entry in entries.filter_map(|e| e.ok()) {
                     let path = entry.path();
                     if path.extension().map(|e| e == "app").unwrap_or(false) {
-                        let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                        let name = path
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
                         apps.push(AppEntry {
                             name,
                             exec: path.to_string_lossy().to_string(),
@@ -79,21 +91,29 @@ impl AppLauncherPlugin {
                 .join("Microsoft\\Windows\\Start Menu\\Programs"),
         ];
         for dir in paths {
-            if let Ok(walker) = walkdir::WalkDir::new(&dir).into_iter().try_fold(vec![], |mut acc, e| {
-                if let Ok(e) = e {
-                    if e.path().extension().map(|x| x == "lnk").unwrap_or(false) {
-                        let name = e.path().file_stem().unwrap_or_default().to_string_lossy().to_string();
-                        acc.push(AppEntry {
-                            name,
-                            exec: e.path().to_string_lossy().to_string(),
-                            icon: Some("🪟".to_string()),
-                        });
-                    }
-                }
-                Ok::<_, std::convert::Infallible>(acc)
-            }) {
-                apps.extend(walker);
-            }
+            let walker =
+                walkdir::WalkDir::new(&dir)
+                    .into_iter()
+                    .try_fold(vec![], |mut acc, e| {
+                        if let Ok(e) = e {
+                            if e.path().extension().map(|x| x == "lnk").unwrap_or(false) {
+                                let name = e
+                                    .path()
+                                    .file_stem()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string();
+                                acc.push(AppEntry {
+                                    name,
+                                    exec: e.path().to_string_lossy().to_string(),
+                                    icon: Some("🪟".to_string()),
+                                });
+                            }
+                        }
+                        Ok::<_, std::convert::Infallible>(acc)
+                    })
+                    .unwrap_or_default();
+            apps.extend(walker);
         }
         apps
     }
@@ -130,13 +150,18 @@ fn parse_desktop_file(path: &PathBuf) -> Option<AppEntry> {
         } else if let Some(v) = line.strip_prefix("Exec=") {
             if exec.is_none() {
                 // Remove field codes like %u %f %F etc
-                let e = v.split_whitespace()
+                let e = v
+                    .split_whitespace()
                     .filter(|t| !t.starts_with('%'))
                     .collect::<Vec<_>>()
                     .join(" ");
                 exec = Some(e);
             }
-        } else if line.strip_prefix("NoDisplay=").map(|v| v.trim().to_lowercase() == "true").unwrap_or(false) {
+        } else if line
+            .strip_prefix("NoDisplay=")
+            .map(|v| v.trim().to_lowercase() == "true")
+            .unwrap_or(false)
+        {
             no_display = true;
         }
     }
@@ -167,7 +192,11 @@ impl Plugin for AppLauncherPlugin {
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        if q.raw.is_empty() || q.raw.starts_with("= ") || q.raw.starts_with('>') || q.raw.starts_with("sys ") {
+        if q.raw.is_empty()
+            || q.raw.starts_with("= ")
+            || q.raw.starts_with('>')
+            || q.raw.starts_with("sys ")
+        {
             return vec![];
         }
 
@@ -183,7 +212,7 @@ impl Plugin for AppLauncherPlugin {
                     subtitle: Some(app.exec.clone()),
                     icon: app.icon.clone(),
                     score: 85,
-                    action_type: "shell".to_string(),
+                    action_type: "open_app".to_string(),
                     action_data: app.exec.clone(),
                 });
             } else if name_lower.contains(&term) {
@@ -193,12 +222,97 @@ impl Plugin for AppLauncherPlugin {
                     subtitle: Some(app.exec.clone()),
                     icon: app.icon.clone(),
                     score: 60,
-                    action_type: "shell".to_string(),
+                    action_type: "open_app".to_string(),
                     action_data: app.exec.clone(),
                 });
             }
         }
 
         results
+    }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "app_launcher",
+                "description": "Launch an installed application by name. Searches Start Menu shortcuts (Windows), .app bundles (macOS), or .desktop files (Linux) and executes the best match. Use this to open apps like VS Code, Chrome, Notepad, etc.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Application name to search for and launch (e.g. 'code', 'chrome', 'notepad', 'vscode insider')" }
+                    },
+                    "required": ["name"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let name = args["name"].as_str().unwrap_or("");
+        if name.is_empty() {
+            return "Error: no application name provided".to_string();
+        }
+
+        let term = name.to_lowercase();
+        let mut best: Option<&AppEntry> = None;
+        let mut best_score = 0;
+
+        for app in &self.apps {
+            let app_lower = app.name.to_lowercase();
+            if app_lower == term {
+                best = Some(app);
+                break;
+            } else if app_lower.starts_with(&term) && best_score < 2 {
+                best = Some(app);
+                best_score = 2;
+            } else if app_lower.contains(&term) && best_score < 1 {
+                best = Some(app);
+                best_score = 1;
+            }
+        }
+
+        if let Some(app) = best {
+            let app_name = app.name.clone();
+            launch_app(&app.exec);
+            format!("Launched: {}", app_name)
+        } else {
+            format!("No application found matching: '{}'", name)
+        }
+    }
+}
+
+/// Launch an application — mimics Flow.Launcher's approach:
+/// ProcessStartInfo { FileName = path, UseShellExecute = true }
+/// In Rust, the equivalent is `cmd /c start "" "path"` which calls ShellExecuteEx
+/// to resolve .lnk shortcuts and launch the target with proper working directory.
+fn launch_app(exec: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        // Flow.Launcher uses ProcessStartInfo with UseShellExecute=true on the .lnk path.
+        // The Rust equivalent: spawn cmd with `start` which calls ShellExecuteEx.
+        // The empty "" is required as window title when path has spaces.
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", exec])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW - don't flash a cmd window
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg(exec)
+            .spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("sh")
+            .args(["-c", exec])
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = std::process::Command::new("sh")
+            .args(["-c", exec])
+            .spawn();
     }
 }

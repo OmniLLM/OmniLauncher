@@ -24,8 +24,7 @@ impl Default for AppSettings {
 }
 
 pub fn settings_path() -> std::path::PathBuf {
-    let config_dir = dirs::config_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"));
+    let config_dir = dirs::home_dir().unwrap_or_default().join(".config");
     config_dir.join("omnilauncher").join("settings.json")
 }
 

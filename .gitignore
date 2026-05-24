@@ -5,3 +5,9 @@ src-tauri/target/
 .env
 *.ico
 *.icns
+
+# Playwright MCP debug artifacts
+.playwright-mcp/
+
+# Root screenshot PNGs
+omnilauncher-*.png

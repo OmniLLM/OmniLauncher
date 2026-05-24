@@ -1,0 +1,4 @@
+[http]
+# Some Windows environments cannot complete certificate revocation checks
+# against crates.io; Cargo uses schannel by default on Windows.
+check-revoke = false

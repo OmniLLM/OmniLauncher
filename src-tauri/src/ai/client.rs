@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 #[cfg(not(test))]
 use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
 #[cfg(not(test))]
 use tauri::Emitter;
 
@@ -36,7 +36,11 @@ pub struct AiClient {
 
 impl AiClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
-        Self { base_url, api_key, model }
+        Self {
+            base_url,
+            api_key,
+            model,
+        }
     }
 
     fn build_client(&self) -> Result<reqwest::Client, String> {
@@ -71,7 +75,10 @@ impl AiClient {
             body["tool_choice"] = serde_json::json!("auto");
         }
 
-        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
 
         let mut req = client.post(&url).json(&body);
         if !self.api_key.is_empty() {
@@ -91,25 +98,24 @@ impl AiClient {
         let choice = &json["choices"][0]["message"];
         let content = choice["content"].as_str().map(|s| s.to_string());
 
-        let tool_calls = if let Some(tcs) = choice["tool_calls"].as_array() {
-            Some(
-                tcs.iter()
-                    .filter_map(|tc| {
-                        Some(ToolCall {
-                            id: tc["id"].as_str()?.to_string(),
-                            function: FunctionCall {
-                                name: tc["function"]["name"].as_str()?.to_string(),
-                                arguments: tc["function"]["arguments"].as_str()?.to_string(),
-                            },
-                        })
+        let tool_calls = choice["tool_calls"].as_array().map(|tcs| {
+            tcs.iter()
+                .filter_map(|tc| {
+                    Some(ToolCall {
+                        id: tc["id"].as_str()?.to_string(),
+                        function: FunctionCall {
+                            name: tc["function"]["name"].as_str()?.to_string(),
+                            arguments: tc["function"]["arguments"].as_str()?.to_string(),
+                        },
                     })
-                    .collect(),
-            )
-        } else {
-            None
-        };
+                })
+                .collect()
+        });
 
-        Ok(ChatResponse { content, tool_calls })
+        Ok(ChatResponse {
+            content,
+            tool_calls,
+        })
     }
 
     /// Stream chat completions and emit Tauri events for each chunk.
@@ -131,7 +137,10 @@ impl AiClient {
             "stream": true
         });
 
-        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
 
         let mut req = client.post(&url).json(&body);
         if !self.api_key.is_empty() {
@@ -157,7 +166,9 @@ impl AiClient {
                 if let Some(json_str) = line.strip_prefix("data: ") {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                         // Check for tool call
-                        if let Some(tool_name) = val["choices"][0]["delta"]["tool_calls"][0]["function"]["name"].as_str() {
+                        if let Some(tool_name) =
+                            val["choices"][0]["delta"]["tool_calls"][0]["function"]["name"].as_str()
+                        {
                             let _ = window.emit("ai-tool-call", tool_name.to_string());
                         }
                         // Text delta

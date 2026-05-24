@@ -10,10 +10,10 @@
  */
 
 interface AiResponse {
-  content: string
-  tools_used: string[]
-  results: unknown[]
-  is_ai: boolean
+  content: string;
+  tools_used: string[];
+  results: unknown[];
+  is_ai: boolean;
 }
 
 interface Props {

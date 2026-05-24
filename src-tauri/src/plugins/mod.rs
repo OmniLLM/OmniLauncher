@@ -35,6 +35,12 @@ pub struct PluginManager {
     pub plugins: Vec<Box<dyn Plugin>>,
 }
 
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginManager {
     pub fn new() -> Self {
         Self { plugins: vec![] }
@@ -59,13 +65,16 @@ impl PluginManager {
             let mut r = plugin.query(&q).await;
             results.append(&mut r);
         }
-        results.sort_by(|a, b| b.score.cmp(&a.score));
+        results.sort_by_key(|b| std::cmp::Reverse(b.score));
         results.truncate(10);
         results
     }
 
     pub fn all_tool_schemas(&self) -> Vec<serde_json::Value> {
-        self.plugins.iter().filter_map(|p| p.tool_schema()).collect()
+        self.plugins
+            .iter()
+            .filter_map(|p| p.tool_schema())
+            .collect()
     }
 
     pub async fn execute_tool(&self, name: &str, args: serde_json::Value) -> String {
@@ -78,10 +87,35 @@ impl PluginManager {
     }
 }
 
+pub mod agent_delegate;
 pub mod app_launcher;
+pub mod bash_exec;
+pub mod browser_bookmarks;
 pub mod calculator;
 pub mod clipboard;
+pub mod code_tools;
+pub mod color_picker;
+pub mod env_vars;
+pub mod file_read;
 pub mod file_search;
+pub mod file_write;
+pub mod git;
+pub mod glob;
+pub mod grep;
+pub mod hosts;
+pub mod http_client;
+pub mod ls;
+pub mod network;
+pub mod process_manager;
 pub mod shell_plugin;
+pub mod snippets;
+pub mod sys_info;
 pub mod system_commands;
+pub mod timer;
+pub mod todo;
+pub mod translate;
+pub mod unit_converter;
+pub mod url_opener;
+pub mod web_fetch;
 pub mod web_search;
+pub mod windows_settings;

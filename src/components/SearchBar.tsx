@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect } from "react";
 
 interface Props {
   value: string
@@ -27,8 +27,10 @@ export default function SearchBar({
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
+    inputRef.current?.focus();
+  }, []);
+
+  const iconClass = `search-bar__icon${loading ? " search-bar__icon--loading" : isNatural ? " search-bar__icon--ai" : ""}`;
 
   // Re-focus whenever AI mode changes (after transition)
   useEffect(() => {
@@ -151,7 +153,7 @@ export default function SearchBar({
         </div>
       )}
     </div>
-  )
+  );
 }
 
 // ─── Tiny inline spinner for loading state ────────────────────────────────

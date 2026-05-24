@@ -1,108 +1,221 @@
-import { useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { useState, useEffect, useRef, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 interface AppSettings {
-  ai_base_url: string
-  ai_model: string
-  ai_api_key: string
-  theme: string
-  hotkey: string
-  max_results: number
+  ai_base_url: string;
+  ai_model: string;
+  ai_api_key: string;
+  theme: string;
+  hotkey: string;
+  max_results: number;
 }
 
 interface Props {
-  colors: Record<string, string>
-  theme: string
-  onThemeChange: (t: 'dark' | 'light') => void
-  onClose: () => void
+  theme: string;
+  onThemeChange: (t: "dark" | "light") => void;
+  onClose: () => void;
+  initialSettings: AppSettings | null;
 }
 
-export default function SettingsPanel({ colors, theme, onThemeChange, onClose }: Props) {
-  const [settings, setSettings] = useState<AppSettings>({
-    ai_base_url: 'http://localhost:5000',
-    ai_model: 'auto',
-    ai_api_key: '',
-    theme: theme,
-    hotkey: 'Alt+Space',
-    max_results: 10
-  })
-  const [saved, setSaved] = useState(false)
+export default function SettingsPanel({
+  theme,
+  onThemeChange,
+  onClose,
+  initialSettings,
+}: Props) {
+  const [settings, setSettings] = useState<AppSettings | null>(initialSettings);
+  const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(!initialSettings);
+
+  // Model list state
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
+  const [modelFilter, setModelFilter] = useState("");
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const modelInputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    invoke<AppSettings>("get_settings")
+      .then((s) => {
+        setSettings(s);
+        setModelFilter(s.ai_model);
+        setLoading(false);
+      })
+      .catch((e) => {
+        console.error("Failed to load settings:", e);
+        setSettings(
+          initialSettings ?? {
+            ai_base_url: "http://localhost:5000",
+            ai_model: "auto",
+            ai_api_key: "",
+            theme: theme,
+            hotkey: "Alt+Space",
+            max_results: 10,
+          },
+        );
+        setModelFilter(initialSettings?.ai_model || "auto");
+        setLoading(false);
+      });
+  }, []);
+
+  const fetchModels = useCallback(async () => {
+    if (!settings) return;
+    setModelsLoading(true);
+    setModelsError("");
+    try {
+      const result = await invoke<string[]>("list_models", {
+        baseUrl: settings.ai_base_url,
+        apiKey: settings.ai_api_key,
+      });
+      setModels(result.sort());
+    } catch (e) {
+      setModelsError(String(e));
+      setModels([]);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [settings?.ai_base_url, settings?.ai_api_key]);
+
+  // Fetch models when endpoint or api key changes
+  useEffect(() => {
+    if (settings?.ai_base_url) {
+      fetchModels();
+    }
+  }, [settings?.ai_base_url, settings?.ai_api_key]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowModelDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const filteredModels = models.filter((m) =>
+    m.toLowerCase().includes(modelFilter.toLowerCase())
+  );
+
+  const handleModelSelect = (model: string) => {
+    setModelFilter(model);
+    setSettings((s) => s && { ...s, ai_model: model });
+    setShowModelDropdown(false);
+  };
 
   const handleSave = async () => {
+    if (!settings) return;
     try {
-      await invoke('save_settings_cmd', { settings })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-      onThemeChange(settings.theme as 'dark' | 'light')
+      await invoke("save_settings_cmd", { settings });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      onThemeChange(settings.theme as "dark" | "light");
     } catch (e) {
-      console.error('Save error:', e)
+      console.error("Save error:", e);
     }
-  }
+  };
 
-  const inputStyle = {
-    background: colors.surface,
-    border: `1px solid ${colors.sub}`,
-    borderRadius: '6px',
-    padding: '8px 12px',
-    color: colors.text,
-    fontSize: '13px',
-    width: '100%',
-    boxSizing: 'border-box' as const
+  if (loading || !settings) {
+    return (
+      <div className="loading">
+        <div className="loading__text">Loading settings...</div>
+      </div>
+    );
   }
 
   return (
-    <div style={{ padding: '16px', overflow: 'auto', maxHeight: '520px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-        <h3 style={{ margin: 0, fontSize: '16px', color: colors.accent }}>Settings</h3>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: colors.sub, cursor: 'pointer', fontSize: '18px' }}>✕</button>
+    <div className="settings">
+      <div className="settings__header">
+        <h3 className="settings__title">Settings</h3>
+        <button className="settings__close" onClick={onClose}>✕</button>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div className="settings__form">
         <label>
-          <div style={{ fontSize: '12px', color: colors.sub, marginBottom: '4px' }}>AI Provider URL</div>
-          <input style={inputStyle} value={settings.ai_base_url} onChange={e => setSettings(s => ({ ...s, ai_base_url: e.target.value }))} />
+          <div className="settings__label">AI Provider URL</div>
+          <input
+            className="settings__input"
+            value={settings.ai_base_url}
+            onChange={(e) => setSettings((s) => s && { ...s, ai_base_url: e.target.value })}
+          />
         </label>
 
         <label>
-          <div style={{ fontSize: '12px', color: colors.sub, marginBottom: '4px' }}>Model</div>
-          <input style={inputStyle} value={settings.ai_model} onChange={e => setSettings(s => ({ ...s, ai_model: e.target.value }))} placeholder="auto" />
+          <div className="settings__label">API Key</div>
+          <input
+            className="settings__input"
+            type="password"
+            value={settings.ai_api_key}
+            onChange={(e) => setSettings((s) => s && { ...s, ai_api_key: e.target.value })}
+            placeholder="(optional)"
+          />
         </label>
 
-        <label>
-          <div style={{ fontSize: '12px', color: colors.sub, marginBottom: '4px' }}>API Key</div>
-          <input style={inputStyle} type="password" value={settings.ai_api_key} onChange={e => setSettings(s => ({ ...s, ai_api_key: e.target.value }))} placeholder="(optional)" />
-        </label>
+        <div className="settings__model-field" ref={dropdownRef}>
+          <div className="settings__label">
+            Model
+            {modelsLoading && <span className="settings__model-loading"> (loading...)</span>}
+            {modelsError && <span className="settings__model-error"> ⚠</span>}
+          </div>
+          <input
+            ref={modelInputRef}
+            className="settings__input"
+            value={modelFilter}
+            onChange={(e) => {
+              setModelFilter(e.target.value);
+              setSettings((s) => s && { ...s, ai_model: e.target.value });
+              setShowModelDropdown(true);
+            }}
+            onFocus={() => setShowModelDropdown(true)}
+            placeholder="Type to filter models..."
+          />
+          {showModelDropdown && filteredModels.length > 0 && (
+            <div className="settings__model-dropdown">
+              {filteredModels.map((m) => (
+                <div
+                  key={m}
+                  className={`settings__model-option${m === settings.ai_model ? " settings__model-option--selected" : ""}`}
+                  onClick={() => handleModelSelect(m)}
+                >
+                  {m}
+                </div>
+              ))}
+            </div>
+          )}
+          {showModelDropdown && !modelsLoading && filteredModels.length === 0 && models.length > 0 && (
+            <div className="settings__model-dropdown">
+              <div className="settings__model-option settings__model-option--empty">No matches</div>
+            </div>
+          )}
+        </div>
 
         <label>
-          <div style={{ fontSize: '12px', color: colors.sub, marginBottom: '4px' }}>Theme</div>
-          <select style={inputStyle} value={settings.theme} onChange={e => setSettings(s => ({ ...s, theme: e.target.value }))}>
+          <div className="settings__label">Theme</div>
+          <select
+            className="settings__select"
+            value={settings.theme}
+            onChange={(e) => setSettings((s) => s && { ...s, theme: e.target.value })}
+          >
             <option value="dark">Dark (Catppuccin Mocha)</option>
             <option value="light">Light (Catppuccin Latte)</option>
           </select>
         </label>
 
         <div>
-          <div style={{ fontSize: '12px', color: colors.sub, marginBottom: '4px' }}>Hotkey</div>
-          <div style={{ ...inputStyle, opacity: 0.6 }}>{settings.hotkey}</div>
+          <div className="settings__label">Hotkey</div>
+          <div className="settings__input settings__input--readonly">{settings.hotkey}</div>
         </div>
 
         <button
+          className={`settings__save-btn${saved ? " settings__save-btn--saved" : ""}`}
           onClick={handleSave}
-          style={{
-            background: colors.accent,
-            border: 'none',
-            borderRadius: '8px',
-            padding: '10px',
-            color: '#fff',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: 600,
-            marginTop: '8px'
-          }}
         >
-          {saved ? '✓ Saved!' : 'Save Settings'}
+          {saved ? "✓ Saved" : "Save Settings"}
         </button>
       </div>
     </div>
-  )
+  );
 }

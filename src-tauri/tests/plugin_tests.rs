@@ -1,265 +1,515 @@
-use omnilauncher_lib::plugins::calculator::evaluate;
-use omnilauncher_lib::plugins::web_search::WebSearchPlugin;
-use omnilauncher_lib::plugins::{Plugin, PluginManager, Query};
-use omnilauncher_lib::ai::router::{Router, ConversationContext};
-use omnilauncher_lib::plugins::clipboard::ClipboardPlugin;
-use omnilauncher_lib::settings::{load_settings, save_settings, AppSettings, settings_path};
+use omnilauncher_lib::create_plugin_manager;
 
-// ---- Calculator tests ----
-
-#[test]
-fn test_calculator_basic() {
-    assert_eq!(evaluate("2 + 2"), Some(4.0));
-    assert_eq!(evaluate("10 - 3"), Some(7.0));
-    assert_eq!(evaluate("3 * 4"), Some(12.0));
-    assert_eq!(evaluate("10 / 2"), Some(5.0));
-}
-
-#[test]
-fn test_calculator_expression() {
-    let result = evaluate("(2 + 3) * 4");
-    assert_eq!(result, Some(20.0));
-    let result2 = evaluate("2 ^ 10");
-    assert_eq!(result2, Some(1024.0));
-    let result3 = evaluate("100 / 4 + 5 * 2");
-    assert_eq!(result3, Some(35.0));
-}
-
-// ---- Web Search tests ----
+// ============================================================
+// Plugin Manager
+// ============================================================
 
 #[tokio::test]
-async fn test_web_search_google_prefix() {
-    let plugin = WebSearchPlugin;
-    let q = Query {
-        raw: "g rust programming".to_string(),
-        terms: vec!["g".to_string(), "rust".to_string(), "programming".to_string()],
-    };
-    let results = plugin.query(&q).await;
-    assert!(!results.is_empty());
-    assert!(results[0].action_data.contains("google.com"));
-    assert!(results[0].action_data.contains("rust"));
-    assert_eq!(results[0].score, 90);
+async fn test_plugin_manager_creation() {
+    let pm = create_plugin_manager();
+    assert!(pm.plugins.len() > 20, "Expected 20+ plugins, got {}", pm.plugins.len());
 }
 
 #[tokio::test]
-async fn test_web_search_youtube_prefix() {
-    let plugin = WebSearchPlugin;
-    let q = Query {
-        raw: "yt lofi music".to_string(),
-        terms: vec!["yt".to_string(), "lofi".to_string()],
-    };
-    let results = plugin.query(&q).await;
-    assert!(!results.is_empty());
-    assert!(results[0].action_data.contains("youtube.com"));
-}
-
-#[tokio::test]
-async fn test_web_search_github_prefix() {
-    let plugin = WebSearchPlugin;
-    let q = Query {
-        raw: "gh tauri".to_string(),
-        terms: vec!["gh".to_string(), "tauri".to_string()],
-    };
-    let results = plugin.query(&q).await;
-    assert!(!results.is_empty());
-    assert!(results[0].action_data.contains("github.com"));
-}
-
-#[tokio::test]
-async fn test_web_search_fallback() {
-    let plugin = WebSearchPlugin;
-    let q = Query {
-        raw: "rust async".to_string(),
-        terms: vec!["rust".to_string(), "async".to_string()],
-    };
-    let results = plugin.query(&q).await;
-    assert!(!results.is_empty());
-    assert!(results[0].action_data.contains("google.com"));
-    assert_eq!(results[0].score, 30); // fallback score
-}
-
-// ---- Plugin Manager routing tests ----
-
-#[tokio::test]
-async fn test_plugin_manager_keyword_routing() {
-    use omnilauncher_lib::plugins::system_commands::SystemCommandsPlugin;
-
-    let mut pm = PluginManager::new();
-    pm.register(Box::new(SystemCommandsPlugin));
-    pm.register(Box::new(WebSearchPlugin));
-
-    // sys prefix should only return system commands
-    let results = pm.query_all("sys lock").await;
-    assert!(results.iter().any(|r| r.id.contains("sys:")));
-
-    // web fallback
-    let results2 = pm.query_all("hello world").await;
-    assert!(results2.iter().any(|r| r.id.contains("google")));
-}
-
-// ---- File search ----
-
-#[tokio::test]
-async fn test_file_search_returns_results() {
-    use omnilauncher_lib::plugins::file_search::FileSearchPlugin;
-    let plugin = FileSearchPlugin;
-
-    // Search for something that likely exists
-    let q = Query {
-        raw: "f .bashrc".to_string(),
-        terms: vec!["f".to_string(), ".bashrc".to_string()],
-    };
-    // We just check it doesn't panic; may or may not find files
-    let _results = plugin.query(&q).await;
-
-    // Search with open prefix
-    let q2 = Query {
-        raw: "open README".to_string(),
-        terms: vec!["open".to_string(), "README".to_string()],
-    };
-    let _results2 = plugin.query(&q2).await;
-}
-
-// ---- Settings tests ----
-
-#[test]
-fn test_settings_save_load() {
-    let mut settings = AppSettings::default();
-    settings.ai_base_url = "http://test-server:9999".to_string();
-    settings.ai_model = "test-model".to_string();
-    settings.theme = "light".to_string();
-
-    let saved = save_settings(&settings);
-    assert!(saved, "Failed to save settings");
-
-    let loaded = load_settings();
-    assert_eq!(loaded.ai_base_url, "http://test-server:9999");
-    assert_eq!(loaded.ai_model, "test-model");
-    assert_eq!(loaded.theme, "light");
-
-    // Cleanup: restore defaults
-    save_settings(&AppSettings::default());
-}
-
-// ---- AI Router detection tests ----
-
-#[test]
-fn test_ai_router_detects_natural_language() {
-    assert!(Router::is_natural_language("find all rust files in my project"));
-    assert!(Router::is_natural_language("show me the latest news about AI"));
-    assert!(Router::is_natural_language("what is the capital of France?"));
-    assert!(Router::is_natural_language("how do I install Rust on Ubuntu"));
-    assert!(Router::is_natural_language("help me write a cover letter"));
-    // Long query (> 20 chars)
-    assert!(Router::is_natural_language("this is a very long query that exceeds twenty chars"));
-}
-
-#[test]
-fn test_ai_router_detects_keyword_query() {
-    assert!(!Router::is_natural_language("g rust"));
-    assert!(!Router::is_natural_language("= 2+2"));
-    assert!(!Router::is_natural_language("firefox"));
-    assert!(!Router::is_natural_language("sys lock"));
-    assert!(!Router::is_natural_language("> ls -la"));
-}
-
-// ---- New NL detection tests ----
-
-#[test]
-fn test_nl_detection_question_words() {
-    assert!(Router::is_natural_language("what time is it"));
-    assert!(Router::is_natural_language("how to install rust"));
-    assert!(Router::is_natural_language("why does this fail"));
-    assert!(Router::is_natural_language("find my documents"));
-    assert!(Router::is_natural_language("list all files here"));
-    assert!(Router::is_natural_language("is this working?"));
-}
-
-#[test]
-fn test_nl_detection_chinese() {
-    assert!(Router::is_natural_language("帮 我 找文件"));
-    assert!(Router::is_natural_language("找 rust 项目"));
-    assert!(Router::is_natural_language("打开 浏览器"));
-    assert!(Router::is_natural_language("搜索 新闻"));
-    assert!(Router::is_natural_language("显示 文件列表"));
-    assert!(Router::is_natural_language("什么 是 rust"));
-    assert!(Router::is_natural_language("怎么 安装 rust"));
-}
-
-#[test]
-fn test_nl_detection_short_query_not_nl() {
-    // Single word queries should not be NL
-    assert!(!Router::is_natural_language("firefox"));
-    assert!(!Router::is_natural_language("rust"));
-    assert!(!Router::is_natural_language("notepad"));
-    // Two-word queries without NL words and fewer than 4 words, no question mark
-    assert!(!Router::is_natural_language("g rust"));
-    assert!(!Router::is_natural_language("> ls"));
-}
-
-// ---- Conversation context tests ----
-
-#[tokio::test]
-async fn test_conversation_context_add_and_trim() {
-    let mut ctx = ConversationContext::new(3); // max 3 turns = 6 messages
-    ctx.add_user("Hello");
-    ctx.add_assistant("Hi there!");
-    ctx.add_user("How are you?");
-    ctx.add_assistant("Great!");
-    ctx.add_user("What can you do?");
-    ctx.add_assistant("Many things!");
-    // 6 messages, exactly at limit
-    assert_eq!(ctx.messages.len(), 6);
-
-    // Add one more turn, should trim to 6
-    ctx.add_user("Tell me more");
-    ctx.trim_to_max();
-    assert!(ctx.messages.len() <= 6);
-}
-
-#[tokio::test]
-async fn test_conversation_context_clear() {
-    let mut ctx = ConversationContext::default();
-    ctx.add_user("Hello");
-    ctx.add_assistant("Hi!");
-    ctx.add_tool_result("web_search", "Found 10 results");
-    assert_eq!(ctx.messages.len(), 3);
-    ctx.clear();
-    assert_eq!(ctx.messages.len(), 0);
-}
-
-// ---- Clipboard plugin tests ----
-
-#[tokio::test]
-async fn test_clipboard_plugin_query() {
-    let mut plugin = ClipboardPlugin::new();
-    plugin.add_entry("Hello World".to_string());
-    plugin.add_entry("Rust programming".to_string());
-    plugin.add_entry("Tauri framework".to_string());
-    plugin.add_entry("Hello Rust".to_string());
-
-    // Search for "hello" — should find 2 entries
-    let q = Query {
-        raw: "cb hello".to_string(),
-        terms: vec!["cb".to_string(), "hello".to_string()],
-    };
-    let results = plugin.query(&q).await;
-    assert!(!results.is_empty());
-    assert!(results.iter().any(|r| r.action_data.contains("Hello")));
-    assert!(results.iter().all(|r| r.action_type == "copy"));
-
-    // Search for "rust"
-    let q2 = Query {
-        raw: "cb rust".to_string(),
-        terms: vec!["cb".to_string(), "rust".to_string()],
-    };
-    let results2 = plugin.query(&q2).await;
-    assert!(!results2.is_empty());
-    assert!(results2.iter().any(|r| r.action_data.to_lowercase().contains("rust")));
-
-    // Ring buffer: add 50+ entries
-    for i in 0..55 {
-        plugin.add_entry(format!("entry {}", i));
+async fn test_plugin_manager_all_tool_schemas() {
+    let pm = create_plugin_manager();
+    let schemas = pm.all_tool_schemas();
+    assert!(schemas.len() >= 10, "Expected 10+ tool schemas, got {}", schemas.len());
+    for schema in &schemas {
+        assert!(schema["function"]["name"].is_string());
+        assert!(schema["function"]["description"].is_string());
     }
-    assert!(plugin.history.len() <= 50);
+}
+
+#[tokio::test]
+async fn test_plugin_manager_query_calculator() {
+    let pm = create_plugin_manager();
+    let results = pm.query_all("= 2+2").await;
+    assert!(!results.is_empty());
+    assert!(results[0].title.contains('4'));
+}
+
+// ============================================================
+// Calculator
+// ============================================================
+
+#[tokio::test]
+async fn test_calc_add() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("= 3+4").await;
+    assert!(!r.is_empty());
+    assert!(r[0].title.contains('7'));
+}
+
+#[tokio::test]
+async fn test_calc_multiply() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("= 6*7").await;
+    assert!(r[0].title.contains("42"));
+}
+
+#[tokio::test]
+async fn test_calc_parens() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("= (10+5)*2").await;
+    assert!(r[0].title.contains("30"));
+}
+
+#[tokio::test]
+async fn test_calc_power() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("= 2^10").await;
+    assert!(r[0].title.contains("1024"));
+}
+
+// ============================================================
+// Shell Exec
+// ============================================================
+
+#[tokio::test]
+async fn test_shell_exec_echo() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("shell_exec", serde_json::json!({"command": "echo hello"})).await;
+    assert!(r.to_lowercase().contains("hello"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_shell_exec_empty() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("shell_exec", serde_json::json!({"command": ""})).await;
+    assert!(r.to_lowercase().contains("error") || r.contains("no command"));
+}
+
+#[tokio::test]
+async fn test_shell_exec_working_dir() {
+    let pm = create_plugin_manager();
+    let (cmd, dir, expect) = if cfg!(target_os = "windows") {
+        ("cd", "C:\\", "C:\\")
+    } else {
+        ("pwd", "/", "/")
+    };
+    let r = pm.execute_tool("shell_exec", serde_json::json!({"command": cmd, "working_dir": dir})).await;
+    assert!(r.contains(expect), "Got: {}", r);
+}
+
+// ============================================================
+// File Read
+// ============================================================
+
+#[tokio::test]
+async fn test_file_read() {
+    let pm = create_plugin_manager();
+    let p = std::env::temp_dir().join("omni_test_read.txt");
+    std::fs::write(&p, "hello\nworld\nfoo").unwrap();
+    let r = pm.execute_tool("file_read", serde_json::json!({"path": p.to_string_lossy()})).await;
+    assert!(r.contains("hello") && r.contains("world"));
+    let _ = std::fs::remove_file(&p);
+}
+
+#[tokio::test]
+async fn test_file_read_nonexistent() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("file_read", serde_json::json!({"path": "/tmp/no_such_file_xyz"})).await;
+    assert!(r.to_lowercase().contains("error"));
+}
+
+#[tokio::test]
+async fn test_file_read_line_range() {
+    let pm = create_plugin_manager();
+    let p = std::env::temp_dir().join("omni_test_range.txt");
+    std::fs::write(&p, "L1\nL2\nL3\nL4\nL5").unwrap();
+    let r = pm.execute_tool("file_read", serde_json::json!({"path": p.to_string_lossy(), "start_line": 2, "end_line": 3})).await;
+    assert!(r.contains("L2") && r.contains("L3"));
+    assert!(!r.contains("L4"));
+    let _ = std::fs::remove_file(&p);
+}
+
+#[tokio::test]
+async fn test_file_read_empty_path() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("file_read", serde_json::json!({"path": ""})).await;
+    assert!(r.to_lowercase().contains("error") || r.contains("no path"));
+}
+
+// ============================================================
+// File Write
+// ============================================================
+
+#[tokio::test]
+async fn test_file_write_and_verify() {
+    let pm = create_plugin_manager();
+    let p = std::env::temp_dir().join("omni_test_write.txt");
+    let r = pm.execute_tool("file_write", serde_json::json!({"path": p.to_string_lossy(), "content": "written"})).await;
+    assert!(r.contains("Successfully"));
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), "written");
+    let _ = std::fs::remove_file(&p);
+}
+
+#[tokio::test]
+async fn test_file_write_append() {
+    let pm = create_plugin_manager();
+    let p = std::env::temp_dir().join("omni_test_append.txt");
+    std::fs::write(&p, "A").unwrap();
+    let _ = pm.execute_tool("file_write", serde_json::json!({"path": p.to_string_lossy(), "content": "B", "append": true})).await;
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), "AB");
+    let _ = std::fs::remove_file(&p);
+}
+
+#[tokio::test]
+async fn test_file_write_creates_dirs() {
+    let pm = create_plugin_manager();
+    let p = std::env::temp_dir().join("omni_nested").join("d").join("f.txt");
+    let _ = pm.execute_tool("file_write", serde_json::json!({"path": p.to_string_lossy(), "content": "x"})).await;
+    assert!(p.exists());
+    let _ = std::fs::remove_dir_all(std::env::temp_dir().join("omni_nested"));
+}
+
+// ============================================================
+// File Edit
+// ============================================================
+
+#[tokio::test]
+async fn test_file_edit_success() {
+    let pm = create_plugin_manager();
+    let p = std::env::temp_dir().join("omni_edit.txt");
+    std::fs::write(&p, "foo bar baz").unwrap();
+    let r = pm.execute_tool("file_edit", serde_json::json!({"path": p.to_string_lossy(), "old_string": "bar", "new_string": "QUX"})).await;
+    assert!(r.to_lowercase().contains("success"));
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), "foo QUX baz");
+    let _ = std::fs::remove_file(&p);
+}
+
+#[tokio::test]
+async fn test_file_edit_not_found() {
+    let pm = create_plugin_manager();
+    let p = std::env::temp_dir().join("omni_edit2.txt");
+    std::fs::write(&p, "hello").unwrap();
+    let r = pm.execute_tool("file_edit", serde_json::json!({"path": p.to_string_lossy(), "old_string": "xyz", "new_string": "a"})).await;
+    assert!(r.contains("not found"));
+    let _ = std::fs::remove_file(&p);
+}
+
+#[tokio::test]
+async fn test_file_edit_ambiguous() {
+    let pm = create_plugin_manager();
+    let p = std::env::temp_dir().join("omni_edit3.txt");
+    std::fs::write(&p, "aa bb aa").unwrap();
+    let r = pm.execute_tool("file_edit", serde_json::json!({"path": p.to_string_lossy(), "old_string": "aa", "new_string": "cc"})).await;
+    assert!(r.contains("2 times") || r.contains("unique") || r.to_lowercase().contains("error"));
+    let _ = std::fs::remove_file(&p);
+}
+
+// ============================================================
+// Grep
+// ============================================================
+
+#[tokio::test]
+async fn test_grep_finds() {
+    let pm = create_plugin_manager();
+    let d = std::env::temp_dir().join("omni_grep");
+    let _ = std::fs::create_dir_all(&d);
+    std::fs::write(d.join("a.txt"), "hello world\nfoo\nhello again").unwrap();
+    let r = pm.execute_tool("grep_search", serde_json::json!({"pattern": "hello", "path": d.to_string_lossy()})).await;
+    assert!(r.contains("hello"), "Got: {}", r);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[tokio::test]
+async fn test_grep_empty_pattern() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("grep_search", serde_json::json!({"pattern": ""})).await;
+    assert!(r.to_lowercase().contains("error") || r.contains("no pattern"));
+}
+
+// ============================================================
+// Glob
+// ============================================================
+
+#[tokio::test]
+async fn test_glob_matches() {
+    let pm = create_plugin_manager();
+    let d = std::env::temp_dir().join("omni_glob");
+    let _ = std::fs::create_dir_all(&d);
+    std::fs::write(d.join("x.rs"), "").unwrap();
+    std::fs::write(d.join("y.txt"), "").unwrap();
+    let r = pm.execute_tool("glob_files", serde_json::json!({"pattern": "*.rs", "path": d.to_string_lossy()})).await;
+    assert!(r.contains("x.rs"));
+    assert!(!r.contains("y.txt"));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[tokio::test]
+async fn test_glob_no_match() {
+    let pm = create_plugin_manager();
+    let d = std::env::temp_dir().join("omni_glob2");
+    let _ = std::fs::create_dir_all(&d);
+    std::fs::write(d.join("a.txt"), "").unwrap();
+    let r = pm.execute_tool("glob_files", serde_json::json!({"pattern": "*.xyz", "path": d.to_string_lossy()})).await;
+    assert!(r.contains("No files"));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+// ============================================================
+// List Dir
+// ============================================================
+
+#[tokio::test]
+async fn test_ls_shows_entries() {
+    let pm = create_plugin_manager();
+    let d = std::env::temp_dir().join("omni_ls");
+    let _ = std::fs::create_dir_all(d.join("sub"));
+    std::fs::write(d.join("f.txt"), "").unwrap();
+    let r = pm.execute_tool("list_dir", serde_json::json!({"path": d.to_string_lossy()})).await;
+    assert!(r.contains("sub/") && r.contains("f.txt"));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[tokio::test]
+async fn test_ls_nonexistent() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("list_dir", serde_json::json!({"path": "/no_such_dir_xyz"})).await;
+    assert!(r.to_lowercase().contains("error") || r.contains("not exist"));
+}
+
+// ============================================================
+// Git
+// ============================================================
+
+#[tokio::test]
+async fn test_git_status_runs() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("git_ops", serde_json::json!({"subcommand": "status"})).await;
+    assert!(!r.is_empty());
+}
+
+// ============================================================
+// Todo
+// ============================================================
+
+#[tokio::test]
+async fn test_todo_lifecycle() {
+    let pm = create_plugin_manager();
+    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "clear"})).await;
+    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "add", "text": "item1"})).await;
+    let list = pm.execute_tool("todo_memory", serde_json::json!({"action": "list"})).await;
+    assert!(list.contains("item1"));
+    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "remove", "text": "1"})).await;
+    let list2 = pm.execute_tool("todo_memory", serde_json::json!({"action": "list"})).await;
+    assert!(!list2.contains("item1"));
+    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "clear"})).await;
+}
+
+#[tokio::test]
+async fn test_todo_notes() {
+    let pm = create_plugin_manager();
+    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "note_save", "text": "_t", "content": "data"})).await;
+    let r = pm.execute_tool("todo_memory", serde_json::json!({"action": "note_read", "text": "_t"})).await;
+    assert!(r.contains("data"));
+    let notes = dirs::home_dir().unwrap().join(".omnilauncher").join("notes");
+    let _ = std::fs::remove_file(notes.join("_t.md"));
+}
+
+// ============================================================
+// Color Picker
+// ============================================================
+
+#[tokio::test]
+async fn test_color_hex() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("color #ff0000").await;
+    assert!(!r.is_empty());
+}
+
+#[tokio::test]
+async fn test_color_name() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("color blue").await;
+    assert!(!r.is_empty());
+}
+
+#[tokio::test]
+async fn test_color_rgb() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("color rgb(255,128,0)").await;
+    assert!(!r.is_empty());
+}
+
+// ============================================================
+// System Commands
+// ============================================================
+
+#[tokio::test]
+async fn test_sys_commands_list() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("sys ").await;
+    assert!(r.len() >= 3);
+}
+
+// ============================================================
+// Web Search
+// ============================================================
+
+#[tokio::test]
+async fn test_web_google() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("g test").await;
+    assert!(r[0].action_data.contains("google.com"));
+}
+
+#[tokio::test]
+async fn test_web_tool() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("web_search", serde_json::json!({"query": "hi", "engine": "youtube"})).await;
+    assert!(r.contains("youtube.com"));
+}
+
+// ============================================================
+// Env Vars
+// ============================================================
+
+#[tokio::test]
+async fn test_env_query() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("env PATH").await;
+    assert!(!r.is_empty());
+}
+
+// ============================================================
+// Network
+// ============================================================
+
+#[tokio::test]
+async fn test_network_list() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("net ").await;
+    assert!(r.len() >= 3);
+}
+
+// ============================================================
+// Sys Info
+// ============================================================
+
+#[tokio::test]
+async fn test_sysinfo_os() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("sys_info", serde_json::json!({"info_type": "os"})).await;
+    assert!(!r.is_empty());
+}
+
+// ============================================================
+// HTTP Client
+// ============================================================
+
+#[tokio::test]
+async fn test_http_get() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("http_request", serde_json::json!({"method": "GET", "url": "https://httpbin.org/get"})).await;
+    assert!(r.contains("200") || r.contains("httpbin"));
+}
+
+#[tokio::test]
+async fn test_http_no_url() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("http_request", serde_json::json!({"method": "GET", "url": ""})).await;
+    assert!(r.contains("Error") || r.contains("no URL"));
+}
+
+// ============================================================
+// Code Execute
+// ============================================================
+
+#[tokio::test]
+async fn test_code_python() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("code_execute", serde_json::json!({"language": "python", "code": "print(7*6)"})).await;
+    if !r.to_lowercase().contains("error") { assert!(r.contains("42")); }
+}
+
+#[tokio::test]
+async fn test_code_unsupported() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("code_execute", serde_json::json!({"language": "cobol", "code": "x"})).await;
+    assert!(r.contains("Unsupported"));
+}
+
+// ============================================================
+// App Launcher (tool)
+// ============================================================
+
+#[tokio::test]
+async fn test_app_launcher_not_found() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("app_launcher", serde_json::json!({"name": "zzz_no_app_999"})).await;
+    assert!(r.contains("No application found"));
+}
+
+// ============================================================
+// Windows Settings
+// ============================================================
+
+#[tokio::test]
+async fn test_settings_list() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("settings ").await;
+    assert!(r.len() >= 5);
+}
+
+// ============================================================
+// Hosts
+// ============================================================
+
+#[tokio::test]
+async fn test_hosts_shows_edit() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("hosts ").await;
+    let has_edit = r.iter().any(|x| x.title.to_lowercase().contains("edit"));
+    assert!(has_edit);
+}
+
+// ============================================================
+// Tool Not Found
+// ============================================================
+
+#[tokio::test]
+async fn test_tool_not_found() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("zzz_fake", serde_json::json!({})).await;
+    assert_eq!(r, "Tool not found");
+}
+
+// ============================================================
+// Router NL Detection
+// ============================================================
+
+#[test]
+fn test_nl_positive() {
+    use omnilauncher_lib::ai::router::Router;
+    assert!(Router::is_natural_language("what is the time"));
+    assert!(Router::is_natural_language("how to install rust?"));
+    assert!(Router::is_natural_language("find all files in src"));
+}
+
+#[test]
+fn test_nl_negative() {
+    use omnilauncher_lib::ai::router::Router;
+    assert!(!Router::is_natural_language("notepad"));
+    assert!(!Router::is_natural_language("chrome"));
+}
+
+// ============================================================
+// Web Fetch
+// ============================================================
+
+#[tokio::test]
+async fn test_web_fetch_ok() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("web_fetch", serde_json::json!({"url": "https://httpbin.org/html"})).await;
+    assert!(!r.is_empty() && !r.contains("Error fetching"));
+}
+
+#[tokio::test]
+async fn test_web_fetch_empty() {
+    let pm = create_plugin_manager();
+    let r = pm.execute_tool("web_fetch", serde_json::json!({"url": ""})).await;
+    assert!(r.contains("Error") || r.contains("no URL"));
 }

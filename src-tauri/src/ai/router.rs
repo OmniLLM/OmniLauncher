@@ -18,22 +18,34 @@ pub struct ConversationContext {
 
 impl Default for ConversationContext {
     fn default() -> Self {
-        Self { messages: Vec::new(), max_turns: 10 }
+        Self {
+            messages: Vec::new(),
+            max_turns: 10,
+        }
     }
 }
 
 impl ConversationContext {
     pub fn new(max_turns: usize) -> Self {
-        Self { messages: Vec::new(), max_turns }
+        Self {
+            messages: Vec::new(),
+            max_turns,
+        }
     }
 
     pub fn add_user(&mut self, text: &str) {
-        self.messages.push(Message { role: "user".to_string(), content: text.to_string() });
+        self.messages.push(Message {
+            role: "user".to_string(),
+            content: text.to_string(),
+        });
         self.trim_to_max();
     }
 
     pub fn add_assistant(&mut self, text: &str) {
-        self.messages.push(Message { role: "assistant".to_string(), content: text.to_string() });
+        self.messages.push(Message {
+            role: "assistant".to_string(),
+            content: text.to_string(),
+        });
     }
 
     pub fn add_tool_result(&mut self, tool_name: &str, result: &str) {
@@ -57,7 +69,10 @@ impl ConversationContext {
     }
 
     pub fn get_messages_with_system(&self, system_prompt: &str) -> Vec<Message> {
-        let mut msgs = vec![Message { role: "system".to_string(), content: system_prompt.to_string() }];
+        let mut msgs = vec![Message {
+            role: "system".to_string(),
+            content: system_prompt.to_string(),
+        }];
         msgs.extend(self.messages.clone());
         msgs
     }
@@ -114,6 +129,7 @@ impl Router {
         input: &str,
         plugin_manager: &PluginManager,
         ai_client: &AiClient,
+        context: &ConversationContext,
     ) -> AiResponse {
         match Self::decide(input) {
             RouteDecision::Local => {
@@ -132,29 +148,50 @@ impl Router {
         }
     }
 
-    async fn ai_route(
-        input: &str,
+    pub async fn ai_route(
         plugin_manager: &PluginManager,
         ai_client: &AiClient,
+        context: &ConversationContext,
     ) -> AiResponse {
         let tools = plugin_manager.all_tool_schemas();
-        let messages = vec![
-            Message {
-                role: "system".to_string(),
-                content: "You are OmniLauncher, an AI-powered application launcher. \
-                          Help the user find files, search the web, launch apps, or answer questions. \
-                          Use the available tools when appropriate. Be concise.".to_string(),
-            },
-            Message {
-                role: "user".to_string(),
-                content: input.to_string(),
-            },
-        ];
 
-        match ai_client.chat_with_tools(messages, tools).await {
+        let os_info = get_os_info();
+        let system_prompt = format!(
+            "You are OmniLauncher, an AI-powered desktop assistant with full tool access.\n\
+            \n\
+            SYSTEM ENVIRONMENT:\n\
+            - Operating System: {}\n\
+            - Shell: {}\n\
+            \n\
+            IMPORTANT: When executing shell commands via shell_exec or code_execute, you MUST use the correct shell syntax for this OS:\n\
+            {}\n\
+            \n\
+            Available tools: shell_exec, file_read, file_write, file_edit, grep_search, glob_files, \
+            list_dir, git_ops, code_execute (python/javascript/powershell/bash/rust), \
+            http_request, web_fetch, web_search, sys_info, todo_memory.\n\
+            \n\
+            OUTPUT FORMATTING:\n\
+            - Always use well-formatted Markdown in your responses\n\
+            - Use **bold** for emphasis, `inline code` for commands/paths/values\n\
+            - Use ```language\\ncode\\n``` for multi-line code or command output\n\
+            - Use bullet lists (- item) or numbered lists for multiple items\n\
+            - Use tables (| col1 | col2 |) for structured data\n\
+            - Use headers (## Section) to organize longer responses\n\
+            - Keep responses concise but visually clear and scannable\n\
+            \n\
+            Use tools proactively to help the user.",
+            os_info.0, os_info.1, os_info.2
+        );
+
+        // Use conversation context (includes prior turns) + current user message
+        let messages = context.get_messages_with_system(&system_prompt);
+        // The current user message is already added to context before route() is called,
+        // so it's already in get_messages_with_system output.
+
+        match ai_client.chat_with_tools(messages.clone(), tools).await {
             Ok(resp) => {
                 let mut tools_used = vec![];
-                let mut tool_results = vec![];
+                let mut tool_results: Vec<(String, String)> = vec![];
                 let mut final_content = resp.content.clone().unwrap_or_default();
 
                 if let Some(tool_calls) = resp.tool_calls {
@@ -162,14 +199,46 @@ impl Router {
                         tools_used.push(tc.function.name.clone());
                         let args: serde_json::Value =
                             serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                        let result = plugin_manager
-                            .execute_tool(&tc.function.name, args)
-                            .await;
-                        tool_results.push(result);
+                        let result = plugin_manager.execute_tool(&tc.function.name, args).await;
+                        tool_results.push((tc.function.name.clone(), result));
                     }
 
-                    if final_content.is_empty() && !tool_results.is_empty() {
-                        final_content = tool_results.join("\n\n");
+                    // Always format tool results via a follow-up AI call
+                    if !tool_results.is_empty() {
+                        let tool_output = tool_results
+                            .iter()
+                            .map(|(name, result)| format!("[Tool: {}]\n{}", name, result))
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+
+                        let mut followup_msgs = messages.clone();
+                        followup_msgs.push(Message {
+                            role: "assistant".to_string(),
+                            content: format!("I called tools and got these results:\n\n{}", tool_output),
+                        });
+                        followup_msgs.push(Message {
+                            role: "user".to_string(),
+                            content: "Present these results in a clean, formatted way using Markdown. \
+                                     Use tables for structured data, bullet lists for multiple items. \
+                                     Be concise. Do NOT include raw output, do NOT show the original command output, \
+                                     do NOT add a 'Raw output' section. Only show the formatted/summarized version.".to_string(),
+                        });
+
+                        match ai_client.chat(followup_msgs).await {
+                            Ok(formatted) => {
+                                final_content = formatted;
+                            }
+                            Err(_) => {
+                                // Fallback: wrap raw output in code blocks
+                                final_content = tool_results
+                                    .iter()
+                                    .map(|(name, result)| {
+                                        format!("**{}**\n```\n{}\n```", name, result)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n\n");
+                            }
+                        }
                     }
                 }
 
@@ -187,6 +256,513 @@ impl Router {
                 is_ai: true,
             },
         }
+    }
+
+    /// Handle slash commands — instant, no AI involved
+    async fn slash_command(input: &str, plugin_manager: &PluginManager) -> AiResponse {
+        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+        let cmd = parts[0];
+        let arg = parts.get(1).unwrap_or(&"").trim();
+
+        match cmd {
+            "/run" | "/r" => {
+                // Run a shell command instantly
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/run <command>`\n\nExecutes a shell command immediately.".to_string(),
+                        tools_used: vec!["shell_exec".to_string()],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let result = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": arg })).await;
+                AiResponse {
+                    content: format!("```\n$ {}\n{}\n```", arg, result),
+                    tools_used: vec!["shell_exec".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/open" | "/o" => {
+                // Open app/file/URL
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/open <app or file or URL>`".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let open_cmd = if cfg!(target_os = "windows") {
+                    format!("Start-Process '{}'", arg)
+                } else if cfg!(target_os = "macos") {
+                    format!("open '{}'", arg)
+                } else {
+                    format!("xdg-open '{}'", arg)
+                };
+                let _ = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": open_cmd })).await;
+                AiResponse {
+                    content: format!("Opened **{}**", arg),
+                    tools_used: vec!["open".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/app" | "/a" => {
+                // Quick app launch — find and immediately execute the top match
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/app <name>`\n\nLaunches the best matching application.".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let result = plugin_manager.execute_tool("app_launcher", serde_json::json!({
+                    "name": arg
+                })).await;
+                AiResponse {
+                    content: format!("🚀 {}", result),
+                    tools_used: vec!["app_launcher".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/calc" | "/c" => {
+                // Quick calculator
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/calc <expression>`\n\nExample: `/calc 2^10 * 3`".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let results = plugin_manager.query_all(&format!("= {}", arg)).await;
+                if let Some(r) = results.first() {
+                    AiResponse {
+                        content: format!("**{}** = `{}`", arg, r.title),
+                        tools_used: vec!["calculator".to_string()],
+                        results: vec![],
+                        is_ai: false,
+                    }
+                } else {
+                    AiResponse {
+                        content: format!("Could not evaluate: `{}`", arg),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    }
+                }
+            }
+            "/find" | "/f" => {
+                // Quick file search
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/find <filename>`".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let results = plugin_manager.query_all(&format!("f {}", arg)).await;
+                AiResponse {
+                    content: String::new(),
+                    tools_used: vec![],
+                    results,
+                    is_ai: false,
+                }
+            }
+            "/grep" | "/g" => {
+                // Quick grep
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/grep <pattern> [path]`".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let grep_parts: Vec<&str> = arg.splitn(2, ' ').collect();
+                let pattern = grep_parts[0];
+                let path = grep_parts.get(1).unwrap_or(&".");
+                let result = plugin_manager.execute_tool("grep_search", serde_json::json!({
+                    "pattern": pattern,
+                    "path": path
+                })).await;
+                AiResponse {
+                    content: format!("```\n{}\n```", result),
+                    tools_used: vec!["grep_search".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/cat" => {
+                // Quick file read
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/cat <filepath>`".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let result = plugin_manager.execute_tool("file_read", serde_json::json!({ "path": arg })).await;
+                AiResponse {
+                    content: format!("```\n{}\n```", result),
+                    tools_used: vec!["file_read".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/ls" => {
+                // Quick directory list
+                let path = if arg.is_empty() { "." } else { arg };
+                let result = plugin_manager.execute_tool("list_dir", serde_json::json!({ "path": path })).await;
+                AiResponse {
+                    content: format!("```\n{}\n```", result),
+                    tools_used: vec!["list_dir".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/git" => {
+                // Quick git command
+                let subcmd = if arg.is_empty() { "status" } else { arg };
+                let result = plugin_manager.execute_tool("git_ops", serde_json::json!({ "subcommand": subcmd })).await;
+                AiResponse {
+                    content: format!("```\n{}\n```", result),
+                    tools_used: vec!["git_ops".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/todo" | "/t" => {
+                // Quick todo
+                if arg.is_empty() {
+                    let result = plugin_manager.execute_tool("todo_memory", serde_json::json!({ "action": "list" })).await;
+                    return AiResponse {
+                        content: if result.is_empty() || result == "Todo list is empty." {
+                            "📝 **Todo list is empty.**\n\nUse `/todo <text>` to add an item.".to_string()
+                        } else {
+                            format!("📝 **Todos:**\n\n{}", result)
+                        },
+                        tools_used: vec!["todo_memory".to_string()],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                // Add a todo
+                let result = plugin_manager.execute_tool("todo_memory", serde_json::json!({
+                    "action": "add",
+                    "text": arg
+                })).await;
+                AiResponse {
+                    content: format!("✅ {}", result),
+                    tools_used: vec!["todo_memory".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/web" | "/w" => {
+                // Quick web search
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/web <query>`".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let results = plugin_manager.query_all(&format!("g {}", arg)).await;
+                AiResponse {
+                    content: String::new(),
+                    tools_used: vec![],
+                    results,
+                    is_ai: false,
+                }
+            }
+            "/ip" => {
+                let result = plugin_manager.execute_tool("shell_exec", serde_json::json!({
+                    "command": if cfg!(target_os = "windows") {
+                        "powershell -Command \"(Invoke-WebRequest -Uri 'https://api.ipify.org' -UseBasicParsing).Content\""
+                    } else {
+                        "curl -s https://api.ipify.org"
+                    }
+                })).await;
+                AiResponse {
+                    content: format!("🌍 Public IP: `{}`", result.trim()),
+                    tools_used: vec!["shell_exec".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/ports" => {
+                let cmd = if cfg!(target_os = "windows") {
+                    "netstat -an | findstr LISTENING"
+                } else {
+                    "ss -tlnp"
+                };
+                let result = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": cmd })).await;
+                AiResponse {
+                    content: format!("**Listening Ports:**\n```\n{}\n```", result),
+                    tools_used: vec!["shell_exec".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/ps" => {
+                let cmd = if cfg!(target_os = "windows") {
+                    "powershell -NoProfile -Command \"Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name, CPU, @{N='MemMB';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize\""
+                } else {
+                    "ps aux --sort=-pcpu | head -16"
+                };
+                let result = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": cmd })).await;
+                AiResponse {
+                    content: format!("**Top Processes:**\n```\n{}\n```", result),
+                    tools_used: vec!["shell_exec".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/kill" => {
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/kill <process name or PID>`".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let cmd = if cfg!(target_os = "windows") {
+                    if arg.parse::<u32>().is_ok() {
+                        format!("taskkill /PID {} /F", arg)
+                    } else {
+                        format!("taskkill /IM {} /F", arg)
+                    }
+                } else {
+                    if arg.parse::<u32>().is_ok() {
+                        format!("kill -9 {}", arg)
+                    } else {
+                        format!("pkill -f '{}'", arg)
+                    }
+                };
+                let result = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": cmd })).await;
+                AiResponse {
+                    content: format!("```\n{}\n```", result),
+                    tools_used: vec!["shell_exec".to_string()],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+            "/env" => {
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/env <variable name>`".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                match std::env::var(arg) {
+                    Ok(val) => AiResponse {
+                        content: format!("`{}` = `{}`", arg, val),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    },
+                    Err(_) => AiResponse {
+                        content: format!("Environment variable `{}` not found.", arg),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    },
+                }
+            }
+            "/color" => {
+                if arg.is_empty() {
+                    return AiResponse {
+                        content: "Usage: `/color <hex|rgb|name>`\n\nExample: `/color #ff6600`".to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
+                let results = plugin_manager.query_all(&format!("color {}", arg)).await;
+                if results.is_empty() {
+                    AiResponse {
+                        content: format!("Could not parse color: `{}`", arg),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    }
+                } else {
+                    let formatted = results.iter()
+                        .map(|r| format!("- **{}**: `{}`", r.subtitle.as_deref().unwrap_or(""), r.title))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    AiResponse {
+                        content: format!("🎨 **Color conversion:**\n{}", formatted),
+                        tools_used: vec!["color_picker".to_string()],
+                        results: vec![],
+                        is_ai: false,
+                    }
+                }
+            }
+            "/sys" => {
+                let subcmd = if arg.is_empty() { "lock" } else { arg };
+                let results = plugin_manager.query_all(&format!("sys {}", subcmd)).await;
+                AiResponse {
+                    content: String::new(),
+                    tools_used: vec![],
+                    results,
+                    is_ai: false,
+                }
+            }
+            "/clip" | "/cb" => {
+                let results = plugin_manager.query_all(&format!("cb {}", arg)).await;
+                AiResponse {
+                    content: String::new(),
+                    tools_used: vec![],
+                    results,
+                    is_ai: false,
+                }
+            }
+            "/help" | "/?" => {
+                if arg.is_empty() {
+                    AiResponse {
+                        content: SLASH_HELP.to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    }
+                } else {
+                    let help_cmd = if arg.starts_with('/') { arg.to_string() } else { format!("/{}", arg) };
+                    let detail = get_command_help(&help_cmd);
+                    AiResponse {
+                        content: detail,
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    }
+                }
+            }
+            _ => {
+                AiResponse {
+                    content: format!("Unknown command: `{}`\n\nType `/help` to see available commands.", cmd),
+                    tools_used: vec![],
+                    results: vec![],
+                    is_ai: false,
+                }
+            }
+        }
+    }
+}
+
+const SLASH_HELP: &str = "\
+## ⚡ Slash Commands (Instant — No AI)
+
+| Command | Shortcut | Description |
+|---------|----------|-------------|
+| `/run <cmd>` | `/r` | Execute a shell command |
+| `/open <target>` | `/o` | Open app, file, or URL |
+| `/app <query>` | `/a` | Search & launch applications |
+| `/find <name>` | `/f` | Search files by name |
+| `/grep <pattern> [path]` | `/g` | Search file contents with regex |
+| `/cat <file>` | | Read and display a file |
+| `/ls [path]` | | List directory contents |
+| `/git [subcmd]` | | Run git command (default: status) |
+| `/calc <expr>` | `/c` | Quick calculator |
+| `/todo [text]` | `/t` | List todos or add one |
+| `/web <query>` | `/w` | Web search (Google) |
+| `/ip` | | Show public IP address |
+| `/ports` | | Show listening network ports |
+| `/ps` | | Top processes by CPU usage |
+| `/kill <name/pid>` | | Kill a process |
+| `/env <var>` | | Get environment variable value |
+| `/color <value>` | | Convert color formats (hex/rgb/hsl) |
+| `/sys <cmd>` | | System: lock/sleep/shutdown/restart |
+| `/clip [term]` | `/cb` | Search clipboard history |
+| `/help <cmd>` | `/?` | Show help (or detail for a command) |
+
+---
+
+### Examples
+
+```
+/run git status          → execute shell command instantly
+/open notepad            → launch an application
+/find *.rs               → find files matching pattern
+/grep TODO src           → search for 'TODO' in src/
+/git log --oneline -5    → show last 5 commits
+/calc 2^10 * 3           → quick math: 3072
+/todo buy milk           → add to todo list
+/color #ff6600           → hex → rgb(255,102,0), hsl(24,100%,50%)
+/kill node               → kill all node processes
+/env PATH                → show PATH variable
+```
+
+**Tip:** Type `/` to see the command palette. Anything without `/` goes to AI.
+";
+
+fn get_command_help(cmd: &str) -> String {
+    match cmd {
+        "/run" | "/r" => "## `/run` (shortcut: `/r`)\n\nExecute a shell command and display output.\n\n**Usage:** `/run <command>`\n\n**Examples:**\n```\n/run dir\n/run git status\n/run npm test\n/run Get-Process | Select -First 5\n/r cargo build --release\n```\n\n**Notes:**\n- Uses PowerShell on Windows, bash on macOS/Linux\n- Output is displayed in a code block\n- Long output is truncated to 4000 chars".to_string(),
+        "/open" | "/o" => "## `/open` (shortcut: `/o`)\n\nOpen an application, file, folder, or URL.\n\n**Usage:** `/open <target>`\n\n**Examples:**\n```\n/open notepad\n/open https://github.com\n/open C:\\Users\\Documents\n/o code\n/open ~/.bashrc\n```\n\n**Notes:**\n- Uses `Start-Process` on Windows, `open` on macOS, `xdg-open` on Linux\n- Works with apps, files, folders, and URLs".to_string(),
+        "/app" | "/a" => "## `/app` (shortcut: `/a`)\n\nSearch installed applications by name.\n\n**Usage:** `/app <query>`\n\n**Examples:**\n```\n/app chrome\n/app visual studio\n/a firefox\n/app term\n```\n\n**Notes:**\n- Fuzzy matches against Start Menu (.lnk), .app bundles, or .desktop files\n- Select a result to launch it".to_string(),
+        "/find" | "/f" => "## `/find` (shortcut: `/f`)\n\nSearch for files by name in your home directory.\n\n**Usage:** `/find <filename or pattern>`\n\n**Examples:**\n```\n/find readme\n/find .gitignore\n/f Cargo.toml\n/find *.rs\n```\n\n**Notes:**\n- Searches up to depth 5 from home directory\n- Case-insensitive matching\n- Select a result to open the file".to_string(),
+        "/grep" | "/g" => "## `/grep` (shortcut: `/g`)\n\nSearch file contents using regex patterns.\n\n**Usage:** `/grep <pattern> [path]`\n\n**Examples:**\n```\n/grep TODO src\n/grep \"fn main\" .\n/g error logs/\n/grep \"import.*React\" src/components\n```\n\n**Notes:**\n- Uses ripgrep if installed, falls back to findstr/grep\n- Returns up to 50 matches with line numbers\n- Path defaults to current directory".to_string(),
+        "/cat" => "## `/cat`\n\nRead and display file contents with line numbers.\n\n**Usage:** `/cat <filepath>`\n\n**Examples:**\n```\n/cat package.json\n/cat src/main.rs\n/cat ~/.ssh/config\n/cat C:\\Windows\\System32\\drivers\\etc\\hosts\n```\n\n**Notes:**\n- Shows line numbers for reference\n- Long files are truncated to 8000 chars".to_string(),
+        "/ls" => "## `/ls`\n\nList files and directories.\n\n**Usage:** `/ls [path]`\n\n**Examples:**\n```\n/ls\n/ls src\n/ls C:\\Users\\jzhu\\repos\n/ls ~/Documents\n```\n\n**Notes:**\n- Defaults to current directory if no path given\n- Directories shown with trailing `/`\n- Sorted alphabetically".to_string(),
+        "/git" => "## `/git`\n\nRun any git subcommand.\n\n**Usage:** `/git [subcommand]`\n\n**Examples:**\n```\n/git\n/git log --oneline -10\n/git branch -a\n/git diff --stat\n/git stash list\n/git remote -v\n```\n\n**Notes:**\n- Defaults to `git status` when no subcommand given\n- Output displayed in a code block\n- Runs in the current working directory".to_string(),
+        "/calc" | "/c" => "## `/calc` (shortcut: `/c`)\n\nEvaluate math expressions.\n\n**Usage:** `/calc <expression>`\n\n**Examples:**\n```\n/calc 2^10\n/calc 15 * 3 + 7\n/c sqrt(144)\n/calc (100 - 15) / 5\n/calc 2.5 * 1.1\n```\n\n**Supported:** `+`, `-`, `*`, `/`, `^` (power), parentheses, `sqrt`".to_string(),
+        "/todo" | "/t" => "## `/todo` (shortcut: `/t`)\n\nManage a persistent todo list.\n\n**Usage:**\n- `/todo` — list all todos\n- `/todo <text>` — add a new todo\n\n**Examples:**\n```\n/todo\n/t buy groceries\n/todo review PR #42\n/t fix login bug\n```\n\n**Notes:**\n- Stored in `~/.omnilauncher/todos.json`\n- Use AI for remove/clear: \"remove todo #2\"".to_string(),
+        "/web" | "/w" => "## `/web` (shortcut: `/w`)\n\nSearch the web via Google.\n\n**Usage:** `/web <query>`\n\n**Examples:**\n```\n/web rust async tutorial\n/w tauri v2 documentation\n/web \"best pizza near me\"\n```\n\n**Notes:**\n- Opens a Google search result link\n- For YouTube use `yt <query>`, for GitHub use `gh <query>`".to_string(),
+        "/ip" => "## `/ip`\n\nShow your public IP address.\n\n**Usage:** `/ip`\n\n**Notes:**\n- Fetches from https://api.ipify.org\n- Requires internet connection".to_string(),
+        "/ports" => "## `/ports`\n\nShow all listening network ports.\n\n**Usage:** `/ports`\n\n**Notes:**\n- Windows: uses `netstat -an | findstr LISTENING`\n- Linux/macOS: uses `ss -tlnp`\n- Useful for finding what's using a port".to_string(),
+        "/ps" => "## `/ps`\n\nShow top processes sorted by CPU usage.\n\n**Usage:** `/ps`\n\n**Notes:**\n- Shows top 15 processes\n- Displays name, CPU%, and memory usage".to_string(),
+        "/kill" => "## `/kill`\n\nKill a process by name or PID.\n\n**Usage:** `/kill <name or PID>`\n\n**Examples:**\n```\n/kill node\n/kill 12345\n/kill chrome\n```\n\n**Notes:**\n- By name: kills all matching processes\n- By PID: kills specific process\n- Uses force kill (-9 / /F)".to_string(),
+        "/env" => "## `/env`\n\nGet the value of an environment variable.\n\n**Usage:** `/env <variable name>`\n\n**Examples:**\n```\n/env PATH\n/env HOME\n/env JAVA_HOME\n/env GOPATH\n```".to_string(),
+        "/color" => "## `/color`\n\nConvert colors between formats.\n\n**Usage:** `/color <hex | rgb(...) | name>`\n\n**Examples:**\n```\n/color #ff6600\n/color rgb(0, 128, 255)\n/color teal\n/color f00\n```\n\n**Supported formats:**\n- Hex: `#rrggbb` or `#rgb`\n- RGB: `rgb(r, g, b)`\n- Named: red, blue, teal, coral, gold, etc.\n\n**Output:** All three formats (hex, rgb, hsl)".to_string(),
+        "/sys" => "## `/sys`\n\nSystem power commands.\n\n**Usage:** `/sys <action>`\n\n**Actions:**\n- `lock` — Lock screen\n- `sleep` — Sleep/suspend\n- `shutdown` — Shut down\n- `restart` — Restart\n\n**Examples:**\n```\n/sys lock\n/sys sleep\n/sys shutdown\n/sys restart\n```".to_string(),
+        "/clip" | "/cb" => "## `/clip` (shortcut: `/cb`)\n\nSearch clipboard history.\n\n**Usage:** `/clip [search term]`\n\n**Examples:**\n```\n/clip\n/cb password\n/clip url\n```\n\n**Notes:**\n- Keeps last 50 clipboard entries (in-memory)\n- Search is case-insensitive\n- Select to copy back to clipboard".to_string(),
+        _ => format!("No detailed help for `{}`. Type `/help` to see all commands.", cmd),
+    }
+}
+
+/// Returns (os_name, shell, instructions) tuple for the current platform
+fn get_os_info() -> (&'static str, &'static str, &'static str) {
+    if cfg!(target_os = "windows") {
+        (
+            "Windows",
+            "PowerShell",
+            "- Use PowerShell syntax (e.g. Get-ChildItem, Get-Process, Select-Object)\n\
+             - Use PowerShell operators: | for pipeline, ; for chaining\n\
+             - File paths use backslash: C:\\Users\\...\n\
+             - Use $env:VAR for environment variables\n\
+             - Do NOT use bash/unix commands (ls, grep, cat, rm) directly - use PowerShell equivalents\n\
+             - For code_execute, prefer language='powershell' for system tasks",
+        )
+    } else if cfg!(target_os = "macos") {
+        (
+            "macOS",
+            "zsh/bash",
+            "- Use Unix/bash syntax (ls, grep, cat, rm, find, etc.)\n\
+             - File paths use forward slash: /Users/...\n\
+             - Use $VAR for environment variables\n\
+             - macOS-specific: use 'open' to open files/URLs, 'pbcopy'/'pbpaste' for clipboard\n\
+             - For code_execute, prefer language='bash' for system tasks",
+        )
+    } else {
+        (
+            "Linux",
+            "bash",
+            "- Use Unix/bash syntax (ls, grep, cat, rm, find, etc.)\n\
+             - File paths use forward slash: /home/...\n\
+             - Use $VAR for environment variables\n\
+             - Use 'xdg-open' to open files/URLs\n\
+             - For code_execute, prefer language='bash' for system tasks",
+        )
     }
 }
 

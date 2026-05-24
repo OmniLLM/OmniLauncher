@@ -7,9 +7,17 @@ pub struct ClipboardPlugin {
     pub history: Vec<String>,
 }
 
+impl Default for ClipboardPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClipboardPlugin {
     pub fn new() -> Self {
-        Self { history: Vec::new() }
+        Self {
+            history: Vec::new(),
+        }
     }
 
     /// Add an entry to history (ring buffer of 50).
@@ -103,7 +111,9 @@ impl Plugin for ClipboardPlugin {
         if results.is_empty() {
             format!("No clipboard entries matching '{}'", term)
         } else {
-            results.iter().enumerate()
+            results
+                .iter()
+                .enumerate()
                 .map(|(i, e)| format!("{}. {}", i + 1, e))
                 .collect::<Vec<_>>()
                 .join("\n")
