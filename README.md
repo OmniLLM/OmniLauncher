@@ -31,6 +31,71 @@ OmniLauncher is an AI-native, cross-platform launcher built with Tauri v2 and Ru
 | ⏻ | **System Commands** | `sys <cmd>` | `lock`, `sleep`, `shutdown`, `restart` — cross-platform shell commands |
 | 💻 | **Shell** | `> <command>` | Run any shell command directly |
 | 📋 | **Clipboard** | `cb <term>` | Search clipboard history (last 50 entries, deduped) |
+| 🔖 | **Browser Bookmarks** | `bm <term>` | Search Chrome & Edge bookmarks |
+| ⚙️ | **Windows Settings** | `settings <term>` | Quick access to 35+ Windows Settings pages |
+| 🎨 | **Color Picker** | `color <hex/rgb/name>` | Convert colors between hex, rgb, hsl |
+| 🌐 | **Hosts** | `hosts <term>` | View/search/edit system hosts file |
+| 🌍 | **Network** | `net <cmd>` | IP, ping, DNS flush, ports, WiFi profiles |
+| 📋 | **Snippets** | `snip <term>` | Store/recall text snippets from `~/.omnilauncher/snippets.json` |
+| 🔑 | **Env Vars** | `env <term>` | Search & copy environment variables |
+| 📝 | **Todo** | `todo <action>` | Persistent todo list (add/remove/list/clear) |
+| 🌿 | **Git** | `git <cmd>` | Quick git status/log/branch/diff/stash |
+
+### AI Tool-Calling Plugins
+
+These plugins expose **tool schemas** so the AI can invoke them autonomously when you ask questions in natural language. The AI detects your OS and uses the correct shell syntax automatically.
+
+| Tool Name | Inspired By | What It Does |
+|-----------|-------------|--------------|
+| `bash_exec` | codex, claude-code, opencode | Execute shell commands (PowerShell on Windows, bash on Linux/macOS) |
+| `file_read` | codex, claude-code, opencode | Read file contents with optional line ranges |
+| `file_write` | codex, claude-code, opencode | Write/create files, auto-create parent directories |
+| `file_edit` | codex `apply_patch`, opencode `edit` | Find-and-replace exact text in files |
+| `code_execute` | hermes-agent `execute_code` | Run code snippets (Python, JavaScript, PowerShell, Bash, Rust) |
+| `grep_search` | codex, claude-code, opencode | Search file contents with regex (uses ripgrep if available) |
+| `glob_files` | codex, claude-code, opencode | Find files by glob pattern (e.g. `**/*.rs`) |
+| `list_dir` | codex, opencode | List directory contents (flat or recursive) |
+| `git_ops` | codex, opencode | Run any git subcommand (status, log, diff, commit, etc.) |
+| `web_fetch` | claude-code, hermes `web_extract` | Fetch URL content, strip HTML to plain text |
+| `web_search` | claude-code, opencode | Search Google/YouTube/GitHub |
+| `http_request` | hermes-agent, openclaw | Full HTTP client (GET/POST/PUT/DELETE with JSON body & headers) |
+| `sys_info` | hermes-agent, PowerToys | CPU, memory, disk, processes, uptime, OS info |
+| `todo_memory` | hermes-agent `todo` + `memory` | Persistent todos + save/read notes to `~/.omnilauncher/notes/` |
+
+#### How AI Tool Calling Works
+
+When you type a natural-language query (e.g. "list all .rs files in my project"), the AI:
+
+1. **Detects the OS** — the system prompt tells the AI whether it's on Windows/macOS/Linux and which shell to use
+2. **Selects appropriate tools** — e.g. on Windows it will use `bash_exec` with PowerShell syntax, on Linux with bash
+3. **Executes tools** — the tool output is fed back to the AI
+4. **Returns a combined response** — with tool results summarized
+
+Example interactions:
+
+```
+You: "what's using port 8080?"
+AI calls: bash_exec { command: "netstat -an | findstr :8080" }  (Windows)
+   or:   bash_exec { command: "lsof -i :8080" }                 (macOS/Linux)
+
+You: "find all TODO comments in the src directory"
+AI calls: grep_search { pattern: "TODO", path: "src" }
+
+You: "read the first 20 lines of Cargo.toml"
+AI calls: file_read { path: "Cargo.toml", end_line: 20 }
+
+You: "what's my system memory usage?"
+AI calls: sys_info { info_type: "memory" }
+
+You: "make a GET request to https://api.github.com/zen"
+AI calls: http_request { method: "GET", url: "https://api.github.com/zen" }
+
+You: "add 'review PR #42' to my todo list"
+AI calls: todo_memory { action: "add", text: "review PR #42" }
+
+You: "run this python: print(sum(range(100)))"
+AI calls: code_execute { language: "python", code: "print(sum(range(100)))" }
+```
 
 ### AI Features
 

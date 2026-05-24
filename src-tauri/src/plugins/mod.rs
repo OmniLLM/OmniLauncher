@@ -87,10 +87,35 @@ impl PluginManager {
     }
 }
 
+pub mod agent_delegate;
 pub mod app_launcher;
+pub mod bash_exec;
+pub mod browser_bookmarks;
 pub mod calculator;
 pub mod clipboard;
+pub mod code_tools;
+pub mod color_picker;
+pub mod env_vars;
+pub mod file_read;
 pub mod file_search;
+pub mod file_write;
+pub mod git;
+pub mod glob;
+pub mod grep;
+pub mod hosts;
+pub mod http_client;
+pub mod ls;
+pub mod network;
+pub mod process_manager;
 pub mod shell_plugin;
+pub mod snippets;
+pub mod sys_info;
 pub mod system_commands;
+pub mod timer;
+pub mod todo;
+pub mod translate;
+pub mod unit_converter;
+pub mod url_opener;
+pub mod web_fetch;
 pub mod web_search;
+pub mod windows_settings;

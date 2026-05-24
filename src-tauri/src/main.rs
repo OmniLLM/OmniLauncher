@@ -41,12 +41,12 @@ pub fn run() {
         .setup(move |app| {
             let window = app.get_webview_window("main").unwrap();
 
-            // Resize window to 1/3 of screen
+            // Resize window to 1/2 of screen
             if let Ok(Some(monitor)) = window.current_monitor() {
                 let screen_size = monitor.size();
                 let scale = monitor.scale_factor();
-                let width = (screen_size.width as f64 / scale) / 3.0;
-                let height = (screen_size.height as f64 / scale) / 3.0;
+                let width = (screen_size.width as f64 / scale) / 2.0;
+                let height = (screen_size.height as f64 / scale) / 2.0;
                 let _ = window.set_size(tauri::LogicalSize::new(width, height));
                 let _ = window.center();
             }
@@ -75,6 +75,7 @@ pub fn run() {
             get_settings,
             save_settings_cmd,
             clear_conversation,
+            list_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -127,26 +128,30 @@ async fn clear_conversation(state: tauri::State<'_, AppState>) -> Result<bool, S
 async fn execute_result(result: QueryResult) -> Result<bool, String> {
     use std::process::Command;
     let success = match result.action_type.as_str() {
-        "url" => {
+        "url" | "open_url" => {
             #[cfg(target_os = "linux")]
             let _ = Command::new("xdg-open").arg(&result.action_data).spawn();
             #[cfg(target_os = "macos")]
             let _ = Command::new("open").arg(&result.action_data).spawn();
             #[cfg(target_os = "windows")]
             let _ = Command::new("cmd")
-                .args(["/C", "start", &result.action_data])
+                .args(["/C", "start", "", &result.action_data])
                 .spawn();
             true
         }
-        "shell" => {
-            #[cfg(not(target_os = "windows"))]
+        "shell" | "open_app" => {
+            // Like Flow.Launcher: use ShellExecute to open the file (.lnk, .exe, etc.)
+            // `cmd /c start "" "path"` invokes ShellExecuteEx which resolves .lnk shortcuts
+            #[cfg(target_os = "windows")]
+            let _ = Command::new("cmd")
+                .args(["/C", "start", "", &result.action_data])
+                .spawn();
+            #[cfg(target_os = "macos")]
+            let _ = Command::new("open").arg(&result.action_data).spawn();
+            #[cfg(target_os = "linux")]
             let _ = Command::new("sh")
                 .arg("-c")
                 .arg(&result.action_data)
-                .spawn();
-            #[cfg(target_os = "windows")]
-            let _ = Command::new("cmd")
-                .args(["/C", &result.action_data])
                 .spawn();
             true
         }
@@ -159,9 +164,46 @@ async fn execute_result(result: QueryResult) -> Result<bool, String> {
             let _ = Command::new("explorer").arg(&result.action_data).spawn();
             true
         }
+        "copy" => {
+            // Just a copy action — frontend handles clipboard
+            true
+        }
         _ => false,
     };
     Ok(success)
+}
+
+#[tauri::command]
+async fn list_models(base_url: String, api_key: String) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+    let mut req = client.get(&url);
+    if !api_key.is_empty() {
+        req = req.bearer_auth(&api_key);
+    }
+
+    let response = req.send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("API error {}: {}", status, text));
+    }
+
+    let json: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let models = json["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(models)
 }
 
 #[tauri::command]

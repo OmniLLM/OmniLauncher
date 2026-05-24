@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface AppSettings {
@@ -27,10 +27,20 @@ export default function SettingsPanel({
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(!initialSettings);
 
+  // Model list state
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
+  const [modelFilter, setModelFilter] = useState("");
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const modelInputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     invoke<AppSettings>("get_settings")
       .then((s) => {
         setSettings(s);
+        setModelFilter(s.ai_model);
         setLoading(false);
       })
       .catch((e) => {
@@ -45,9 +55,56 @@ export default function SettingsPanel({
             max_results: 10,
           },
         );
+        setModelFilter(initialSettings?.ai_model || "auto");
         setLoading(false);
       });
   }, []);
+
+  const fetchModels = useCallback(async () => {
+    if (!settings) return;
+    setModelsLoading(true);
+    setModelsError("");
+    try {
+      const result = await invoke<string[]>("list_models", {
+        baseUrl: settings.ai_base_url,
+        apiKey: settings.ai_api_key,
+      });
+      setModels(result.sort());
+    } catch (e) {
+      setModelsError(String(e));
+      setModels([]);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [settings?.ai_base_url, settings?.ai_api_key]);
+
+  // Fetch models when endpoint or api key changes
+  useEffect(() => {
+    if (settings?.ai_base_url) {
+      fetchModels();
+    }
+  }, [settings?.ai_base_url, settings?.ai_api_key]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowModelDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const filteredModels = models.filter((m) =>
+    m.toLowerCase().includes(modelFilter.toLowerCase())
+  );
+
+  const handleModelSelect = (model: string) => {
+    setModelFilter(model);
+    setSettings((s) => s && { ...s, ai_model: model });
+    setShowModelDropdown(false);
+  };
 
   const handleSave = async () => {
     if (!settings) return;
@@ -87,16 +144,6 @@ export default function SettingsPanel({
         </label>
 
         <label>
-          <div className="settings__label">Model</div>
-          <input
-            className="settings__input"
-            value={settings.ai_model}
-            onChange={(e) => setSettings((s) => s && { ...s, ai_model: e.target.value })}
-            placeholder="auto"
-          />
-        </label>
-
-        <label>
           <div className="settings__label">API Key</div>
           <input
             className="settings__input"
@@ -106,6 +153,44 @@ export default function SettingsPanel({
             placeholder="(optional)"
           />
         </label>
+
+        <div className="settings__model-field" ref={dropdownRef}>
+          <div className="settings__label">
+            Model
+            {modelsLoading && <span className="settings__model-loading"> (loading...)</span>}
+            {modelsError && <span className="settings__model-error"> ⚠</span>}
+          </div>
+          <input
+            ref={modelInputRef}
+            className="settings__input"
+            value={modelFilter}
+            onChange={(e) => {
+              setModelFilter(e.target.value);
+              setSettings((s) => s && { ...s, ai_model: e.target.value });
+              setShowModelDropdown(true);
+            }}
+            onFocus={() => setShowModelDropdown(true)}
+            placeholder="Type to filter models..."
+          />
+          {showModelDropdown && filteredModels.length > 0 && (
+            <div className="settings__model-dropdown">
+              {filteredModels.map((m) => (
+                <div
+                  key={m}
+                  className={`settings__model-option${m === settings.ai_model ? " settings__model-option--selected" : ""}`}
+                  onClick={() => handleModelSelect(m)}
+                >
+                  {m}
+                </div>
+              ))}
+            </div>
+          )}
+          {showModelDropdown && !modelsLoading && filteredModels.length === 0 && models.length > 0 && (
+            <div className="settings__model-dropdown">
+              <div className="settings__model-option settings__model-option--empty">No matches</div>
+            </div>
+          )}
+        </div>
 
         <label>
           <div className="settings__label">Theme</div>

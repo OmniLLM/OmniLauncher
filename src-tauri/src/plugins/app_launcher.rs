@@ -1,6 +1,8 @@
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 pub struct AppLauncherPlugin {
     pub apps: Vec<AppEntry>,
@@ -210,7 +212,7 @@ impl Plugin for AppLauncherPlugin {
                     subtitle: Some(app.exec.clone()),
                     icon: app.icon.clone(),
                     score: 85,
-                    action_type: "shell".to_string(),
+                    action_type: "open_app".to_string(),
                     action_data: app.exec.clone(),
                 });
             } else if name_lower.contains(&term) {
@@ -220,12 +222,97 @@ impl Plugin for AppLauncherPlugin {
                     subtitle: Some(app.exec.clone()),
                     icon: app.icon.clone(),
                     score: 60,
-                    action_type: "shell".to_string(),
+                    action_type: "open_app".to_string(),
                     action_data: app.exec.clone(),
                 });
             }
         }
 
         results
+    }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "app_launcher",
+                "description": "Launch an installed application by name. Searches Start Menu shortcuts (Windows), .app bundles (macOS), or .desktop files (Linux) and executes the best match. Use this to open apps like VS Code, Chrome, Notepad, etc.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Application name to search for and launch (e.g. 'code', 'chrome', 'notepad', 'vscode insider')" }
+                    },
+                    "required": ["name"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let name = args["name"].as_str().unwrap_or("");
+        if name.is_empty() {
+            return "Error: no application name provided".to_string();
+        }
+
+        let term = name.to_lowercase();
+        let mut best: Option<&AppEntry> = None;
+        let mut best_score = 0;
+
+        for app in &self.apps {
+            let app_lower = app.name.to_lowercase();
+            if app_lower == term {
+                best = Some(app);
+                break;
+            } else if app_lower.starts_with(&term) && best_score < 2 {
+                best = Some(app);
+                best_score = 2;
+            } else if app_lower.contains(&term) && best_score < 1 {
+                best = Some(app);
+                best_score = 1;
+            }
+        }
+
+        if let Some(app) = best {
+            let app_name = app.name.clone();
+            launch_app(&app.exec);
+            format!("Launched: {}", app_name)
+        } else {
+            format!("No application found matching: '{}'", name)
+        }
+    }
+}
+
+/// Launch an application — mimics Flow.Launcher's approach:
+/// ProcessStartInfo { FileName = path, UseShellExecute = true }
+/// In Rust, the equivalent is `cmd /c start "" "path"` which calls ShellExecuteEx
+/// to resolve .lnk shortcuts and launch the target with proper working directory.
+fn launch_app(exec: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        // Flow.Launcher uses ProcessStartInfo with UseShellExecute=true on the .lnk path.
+        // The Rust equivalent: spawn cmd with `start` which calls ShellExecuteEx.
+        // The empty "" is required as window title when path has spaces.
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", exec])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW - don't flash a cmd window
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg(exec)
+            .spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("sh")
+            .args(["-c", exec])
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = std::process::Command::new("sh")
+            .args(["-c", exec])
+            .spawn();
     }
 }
