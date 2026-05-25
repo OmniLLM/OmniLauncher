@@ -1,4 +1,5 @@
 use omnilauncher_lib::{
+    live_server::{LiveResponse, LiveServer},
     ai::{
         client::AiClient,
         router::{ConversationContext, Router},
@@ -68,6 +69,8 @@ pub struct AppState {
     pub settings: Arc<Mutex<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
     pub skill_manager: Arc<Mutex<SkillManager>>,
+    pub live_server: LiveServer,
+    pub live_server_port: u16,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -91,12 +94,31 @@ pub fn run() {
     skill_manager.load_all();
     log::debug!("Loaded skill manager");
 
+    let live_server_port = 1421;
+    let live_server = LiveServer::new();
+    let live_server_task = live_server.clone();
+    tauri::async_runtime::spawn(async move {
+        live_server_task
+            .register_route("/todo", || {
+                LiveResponse::html(omnilauncher_lib::plugins::todo::todo_live_html())
+            })
+            .await;
+        live_server_task
+            .register_route("/todo/data", || {
+                LiveResponse::json(omnilauncher_lib::plugins::todo::todo_live_data_json())
+            })
+            .await;
+        live_server_task.serve(live_server_port).await;
+    });
+
     let state = AppState {
         plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
         ai_client: Mutex::new(ai_client),
         settings: Arc::new(Mutex::new(settings)),
         conversation: Arc::new(Mutex::new(ConversationContext::default())),
         skill_manager: Arc::new(Mutex::new(skill_manager)),
+        live_server,
+        live_server_port,
     };
 
     let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyO);
@@ -514,9 +536,13 @@ async fn execute_result(
             true
         }
         "todo_view" => {
-            let pm = state.plugin_manager.lock().await;
-            pm.execute_tool("todo_memory", serde_json::json!({ "action": "view" }))
-                .await;
+            let url = state.live_server.url(state.live_server_port, "/todo");
+            #[cfg(target_os = "linux")]
+            let _ = Command::new("xdg-open").arg(&url).spawn();
+            #[cfg(target_os = "macos")]
+            let _ = Command::new("open").arg(&url).spawn();
+            #[cfg(target_os = "windows")]
+            let _ = Command::new("explorer").arg(&url).spawn();
             true
         }
         _ => false,
@@ -644,3 +670,4 @@ fn main() {
 
     run();
 }
+

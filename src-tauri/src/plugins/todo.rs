@@ -18,10 +18,6 @@ fn db_path() -> std::path::PathBuf {
     config_dir().join("todo.sqlite")
 }
 
-fn html_path() -> std::path::PathBuf {
-    config_dir().join("todos.html")
-}
-
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
 fn open_db() -> rusqlite::Result<Connection> {
@@ -394,8 +390,9 @@ tr.group-header td{{background:#252535;color:#6c7086;font-size:11px;font-weight:
 </div>
 
 <script>
-const RAW = [{json_rows}];
+let RAW = [{json_rows}];
 const TODAY = '{today}';
+const DATA_URL = '/todo/data';
 const PRI_LABEL = {{1:'🔴 Urgent',2:'🟠 High',3:'🟡 Normal',4:'🔵 Low'}};
 const PRI_CLASS = {{1:'pri-1',2:'pri-2',3:'pri-3',4:'pri-4'}};
 let sortCol='id', sortDir=1, groupBy='none', filterText='', expanded=new Set();
@@ -658,6 +655,17 @@ document.addEventListener('click', e=>{{
 
 document.getElementById('group-by').addEventListener('change',e=>{{groupBy=e.target.value;render();}});
 document.getElementById('search').addEventListener('input',e=>{{filterText=e.target.value;render();}});
+async function refreshData() {{
+  try {{
+    const res = await fetch(DATA_URL, {{ cache: 'no-store' }});
+    if (!res.ok) return;
+    const next = await res.json();
+    RAW = next;
+    render();
+  }} catch (_) {{}}
+}}
+
+setInterval(refreshData, 1500);
 render();
 </script>
 </body>
@@ -672,21 +680,38 @@ render();
     )
 }
 
-fn write_and_open_html(items: &[TodoItem]) -> String {
-    let html = generate_html(items);
-    let path = html_path();
-    match std::fs::write(&path, &html) {
-        Err(e) => return format!("Failed to write HTML: {}", e),
-        Ok(_) => {}
-    }
-    let url = format!("file://{}", path.display());
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(&url).spawn();
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-    format!("Opened todos in browser ({} items). File: {}", items.len(), path.display())
+pub fn todo_live_data_json() -> String {
+    let rows = load_todos()
+        .into_iter()
+        .map(|t| {
+            let comments = t
+                .comments
+                .into_iter()
+                .map(|c| serde_json::json!({
+                    "body": c.body,
+                    "at": c.created_at.chars().take(10).collect::<String>(),
+                }))
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "id": t.id,
+                "text": t.text,
+                "desc": t.description,
+                "done": t.done,
+                "priority": t.priority,
+                "due": t.due_date,
+                "tags": t.tags,
+                "date": t.created_at.chars().take(10).collect::<String>(),
+                "completed": t.completed_at,
+                "comments": comments,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+}
+
+pub fn todo_live_html() -> String {
+    generate_html(&load_todos())
 }
 
 // ─── Plugin impl ──────────────────────────────────────────────────────────────
@@ -777,7 +802,7 @@ impl Plugin for TodoPlugin {
             "type": "function",
             "function": {
                 "name": "todo_memory",
-                "description": "Manage a persistent todo list stored in SQLite. Fields: text, description, priority (1=urgent/2=high/3=normal/4=low), due_date (YYYY-MM-DD), tags (comma-separated), completed_at (auto-set on done). Actions: list, add, remove, done, undone, clear, view (HTML browser), set_field (update priority/due_date/tags/description), comment_add, note_save, note_read.",
+                "description": "Manage a persistent todo list stored in SQLite. Fields: text, description, priority (1=urgent/2=high/3=normal/4=low), due_date (YYYY-MM-DD), tags (comma-separated), completed_at (auto-set on done). Actions: list, add, remove, done, undone, clear, view (live browser view), set_field (update priority/due_date/tags/description), comment_add, note_save, note_read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -844,7 +869,7 @@ impl Plugin for TodoPlugin {
                 set_done(id, false)
             }
             "clear" => clear_todos(),
-            "view" => write_and_open_html(&load_todos()),
+            "view" => "Todo live view is served by the app HTTP endpoint.".to_string(),
             "set_field" => {
                 let id: i64 = text.parse().unwrap_or(0);
                 if id == 0 { return format!("Invalid id: '{}'", text); }

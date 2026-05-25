@@ -625,8 +625,9 @@ export default function App() {
         // Show slash suggestions instantly in both launcher and AI mode
         setResults(slashSuggestions(value));
       } else if (!aiModeEnabled) {
-        // Clear any stale slash suggestions when prefix is gone
-        setResults([]);
+        // Don't clear results immediately — let the debounced search replace
+        // them. Clearing first causes the window to shrink then re-expand on
+        // every keystroke (flash/flicker UX issue).
         debounceRef.current = setTimeout(() => {
           doSearch(value);
         }, 100);
