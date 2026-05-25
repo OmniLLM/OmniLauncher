@@ -12,14 +12,47 @@ platforms: [windows]
 
 Sysinternals tools are available at `https://live.sysinternals.com/` (run directly without install) or via `winget install Microsoft.Sysinternals.*`.
 
-## Quick Access (no install needed)
-Run any tool directly from the web:
+## Auto-Download & Run (no install needed)
+
+**Method 1 — UNC live share (fastest, always latest):**
 ```powershell
-\\live.sysinternals.com\tools\<toolname>.exe [args]
-# or via HTTPS:
-Invoke-WebRequest https://live.sysinternals.com/<tool>.exe -OutFile $env:TEMP\<tool>.exe
-& "$env:TEMP\<tool>.exe" [args]
+# Run directly from Microsoft's live share — always up to date, no download needed
+\\live.sysinternals.com\tools\procexp64.exe
+\\live.sysinternals.com\tools\autorunsc.exe -accepteula -a * -c -s
 ```
+> Requires WebClient service running: `Start-Service WebClient`
+
+**Method 2 — Helper function (cache to $env:TEMP, re-use on next call):**
+```powershell
+function Get-SysinternalsTool {
+    param([string]$Tool)
+    $dest = "$env:TEMP\sysinternals\$Tool"
+    if (-not (Test-Path $dest)) {
+        New-Item -ItemType Directory -Path "$env:TEMP\sysinternals" -Force | Out-Null
+        Invoke-WebRequest "https://live.sysinternals.com/$Tool" -OutFile $dest -UseBasicParsing
+    }
+    return $dest
+}
+
+# Usage:
+$proc = Get-SysinternalsTool "procexp64.exe"
+& $proc
+
+$au = Get-SysinternalsTool "autorunsc.exe"
+& $au -accepteula -a * -c -s
+```
+
+**Method 3 — Force re-download (update to latest):**
+```powershell
+Remove-Item "$env:TEMP\sysinternals" -Recurse -Force -ErrorAction SilentlyContinue
+# Then use Get-SysinternalsTool as above
+```
+
+**IMPORTANT:** When executing any Sysinternals tool via shell_exec, always:
+1. First check if cached copy exists in `$env:TEMP\sysinternals\`
+2. If not, download from `https://live.sysinternals.com/<tool>`
+3. Always pass `-accepteula` flag
+4. Never hardcode a local install path — always use the auto-download pattern above
 
 ## Core Tools & Usage
 
@@ -126,18 +159,6 @@ $tools = @("PsExec","PsList","PsInfo","PsKill","Handle","Strings","Sigcheck","Au
 foreach ($t in $tools) {
     reg add "HKCU\Software\Sysinternals\$t" /v EulaAccepted /t REG_DWORD /d 1 /f
 }
-```
-
-## Install via Winget (persistent)
-```powershell
-winget install Microsoft.Sysinternals.ProcessExplorer
-winget install Microsoft.Sysinternals.ProcessMonitor
-winget install Microsoft.Sysinternals.Autoruns
-winget install Microsoft.Sysinternals.TCPView
-winget install Microsoft.Sysinternals.Handle
-winget install Microsoft.Sysinternals.Strings
-# Or entire suite:
-winget install Microsoft.Sysinternals
 ```
 
 ## When to use which tool
