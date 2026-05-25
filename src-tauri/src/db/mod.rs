@@ -27,6 +27,10 @@ pub fn migrations() -> Vec<Migration> {
             version: 2,
             sql: include_str!("../../migrations/002_add_extra_columns.sql"),
         },
+        Migration {
+            version: 3,
+            sql: include_str!("../../migrations/003_add_status_to_todos.sql"),
+        },
     ]
 }
 

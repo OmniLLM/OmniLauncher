@@ -535,16 +535,6 @@ async fn execute_result(
             .await;
             true
         }
-        "todo_view" => {
-            let url = state.live_server.url(state.live_server_port, "/todo");
-            #[cfg(target_os = "linux")]
-            let _ = Command::new("xdg-open").arg(&url).spawn();
-            #[cfg(target_os = "macos")]
-            let _ = Command::new("open").arg(&url).spawn();
-            #[cfg(target_os = "windows")]
-            let _ = Command::new("explorer").arg(&url).spawn();
-            true
-        }
         _ => false,
     };
     Ok(success)

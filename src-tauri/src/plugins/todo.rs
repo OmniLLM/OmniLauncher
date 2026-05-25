@@ -8,6 +8,11 @@ pub struct TodoPlugin;
 // ─── DB path ─────────────────────────────────────────────────────────────────
 
 fn config_dir() -> std::path::PathBuf {
+    // Allow tests to override the config directory via an env var so that
+    // parallel test runs don't share the same SQLite database.
+    if let Ok(base) = std::env::var("OMNILAUNCHER_CONFIG_DIR") {
+        return std::path::PathBuf::from(base);
+    }
     dirs::home_dir()
         .unwrap_or_default()
         .join(".config")
@@ -62,6 +67,7 @@ struct Comment {
 struct TodoItem {
     id: i64,
     text: String,
+    status: String,
     done: bool,
     priority: i64,
     due_date: String,
@@ -70,6 +76,16 @@ struct TodoItem {
     completed_at: String,
     description: String,
     comments: Vec<Comment>,
+}
+
+fn status_label(status: &str) -> &'static str {
+    match status {
+        "todo" => "⬜ Todo",
+        "in_progress" => "🟦 In Progress",
+        "blocked" => "⛔ Blocked",
+        "done" => "✅ Done",
+        _ => "⬜ Todo",
+    }
 }
 
 fn priority_label(p: i64) -> &'static str {
@@ -88,7 +104,7 @@ fn load_todos() -> Vec<TodoItem> {
         Err(_) => return vec![],
     };
     let mut stmt = match conn.prepare(
-        "SELECT id, text, done, priority, due_date, tags, created_at, completed_at, description
+        "SELECT id, text, COALESCE(status, CASE WHEN done = 1 THEN 'done' ELSE 'todo' END), done, priority, due_date, tags, created_at, completed_at, description
          FROM todos ORDER BY priority ASC, id ASC",
     ) {
         Ok(s) => s,
@@ -99,13 +115,14 @@ fn load_todos() -> Vec<TodoItem> {
             Ok(TodoItem {
                 id: row.get(0)?,
                 text: row.get(1)?,
-                done: row.get::<_, i64>(2)? != 0,
-                priority: row.get::<_, Option<i64>>(3)?.unwrap_or(3),
-                due_date: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                tags: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                created_at: row.get(6)?,
-                completed_at: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
-                description: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                status: row.get(2)?,
+                done: row.get::<_, i64>(3)? != 0,
+                priority: row.get::<_, Option<i64>>(4)?.unwrap_or(3),
+                due_date: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                tags: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                created_at: row.get(7)?,
+                completed_at: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                description: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                 comments: vec![],
             })
         })
@@ -156,9 +173,15 @@ fn remove_todo(id: i64) -> String {
     }
 }
 
-fn set_done(id: i64, done: bool) -> String {
+fn set_status(id: i64, status: &str) -> String {
+    let allowed = ["todo", "in_progress", "blocked", "done"];
+    if !allowed.contains(&status) {
+        return format!("Invalid status: {}", status);
+    }
+
     match open_db() {
         Ok(conn) => {
+            let done = status == "done";
             let val: i64 = if done { 1 } else { 0 };
             let completed = if done {
                 chrono::Local::now().format("%Y-%m-%d").to_string()
@@ -166,15 +189,15 @@ fn set_done(id: i64, done: bool) -> String {
                 String::new()
             };
             match conn.execute(
-                "UPDATE todos SET done = ?1, completed_at = ?2 WHERE id = ?3",
-                params![val, completed, id],
+                "UPDATE todos SET status = ?1, done = ?2, completed_at = ?3 WHERE id = ?4",
+                params![status, val, completed, id],
             ) {
                 Ok(0) => format!("No todo with id {}", id),
                 Ok(_) => {
                     let text: String = conn
                         .query_row("SELECT text FROM todos WHERE id = ?1", params![id], |r| r.get(0))
                         .unwrap_or_else(|_| id.to_string());
-                    if done { format!("✅ Done: {}", text) } else { format!("↩ Undone: {}", text) }
+                    format!("{}: {}", status_label(status), text)
                 }
                 Err(e) => format!("DB error: {}", e),
             }
@@ -186,7 +209,14 @@ fn set_done(id: i64, done: bool) -> String {
 fn clear_todos() -> String {
     match open_db() {
         Ok(conn) => match conn.execute("DELETE FROM todos", []) {
-            Ok(n) => format!("Cleared {} todos.", n),
+            Ok(n) => {
+                // Reset the autoincrement counter so the next inserted row starts at id=1.
+                let _ = conn.execute(
+                    "DELETE FROM sqlite_sequence WHERE name = 'todos'",
+                    [],
+                );
+                format!("Cleared {} todos.", n)
+            }
             Err(e) => format!("DB error: {}", e),
         },
         Err(e) => format!("DB error: {}", e),
@@ -215,7 +245,7 @@ fn set_field(id: i64, field: &str, value: &str) -> String {
 
 fn generate_html(items: &[TodoItem]) -> String {
     let total = items.len();
-    let done_count = items.iter().filter(|t| t.done).count();
+    let done_count = items.iter().filter(|t| t.status == "done").count();
     let pct = if total > 0 { done_count * 100 / total } else { 0 };
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -234,11 +264,12 @@ fn generate_html(items: &[TodoItem]) -> String {
                 .collect::<Vec<_>>()
                 .join(",");
             format!(
-                r#"{{"id":{},"text":{},"desc":{},"done":{},"priority":{},"due":{},"tags":{},"date":"{}","completed":{},"comments":[{}]}}"#,
+                r#"{{"id":{},"text":{},"desc":{},"done":{},"status":{},"priority":{},"due":{},"tags":{},"date":"{}","completed":{},"comments":[{}]}}"#,
                 t.id,
                 serde_json::to_string(&t.text).unwrap_or_default(),
                 serde_json::to_string(&t.description).unwrap_or_default(),
                 if t.done { "true" } else { "false" },
+                serde_json::to_string(&t.status).unwrap_or_default(),
                 t.priority,
                 serde_json::to_string(&t.due_date).unwrap_or_default(),
                 serde_json::to_string(&t.tags).unwrap_or_default(),
@@ -309,7 +340,9 @@ td.col-date{{color:#6c7086;font-size:12px;width:94px;white-space:nowrap}}
 td.col-completed{{color:#a6e3a1;font-size:12px;width:94px;white-space:nowrap}}
 td.col-comments{{width:64px;font-size:12px;color:#6c7086;text-align:center}}
 .badge{{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;white-space:nowrap}}
-.badge-pending{{background:#f38ba820;color:#f38ba8;border:1px solid #f38ba840}}
+.badge-todo{{background:#f38ba820;color:#f38ba8;border:1px solid #f38ba840}}
+.badge-in-progress{{background:#89b4fa20;color:#89b4fa;border:1px solid #89b4fa40}}
+.badge-blocked{{background:#fab38720;color:#fab387;border:1px solid #fab38740}}
 .badge-done{{background:#a6e3a120;color:#a6e3a1;border:1px solid #a6e3a140}}
 .pri-1{{color:#f38ba8}}.pri-2{{color:#fab387}}.pri-3{{color:#f9e2af}}.pri-4{{color:#89b4fa}}
 .tag{{display:inline-block;font-size:10px;background:#45475a;color:#cdd6f4;border-radius:4px;padding:1px 6px;margin:1px 2px 1px 0}}
@@ -395,6 +428,9 @@ const TODAY = '{today}';
 const DATA_URL = '/todo/data';
 const PRI_LABEL = {{1:'🔴 Urgent',2:'🟠 High',3:'🟡 Normal',4:'🔵 Low'}};
 const PRI_CLASS = {{1:'pri-1',2:'pri-2',3:'pri-3',4:'pri-4'}};
+const STATUS_LABEL = {{todo:'⬜ Todo',in_progress:'🟦 In Progress',blocked:'⛔ Blocked',done:'✅ Done'}};
+const STATUS_CLASS = {{todo:'badge-todo',in_progress:'badge-in-progress',blocked:'badge-blocked',done:'badge-done'}};
+const STATUS_ORDER = {{todo:1,in_progress:2,blocked:3,done:4}};
 let sortCol='id', sortDir=1, groupBy='none', filterText='', expanded=new Set();
 // columnFilters: map of filterable col key → selected value string (or null)
 const columnFilters = {{}};
@@ -402,13 +438,13 @@ const columnFilters = {{}};
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function isOverdue(t) {{
-  return !t.done && t.due && t.due < TODAY;
+  return t.status !== 'done' && t.due && t.due < TODAY;
 }}
 
 function colValues(col) {{
   const set = new Set();
   RAW.forEach(t => {{
-    if (col === 'status') {{ set.add(t.done ? '✅ Done' : '⬜ Pending'); }}
+    if (col === 'status') {{ set.add(statusLabel(t.status)); }}
     else if (col === 'priority') {{ set.add(PRI_LABEL[t.priority] || 'Normal'); }}
     else if (col === 'tags') {{
       const tags = t.tags ? t.tags.split(',').map(s=>s.trim()).filter(Boolean) : [];
@@ -423,7 +459,7 @@ function colValues(col) {{
 }}
 
 function colMatchesFilter(t, col, selected) {{
-  if (col === 'status') return (t.done ? '✅ Done' : '⬜ Pending') === selected;
+  if (col === 'status') return statusLabel(t.status) === selected;
   if (col === 'priority') return (PRI_LABEL[t.priority] || 'Normal') === selected;
   if (col === 'tags') {{
     const tags = t.tags ? t.tags.split(',').map(s=>s.trim()).filter(Boolean) : [];
@@ -519,7 +555,7 @@ function render() {{
 
   data.sort((a,b) => {{
     let av, bv;
-    if (sortCol==='status') {{ av=a.done?1:0; bv=b.done?1:0; }}
+    if (sortCol==='status') {{ av=statusSortKey(a.status); bv=statusSortKey(b.status); }}
     else if (sortCol==='priority') {{ av=a.priority; bv=b.priority; }}
     else if (sortCol==='due') {{ av=a.due||'9999'; bv=b.due||'9999'; }}
     else if (sortCol==='date') {{ av=a.date; bv=b.date; }}
@@ -529,7 +565,7 @@ function render() {{
     return av<bv ? -sortDir : av>bv ? sortDir : 0;
   }});
 
-  const vis=data.length, visDone=data.filter(t=>t.done).length;
+  const vis=data.length, visDone=data.filter(t=>t.status==='done').length;
   const visOverdue=data.filter(isOverdue).length;
   document.getElementById('s-total').textContent=vis;
   document.getElementById('s-pending').textContent=vis-visDone;
@@ -551,16 +587,16 @@ function render() {{
     const groups=new Map();
     data.forEach(t=>{{
       let key;
-      if (groupBy==='status') key=t.done?'✅ Done':'⬜ Pending';
+      if (groupBy==='status') key=statusLabel(t.status);
       else if (groupBy==='priority') key=PRI_LABEL[t.priority]||'Normal';
       else if (groupBy==='tags') {{ (t.tags?t.tags.split(',').map(s=>s.trim()).filter(Boolean):['(no tags)']).forEach(tag=>{{ if(!groups.has(tag)) groups.set(tag,[]); groups.get(tag).push(t); }}); return; }}
-      else if (groupBy==='due') key=t.due||(t.done?'✅ Done':'No due date');
+      else if (groupBy==='due') key=t.due||(t.status==='done'?'✅ Done':'No due date');
       else key=t.date;
       if(!groups.has(key)) groups.set(key,[]);
       groups.get(key).push(t);
     }});
     const keys=[...groups.keys()].sort();
-    if(groupBy==='status') keys.reverse();
+    if(groupBy==='status') keys.sort((a,b)=>statusSortKey(statusFromLabel(a))-statusSortKey(statusFromLabel(b)));
     if(groupBy==='priority') keys.sort((a,b)=>Object.values(PRI_LABEL).indexOf(a)-Object.values(PRI_LABEL).indexOf(b));
     keys.forEach(key=>{{
       const hdr=document.createElement('tr'); hdr.className='group-header';
@@ -584,9 +620,9 @@ function makeDataRow(t) {{
   tr.innerHTML=`
     <td class="col-expand">${{expanded.has(t.id)?'▾':'▸'}}</td>
     <td class="col-id">#${{t.id}}</td>
-    <td class="col-text ${{t.done?'done-text':''}}">${{esc(t.text)}}${{descPreview}}</td>
+    <td class="col-text ${{t.status==='done'?'done-text':''}}">${{esc(t.text)}}${{descPreview}}</td>
     <td class="col-pri"><span class="${{PRI_CLASS[t.priority]||'pri-3'}}">${{PRI_LABEL[t.priority]||'Normal'}}</span></td>
-    <td class="col-status"><span class="badge ${{t.done?'badge-done':'badge-pending'}}">${{t.done?'✅ Done':'⬜ Pending'}}</span></td>
+    <td class="col-status"><span class="badge ${{statusClass(t.status)}}">${{statusLabel(t.status)}}</span></td>
     <td class="col-due">${{dueDisplay}}</td>
     <td class="col-tags">${{tagHtml||'<span style="color:#45475a">—</span>'}}</td>
     <td class="col-date">${{t.date}}</td>
@@ -697,6 +733,7 @@ pub fn todo_live_data_json() -> String {
                 "text": t.text,
                 "desc": t.description,
                 "done": t.done,
+                "status": t.status,
                 "priority": t.priority,
                 "due": t.due_date,
                 "tags": t.tags,
@@ -742,8 +779,8 @@ impl Plugin for TodoPlugin {
                 let due_str = if !item.due_date.is_empty() { format!(" · due {}", item.due_date) } else { String::new() };
                 QueryResult {
                     id: format!("todo:{}", item.id),
-                    title: format!("{} {}", if item.done { "✅" } else { "☐" }, item.text),
-                    subtitle: Some(format!("#{} · {} · p{}{}", item.id, &item.created_at[..10], item.priority, due_str)),
+                    title: format!("{} {}", status_label(&item.status), item.text),
+                    subtitle: Some(format!("#{} · {} · {} · p{}{}", item.id, &item.created_at[..10], status_label(&item.status), item.priority, due_str)),
                     icon: None,
                     score: 60,
                     action_type: "copy".to_string(),
@@ -756,11 +793,11 @@ impl Plugin for TodoPlugin {
             return vec![QueryResult {
                 id: "todo:view".to_string(),
                 title: "Open todos in browser".to_string(),
-                subtitle: Some("Generates HTML and opens your default browser".to_string()),
+                subtitle: Some("Opens the live todo page in your default browser".to_string()),
                 icon: Some("🌐".to_string()),
                 score: 80,
-                action_type: "todo_view".to_string(),
-                action_data: String::new(),
+                action_type: "open_url".to_string(),
+                action_data: "http://127.0.0.1:1421/todo".to_string(),
             }];
         }
 
@@ -783,6 +820,10 @@ impl Plugin for TodoPlugin {
         }
         parse_id_action!("done ", "todo_done", "✅", "Mark done");
         parse_id_action!("undone ", "todo_undone", "↩", "Mark undone");
+        parse_id_action!("status todo ", "todo_status_todo", "⬜", "Mark todo");
+        parse_id_action!("status in_progress ", "todo_status_in_progress", "🟦", "Mark in progress");
+        parse_id_action!("status blocked ", "todo_status_blocked", "⛔", "Mark blocked");
+        parse_id_action!("status done ", "todo_status_done", "✅", "Mark done");
         parse_id_action!("remove ", "todo_remove", "🗑", "Remove");
         parse_id_action!("rm ", "todo_remove", "🗑", "Remove");
 
@@ -802,13 +843,13 @@ impl Plugin for TodoPlugin {
             "type": "function",
             "function": {
                 "name": "todo_memory",
-                "description": "Manage a persistent todo list stored in SQLite. Fields: text, description, priority (1=urgent/2=high/3=normal/4=low), due_date (YYYY-MM-DD), tags (comma-separated), completed_at (auto-set on done). Actions: list, add, remove, done, undone, clear, view (live browser view), set_field (update priority/due_date/tags/description), comment_add, note_save, note_read.",
+                "description": "Manage a persistent todo list stored in SQLite. Fields: text, status (todo/in_progress/blocked/done), description, priority (1=urgent/2=high/3=normal/4=low), due_date (YYYY-MM-DD), tags (comma-separated), completed_at (auto-set on done). Actions: list, add, remove, done, undone, clear, view (live browser view), set_status, set_field (update priority/due_date/tags/description), comment_add, note_save, note_read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["list","add","remove","done","undone","clear","view","set_field","comment_add","description_set","note_save","note_read"],
+                            "enum": ["list","add","remove","done","undone","clear","view","set_status","set_field","comment_add","description_set","note_save","note_read"],
                             "description": "Action to perform"
                         },
                         "text": {
@@ -823,6 +864,11 @@ impl Plugin for TodoPlugin {
                         "content": {
                             "type": "string",
                             "description": "New value (set_field), comment body (comment_add), description (description_set), or note content (note_save)"
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["todo","in_progress","blocked","done"],
+                            "description": "New status for set_status action"
                         }
                     },
                     "required": ["action"]
@@ -836,6 +882,7 @@ impl Plugin for TodoPlugin {
         let text = args["text"].as_str().unwrap_or("");
         let content = args["content"].as_str().unwrap_or("");
         let field = args["field"].as_str().unwrap_or("");
+        let status = args["status"].as_str().unwrap_or("");
 
         match action {
             "list" => {
@@ -844,9 +891,9 @@ impl Plugin for TodoPlugin {
                 items.iter().map(|t| {
                     let due = if t.due_date.is_empty() { String::new() } else { format!(" due:{}", t.due_date) };
                     let tags = if t.tags.is_empty() { String::new() } else { format!(" [{}]", t.tags) };
-                    format!("{}. [{}] {} (id:{} p:{}{}{})",
-                        t.id, if t.done {"x"} else {" "}, t.text, t.id,
-                        priority_label(t.priority), due, tags)
+                    format!("{}. [{}] {} (id:{} status:{} p:{}{}{})",
+                        t.id, if t.status == "done" {"x"} else {" "}, t.text, t.id,
+                        status_label(&t.status), priority_label(t.priority), due, tags)
                 }).collect::<Vec<_>>().join("\n")
             }
             "add" => {
@@ -861,15 +908,21 @@ impl Plugin for TodoPlugin {
             "done" => {
                 let id: i64 = text.parse().unwrap_or(0);
                 if id == 0 { return format!("Invalid id: '{}'", text); }
-                set_done(id, true)
+                set_status(id, "done")
             }
             "undone" => {
                 let id: i64 = text.parse().unwrap_or(0);
                 if id == 0 { return format!("Invalid id: '{}'", text); }
-                set_done(id, false)
+                set_status(id, "todo")
             }
             "clear" => clear_todos(),
             "view" => "Todo live view is served by the app HTTP endpoint.".to_string(),
+            "set_status" => {
+                let id: i64 = text.parse().unwrap_or(0);
+                if id == 0 { return format!("Invalid id: '{}'", text); }
+                if status.is_empty() { return "Error: status required (todo/in_progress/blocked/done)".to_string(); }
+                set_status(id, status)
+            }
             "set_field" => {
                 let id: i64 = text.parse().unwrap_or(0);
                 if id == 0 { return format!("Invalid id: '{}'", text); }
