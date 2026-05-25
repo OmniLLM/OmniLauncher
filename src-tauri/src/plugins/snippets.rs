@@ -80,10 +80,9 @@ fn load_snippets() -> Vec<(String, String)> {
         Ok(c) => c,
         Err(_) => return vec![],
     };
-    let map: std::collections::HashMap<String, String> =
-        match serde_json::from_str(&content) {
-            Ok(m) => m,
-            Err(_) => return vec![],
-        };
+    let map: std::collections::HashMap<String, String> = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(_) => return vec![],
+    };
     map.into_iter().collect()
 }

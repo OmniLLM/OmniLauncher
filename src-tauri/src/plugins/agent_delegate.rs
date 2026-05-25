@@ -26,11 +26,7 @@ fn build_prompt(prompt: &str, context: Option<&str>) -> String {
 }
 
 // Helper to run agent and return (elapsed_secs, output)
-async fn run_agent_timed(
-    agent_name: String,
-    prompt: String,
-    timeout_secs: u64,
-) -> (u64, String) {
+async fn run_agent_timed(agent_name: String, prompt: String, timeout_secs: u64) -> (u64, String) {
     let start = Instant::now();
     match tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
@@ -85,8 +81,9 @@ impl Plugin for AgentDelegatePlugin {
             Some(("codex", prompt.trim()))
         } else if let Some(prompt) = raw.strip_prefix("@omnicode ") {
             Some(("omnicode", prompt.trim()))
-        } else if let Some(prompt) = raw.strip_prefix("@opencode ") {
-            Some(("opencode", prompt.trim()))
+        } else if raw.strip_prefix("@opencode ").is_some() {
+            raw.strip_prefix("@opencode ")
+                .map(|prompt| ("opencode", prompt.trim()))
         } else {
             None
         };
@@ -96,11 +93,7 @@ impl Plugin for AgentDelegatePlugin {
                 return vec![];
             }
 
-            let shell_cmd = format!(
-                "{} -p \"{}\"",
-                agent_name,
-                prompt.replace('"', "\\\"")
-            );
+            let shell_cmd = format!("{} -p \"{}\"", agent_name, prompt.replace('"', "\\\""));
 
             return vec![QueryResult {
                 id: format!("agent:{}:{}", agent_name, prompt),
@@ -188,7 +181,8 @@ impl Plugin for AgentDelegatePlugin {
         let context = args["context"].as_str().map(|s| s.to_string());
 
         if agent_name.is_empty() || prompt_raw.is_empty() {
-            return "Both agent_name and prompt are required (or provide a tasks array)".to_string();
+            return "Both agent_name and prompt are required (or provide a tasks array)"
+                .to_string();
         }
 
         let prompt = build_prompt(&prompt_raw, context.as_deref());

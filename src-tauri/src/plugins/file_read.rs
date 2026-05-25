@@ -57,7 +57,11 @@ impl Plugin for FileReadPlugin {
 
         let lines: Vec<&str> = content.lines().collect();
         let start_idx = (start - 1).min(lines.len());
-        let end_idx = if end > 0 { end.min(lines.len()) } else { lines.len() };
+        let end_idx = if end > 0 {
+            end.min(lines.len())
+        } else {
+            lines.len()
+        };
 
         let selected: Vec<String> = lines[start_idx..end_idx]
             .iter()
@@ -67,7 +71,11 @@ impl Plugin for FileReadPlugin {
 
         let result = selected.join("\n");
         if result.len() > 8000 {
-            format!("{}\n... (truncated, {} total lines)", &result[..8000], lines.len())
+            format!(
+                "{}\n... (truncated, {} total lines)",
+                &result[..8000],
+                lines.len()
+            )
         } else {
             result
         }

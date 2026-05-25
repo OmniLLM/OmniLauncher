@@ -88,7 +88,10 @@ export default function SettingsPanel({
   // Close dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
         setShowModelDropdown(false);
       }
     };
@@ -97,7 +100,7 @@ export default function SettingsPanel({
   }, []);
 
   const filteredModels = models.filter((m) =>
-    m.toLowerCase().includes(modelFilter.toLowerCase())
+    m.toLowerCase().includes(modelFilter.toLowerCase()),
   );
 
   const handleModelSelect = (model: string) => {
@@ -130,7 +133,9 @@ export default function SettingsPanel({
     <div className="settings">
       <div className="settings__header">
         <h3 className="settings__title">Settings</h3>
-        <button className="settings__close" onClick={onClose}>✕</button>
+        <button className="settings__close" onClick={onClose}>
+          ✕
+        </button>
       </div>
 
       <div className="settings__form">
@@ -139,7 +144,9 @@ export default function SettingsPanel({
           <input
             className="settings__input"
             value={settings.ai_base_url}
-            onChange={(e) => setSettings((s) => s && { ...s, ai_base_url: e.target.value })}
+            onChange={(e) =>
+              setSettings((s) => s && { ...s, ai_base_url: e.target.value })
+            }
           />
         </label>
 
@@ -149,7 +156,9 @@ export default function SettingsPanel({
             className="settings__input"
             type="password"
             value={settings.ai_api_key}
-            onChange={(e) => setSettings((s) => s && { ...s, ai_api_key: e.target.value })}
+            onChange={(e) =>
+              setSettings((s) => s && { ...s, ai_api_key: e.target.value })
+            }
             placeholder="(optional)"
           />
         </label>
@@ -157,7 +166,9 @@ export default function SettingsPanel({
         <div className="settings__model-field" ref={dropdownRef}>
           <div className="settings__label">
             Model
-            {modelsLoading && <span className="settings__model-loading"> (loading...)</span>}
+            {modelsLoading && (
+              <span className="settings__model-loading"> (loading...)</span>
+            )}
             {modelsError && <span className="settings__model-error"> ⚠</span>}
           </div>
           <input
@@ -185,11 +196,16 @@ export default function SettingsPanel({
               ))}
             </div>
           )}
-          {showModelDropdown && !modelsLoading && filteredModels.length === 0 && models.length > 0 && (
-            <div className="settings__model-dropdown">
-              <div className="settings__model-option settings__model-option--empty">No matches</div>
-            </div>
-          )}
+          {showModelDropdown &&
+            !modelsLoading &&
+            filteredModels.length === 0 &&
+            models.length > 0 && (
+              <div className="settings__model-dropdown">
+                <div className="settings__model-option settings__model-option--empty">
+                  No matches
+                </div>
+              </div>
+            )}
         </div>
 
         <label>
@@ -197,7 +213,9 @@ export default function SettingsPanel({
           <select
             className="settings__select"
             value={settings.theme}
-            onChange={(e) => setSettings((s) => s && { ...s, theme: e.target.value })}
+            onChange={(e) =>
+              setSettings((s) => s && { ...s, theme: e.target.value })
+            }
           >
             <option value="dark">Dark (Catppuccin Mocha)</option>
             <option value="light">Light (Catppuccin Latte)</option>
@@ -206,7 +224,9 @@ export default function SettingsPanel({
 
         <div>
           <div className="settings__label">Hotkey</div>
-          <div className="settings__input settings__input--readonly">{settings.hotkey}</div>
+          <div className="settings__input settings__input--readonly">
+            {settings.hotkey}
+          </div>
         </div>
 
         <button

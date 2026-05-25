@@ -3,11 +3,15 @@ use omnilauncher_lib::{
         client::AiClient,
         router::{ConversationContext, Router},
     },
-    create_plugin_manager, load_settings, save_settings, AppSettings, QueryResult,
-    SkillInfo, SkillManager,
+    create_plugin_manager, load_settings, save_settings, AppSettings, QueryResult, SkillInfo,
+    SkillManager,
 };
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{
+    image::Image,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    LogicalPosition, LogicalSize, Manager, Position, Size,
+};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tokio::sync::Mutex;
 
@@ -47,15 +51,47 @@ pub fn run() {
         .setup(move |app| {
             let window = app.get_webview_window("main").unwrap();
 
-            // Resize window to 1/2 of screen
-            if let Ok(Some(monitor)) = window.current_monitor() {
-                let screen_size = monitor.size();
-                let scale = monitor.scale_factor();
-                let width = (screen_size.width as f64 / scale) / 2.0;
-                let height = (screen_size.height as f64 / scale) / 2.0;
-                let _ = window.set_size(tauri::LogicalSize::new(width, height));
-                let _ = window.center();
+            // Center the initial window before the frontend performs its first resize.
+            let _ = window.center();
+
+            // ── System tray icon ──────────────────────────────────────────
+            let icon = Image::from_path(
+                app.path()
+                    .resource_dir()
+                    .unwrap_or_default()
+                    .join("icons/32x32.png"),
+            )
+            .or_else(|_| {
+                // Fallback: load from the src-tauri/icons directory during dev
+                Image::from_path("icons/32x32.png")
+            })
+            .ok();
+
+            let mut tray_builder =
+                TrayIconBuilder::new().tooltip("OmniLauncher — Ctrl+Shift+O to toggle");
+
+            if let Some(img) = icon {
+                tray_builder = tray_builder.icon(img);
             }
+
+            let tray_window = window.clone();
+            tray_builder
+                .on_tray_icon_event(move |_tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        if tray_window.is_visible().unwrap_or(false) {
+                            let _ = tray_window.hide();
+                        } else {
+                            let _ = tray_window.show();
+                            let _ = tray_window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
 
             let global_shortcut = app.global_shortcut();
 
@@ -70,7 +106,9 @@ pub fn run() {
                         }
                     }
                 })
-                .expect("Failed to register global shortcut");
+                .unwrap_or_else(|err| {
+                    eprintln!("Failed to register global shortcut: {err}");
+                });
 
             Ok(())
         })
@@ -86,9 +124,49 @@ pub fn run() {
             list_skills,
             reload_skills,
             install_skill,
+            set_window_height,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[tauri::command]
+async fn set_window_height(window: tauri::WebviewWindow, height: f64) -> Result<bool, String> {
+    sync_window_geometry(&window, height).await
+}
+
+async fn sync_window_geometry(window: &tauri::WebviewWindow, height: f64) -> Result<bool, String> {
+    let clamped_height = height.clamp(56.0, 640.0);
+
+    if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
+        let scale_factor = monitor.scale_factor();
+        let monitor_size = monitor.size();
+        let monitor_position = monitor.position();
+        let monitor_width = monitor_size.width as f64 / scale_factor;
+        let monitor_height = monitor_size.height as f64 / scale_factor;
+        let monitor_x = monitor_position.x as f64 / scale_factor;
+        let monitor_y = monitor_position.y as f64 / scale_factor;
+
+        let window_width = monitor_width / 3.0;
+        let window_x = monitor_x + (monitor_width - window_width) / 2.0;
+        let window_y = monitor_y + (monitor_height - clamped_height) / 2.0;
+
+        window
+            .set_size(Size::Logical(LogicalSize::new(
+                window_width,
+                clamped_height,
+            )))
+            .map_err(|e| e.to_string())?;
+        window
+            .set_position(Position::Logical(LogicalPosition::new(window_x, window_y)))
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    } else {
+        window
+            .set_size(Size::Logical(LogicalSize::new(680.0, clamped_height)))
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    }
 }
 
 #[tauri::command]
@@ -182,7 +260,10 @@ async fn slash_preview(
                     icon: Some("▶️".to_string()),
                     score: 90,
                     action_type: "url".to_string(),
-                    action_data: format!("https://www.youtube.com/results?search_query={}", encoded),
+                    action_data: format!(
+                        "https://www.youtube.com/results?search_query={}",
+                        encoded
+                    ),
                 },
                 QueryResult {
                     id: "web-github".to_string(),
@@ -204,13 +285,17 @@ async fn slash_preview(
                     .output()
             } else {
                 std::process::Command::new("sh")
-                    .args(["-c", &format!("ps aux | grep -i '{}' | grep -v grep | head -10", arg)])
+                    .args([
+                        "-c",
+                        &format!("ps aux | grep -i '{}' | grep -v grep | head -10", arg),
+                    ])
                     .output()
             };
             match output {
                 Ok(out) => {
                     let text = String::from_utf8_lossy(&out.stdout);
-                    let results: Vec<QueryResult> = text.lines()
+                    let results: Vec<QueryResult> = text
+                        .lines()
                         .filter(|l| !l.is_empty())
                         .enumerate()
                         .filter_map(|(i, line)| {

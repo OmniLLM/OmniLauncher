@@ -1,5 +1,6 @@
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
+use std::cmp::Reverse;
 use sysinfo::System;
 
 pub struct ProcessManagerPlugin;
@@ -36,7 +37,7 @@ impl Plugin for ProcessManagerPlugin {
                     )
                 })
                 .collect();
-            processes.sort_by(|a, b| b.2.cmp(&a.2));
+            processes.sort_by_key(|b| Reverse(b.2));
             processes.truncate(10);
 
             return processes
@@ -51,7 +52,10 @@ impl Plugin for ProcessManagerPlugin {
                         icon: Some("⚙️".to_string()),
                         score: 100 - i as i32,
                         action_type: "copy".to_string(),
-                        action_data: format!("{} (PID: {}) — {:.1} MB, {:.1}% CPU", name, pid, mem_mb, cpu),
+                        action_data: format!(
+                            "{} (PID: {}) — {:.1} MB, {:.1}% CPU",
+                            name, pid, mem_mb, cpu
+                        ),
                     }
                 })
                 .collect();
@@ -140,7 +144,7 @@ impl Plugin for ProcessManagerPlugin {
                         )
                     })
                     .collect();
-                processes.sort_by(|a, b| b.2.cmp(&a.2));
+                processes.sort_by_key(|b| Reverse(b.2));
                 processes.truncate(10);
 
                 if processes.is_empty() {
@@ -152,7 +156,14 @@ impl Plugin for ProcessManagerPlugin {
                     .enumerate()
                     .map(|(i, (pid, name, mem, cpu))| {
                         let mem_mb = mem as f64 / 1024.0;
-                        format!("#{}: {} (PID: {}) — {:.1} MB, {:.1}% CPU", i + 1, name, pid, mem_mb, cpu)
+                        format!(
+                            "#{}: {} (PID: {}) — {:.1} MB, {:.1}% CPU",
+                            i + 1,
+                            name,
+                            pid,
+                            mem_mb,
+                            cpu
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join("\n")

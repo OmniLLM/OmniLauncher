@@ -1,4 +1,4 @@
-.PHONY: help dev build build-frontend install install-deps clean lint format check test release bundle
+.PHONY: help dev prod restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle stop-running stop-dev-server
 
 SHELL := pwsh
 
@@ -6,6 +6,9 @@ help:
 	@echo OmniLauncher - Makefile targets:
 	@powershell -Command "Write-Host ''"
 	@echo   dev              Start dev server with hot reload (Vite + Tauri)
+	@echo   prod             Build and start app in production mode (release)
+	@echo   restart          Restart production app (use REBUILD=1 to rebuild)
+	@echo   restart-rebuild  Rebuild release binary and restart production app
 	@echo   build            Build frontend + Tauri (debug)
 	@echo   build-frontend   Build frontend only (Vite)
 	@echo   release          Build release binary with optimizations
@@ -18,20 +21,33 @@ help:
 	@echo   check            Run TypeScript + Rust type checks
 	@echo   test             Run all tests
 
-dev:
-	npm run tauri dev
+dev: stop-running stop-dev-server
+	@cmd /c "set CARGO_TARGET_DIR=target\dev&& npm run tauri dev"
 
-build: build-frontend
+prod: stop-running release
+	@pwsh -NoProfile -Command "if (Test-Path src-tauri/target/release/omnilauncher.exe) { Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' } else { Write-Error 'Release binary not found. Run make release first.'; exit 1 }"
+
+restart: stop-running
+ifeq ($(REBUILD),1)
+	$(MAKE) prod
+else
+	@pwsh -NoProfile -Command "if (Test-Path src-tauri/target/release/omnilauncher.exe) { Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' } else { Write-Error 'Release binary not found. Run make prod or make restart REBUILD=1.'; exit 1 }"
+endif
+
+restart-rebuild:
+	$(MAKE) restart REBUILD=1
+
+build: stop-running build-frontend
 	cd src-tauri && cargo build
 
 build-frontend:
 	npm run build
 
-release: build-frontend
-	cd src-tauri && cargo build --release
+release: stop-running build-frontend
+	npx tauri build --no-bundle
 
-bundle: build-frontend
-	npx tauri build
+bundle: stop-running build-frontend
+	@cmd /c "set CARGO_TARGET_DIR=target\bundle&& npx tauri build"
 
 install: install-deps
 
@@ -48,12 +64,18 @@ lint:
 	cd src-tauri && cargo clippy -- -D warnings
 
 format:
-	npx prettier --write "src/**/*.{ts,tsx,css,json}" 2>$null
+	npx prettier --write "src/**/*.{ts,tsx,css,json}"
 	cd src-tauri && cargo fmt
 
 check:
 	npx tsc --noEmit
 	cd src-tauri && cargo check
 
-test:
-	cd src-tauri && cargo test
+test: stop-running
+	@cmd /c "cd /d src-tauri && set CARGO_TARGET_DIR=target\test&& cargo test"
+
+stop-running:
+	@cmd /c "taskkill /IM omnilauncher.exe /F /T >NUL 2>&1 & exit /b 0"
+
+stop-dev-server:
+	@powershell -NoProfile -Command 'Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { Stop-Process -Id ($$_.OwningProcess) -Force -ErrorAction SilentlyContinue }; exit 0'

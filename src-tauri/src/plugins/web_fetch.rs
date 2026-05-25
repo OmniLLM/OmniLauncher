@@ -63,11 +63,7 @@ impl Plugin for WebFetchPlugin {
                 }
                 match resp.text().await {
                     Ok(text) => {
-                        let result = if raw {
-                            text
-                        } else {
-                            strip_html(&text)
-                        };
+                        let result = if raw { text } else { strip_html(&text) };
                         if result.len() > 8000 {
                             format!("{}\n... (truncated)", &result[..8000])
                         } else {
@@ -86,13 +82,19 @@ fn strip_html(html: &str) -> String {
     // Simple HTML to text: remove tags, decode basic entities
     let mut text = html.to_string();
     // Remove script/style blocks
-    let re_script = regex::Regex::new(r"(?is)<(script|style)[^>]*>.*?</\1>").unwrap_or_else(|_| regex::Regex::new(".^").unwrap());
+    let re_script = regex::Regex::new(r"(?is)<script[^>]*>.*?</script>")
+        .unwrap_or_else(|_| regex::Regex::new(".^").unwrap());
     text = re_script.replace_all(&text, "").to_string();
+    let re_style = regex::Regex::new(r"(?is)<style[^>]*>.*?</style>")
+        .unwrap_or_else(|_| regex::Regex::new(".^").unwrap());
+    text = re_style.replace_all(&text, "").to_string();
     // Remove tags
-    let re_tags = regex::Regex::new(r"<[^>]+>").unwrap_or_else(|_| regex::Regex::new(".^").unwrap());
+    let re_tags =
+        regex::Regex::new(r"<[^>]+>").unwrap_or_else(|_| regex::Regex::new(".^").unwrap());
     text = re_tags.replace_all(&text, " ").to_string();
     // Decode entities
-    text = text.replace("&amp;", "&")
+    text = text
+        .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")

@@ -7,12 +7,76 @@ use tauri::Emitter;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// For assistant messages that include tool calls
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    /// For tool result messages (role="tool")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Tool name for tool result messages
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl Message {
+    pub fn system(content: &str) -> Self {
+        Self {
+            role: "system".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+    pub fn user(content: &str) -> Self {
+        Self {
+            role: "user".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+    pub fn assistant(content: &str) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+    pub fn assistant_tool_calls(content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content,
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+            name: None,
+        }
+    }
+    pub fn tool_result(call_id: &str, name: &str, result: &str) -> Self {
+        Self {
+            role: "tool".into(),
+            content: Some(result.into()),
+            tool_calls: None,
+            tool_call_id: Some(call_id.into()),
+            name: Some(name.into()),
+        }
+    }
+    /// Helper to get content as &str
+    pub fn content_str(&self) -> &str {
+        self.content.as_deref().unwrap_or("")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub call_type: Option<String>,
     pub function: FunctionCall,
 }
 
@@ -45,7 +109,7 @@ impl AiClient {
 
     fn build_client(&self) -> Result<reqwest::Client, String> {
         reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120))
             .build()
             .map_err(|e| e.to_string())
     }
@@ -54,7 +118,8 @@ impl AiClient {
     fn is_retriable(err: &str) -> bool {
         let lower = err.to_lowercase();
         // Network-level errors (reqwest errors contain these keywords)
-        if lower.contains("connection") || lower.contains("network") || lower.contains("timed out") {
+        if lower.contains("connection") || lower.contains("network") || lower.contains("timed out")
+        {
             return true;
         }
         // HTTP status codes and textual rate-limit messages
@@ -97,7 +162,10 @@ impl AiClient {
                 tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
             }
 
-            match self.chat_with_tools_once(messages.clone(), tools.clone()).await {
+            match self
+                .chat_with_tools_once(messages.clone(), tools.clone())
+                .await
+            {
                 Ok(resp) => return Ok(resp),
                 Err(e) => {
                     // Do NOT retry on non-429 4xx errors (auth, bad request, etc.)
@@ -135,12 +203,44 @@ impl AiClient {
     ) -> Result<ChatResponse, String> {
         let client = self.build_client()?;
 
+        let api_messages: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| {
+                let mut msg = serde_json::json!({ "role": m.role });
+
+                // Content
+                match &m.content {
+                    Some(c) => msg["content"] = serde_json::json!(c),
+                    None => msg["content"] = serde_json::Value::Null,
+                }
+
+                // Tool calls on assistant messages
+                if let Some(ref tcs) = m.tool_calls {
+                    let tc_json: Vec<serde_json::Value> = tcs.iter().map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": { "name": tc.function.name, "arguments": tc.function.arguments }
+                    })
+                }).collect();
+                    msg["tool_calls"] = serde_json::json!(tc_json);
+                }
+
+                // Tool result fields
+                if let Some(ref id) = m.tool_call_id {
+                    msg["tool_call_id"] = serde_json::json!(id);
+                }
+                if let Some(ref name) = m.name {
+                    msg["name"] = serde_json::json!(name);
+                }
+
+                msg
+            })
+            .collect();
+
         let mut body = serde_json::json!({
             "model": self.model,
-            "messages": messages.iter().map(|m| serde_json::json!({
-                "role": m.role,
-                "content": m.content
-            })).collect::<Vec<_>>()
+            "messages": api_messages,
         });
 
         if !tools.is_empty() {
@@ -176,6 +276,7 @@ impl AiClient {
                 .filter_map(|tc| {
                     Some(ToolCall {
                         id: tc["id"].as_str()?.to_string(),
+                        call_type: Some("function".to_string()),
                         function: FunctionCall {
                             name: tc["function"]["name"].as_str()?.to_string(),
                             arguments: tc["function"]["arguments"].as_str()?.to_string(),
@@ -205,7 +306,7 @@ impl AiClient {
             "model": self.model,
             "messages": messages.iter().map(|m| serde_json::json!({
                 "role": m.role,
-                "content": m.content
+                "content": m.content_str()
             })).collect::<Vec<_>>(),
             "stream": true
         });

@@ -168,9 +168,11 @@ impl SkillManager {
                 // Check name
                 let name_match = query_lower.contains(&skill.meta.name.to_lowercase());
                 // Check tags
-                let tag_match = skill.meta.tags.iter().any(|t| {
-                    query_lower.contains(&t.to_lowercase())
-                });
+                let tag_match = skill
+                    .meta
+                    .tags
+                    .iter()
+                    .any(|t| query_lower.contains(&t.to_lowercase()));
                 trigger_match || name_match || tag_match
             })
             .collect()
@@ -196,8 +198,8 @@ impl SkillManager {
             ));
         }
 
-        let content = String::from_utf8(output.stdout)
-            .map_err(|e| format!("UTF-8 decode error: {}", e))?;
+        let content =
+            String::from_utf8(output.stdout).map_err(|e| format!("UTF-8 decode error: {}", e))?;
 
         // Parse to extract name
         let tmp_path = PathBuf::from("/tmp/SKILL.md");
@@ -206,12 +208,10 @@ impl SkillManager {
 
         let name = skill.meta.name.clone();
         let dest_dir = Self::skill_dir().join(&name);
-        std::fs::create_dir_all(&dest_dir)
-            .map_err(|e| format!("mkdir failed: {}", e))?;
+        std::fs::create_dir_all(&dest_dir).map_err(|e| format!("mkdir failed: {}", e))?;
 
         let dest_file = dest_dir.join("SKILL.md");
-        std::fs::write(&dest_file, &content)
-            .map_err(|e| format!("write failed: {}", e))?;
+        std::fs::write(&dest_file, &content).map_err(|e| format!("write failed: {}", e))?;
 
         // Reload
         self.skills.retain(|s| s.meta.name != name);
@@ -225,20 +225,17 @@ impl SkillManager {
     /// Install a skill from a local file path.
     pub fn install_from_path(&mut self, path: &str) -> Result<String, String> {
         let src = PathBuf::from(path);
-        let content = std::fs::read_to_string(&src)
-            .map_err(|e| format!("read failed: {}", e))?;
+        let content = std::fs::read_to_string(&src).map_err(|e| format!("read failed: {}", e))?;
 
         let skill = parse_skill_file(&content, src.clone())
             .ok_or_else(|| "Invalid SKILL.md format".to_string())?;
 
         let name = skill.meta.name.clone();
         let dest_dir = Self::skill_dir().join(&name);
-        std::fs::create_dir_all(&dest_dir)
-            .map_err(|e| format!("mkdir failed: {}", e))?;
+        std::fs::create_dir_all(&dest_dir).map_err(|e| format!("mkdir failed: {}", e))?;
 
         let dest_file = dest_dir.join("SKILL.md");
-        std::fs::copy(&src, &dest_file)
-            .map_err(|e| format!("copy failed: {}", e))?;
+        std::fs::copy(&src, &dest_file).map_err(|e| format!("copy failed: {}", e))?;
 
         self.skills.retain(|s| s.meta.name != name);
         if let Some(s) = parse_skill_file(&content, dest_file) {

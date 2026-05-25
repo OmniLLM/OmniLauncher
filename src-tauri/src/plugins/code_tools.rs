@@ -158,7 +158,10 @@ impl Plugin for CodeExecPlugin {
                     r.push_str(&stderr);
                 }
                 if r.is_empty() {
-                    format!("Executed successfully (exit code: {})", output.status.code().unwrap_or(-1))
+                    format!(
+                        "Executed successfully (exit code: {})",
+                        output.status.code().unwrap_or(-1)
+                    )
                 } else {
                     r
                 }
@@ -186,11 +189,7 @@ fn execute_rust(code: &str) -> String {
 
     // Compile
     let compile = Command::new("rustc")
-        .args([
-            src.to_str().unwrap_or(""),
-            "-o",
-            exe.to_str().unwrap_or(""),
-        ])
+        .args([src.to_str().unwrap_or(""), "-o", exe.to_str().unwrap_or("")])
         .output();
 
     match compile {

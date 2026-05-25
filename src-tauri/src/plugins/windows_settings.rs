@@ -28,7 +28,11 @@ impl Plugin for WindowsSettingsPlugin {
         let settings = vec![
             ("Display", "ms-settings:display", "Display settings"),
             ("Sound", "ms-settings:sound", "Sound settings"),
-            ("Notifications", "ms-settings:notifications", "Notification settings"),
+            (
+                "Notifications",
+                "ms-settings:notifications",
+                "Notification settings",
+            ),
             ("Power", "ms-settings:powersleep", "Power & sleep"),
             ("Battery", "ms-settings:batterysaver", "Battery settings"),
             ("Storage", "ms-settings:storagesense", "Storage settings"),
@@ -36,16 +40,40 @@ impl Plugin for WindowsSettingsPlugin {
             ("WiFi", "ms-settings:network-wifi", "WiFi settings"),
             ("VPN", "ms-settings:network-vpn", "VPN settings"),
             ("Proxy", "ms-settings:network-proxy", "Proxy settings"),
-            ("Ethernet", "ms-settings:network-ethernet", "Ethernet settings"),
-            ("Background", "ms-settings:personalization-background", "Background wallpaper"),
-            ("Colors", "ms-settings:personalization-colors", "Accent colors"),
-            ("Lock Screen", "ms-settings:lockscreen", "Lock screen settings"),
+            (
+                "Ethernet",
+                "ms-settings:network-ethernet",
+                "Ethernet settings",
+            ),
+            (
+                "Background",
+                "ms-settings:personalization-background",
+                "Background wallpaper",
+            ),
+            (
+                "Colors",
+                "ms-settings:personalization-colors",
+                "Accent colors",
+            ),
+            (
+                "Lock Screen",
+                "ms-settings:lockscreen",
+                "Lock screen settings",
+            ),
             ("Taskbar", "ms-settings:taskbar", "Taskbar settings"),
             ("Startup Apps", "ms-settings:startupapps", "Startup apps"),
             ("Default Apps", "ms-settings:defaultapps", "Default apps"),
-            ("Optional Features", "ms-settings:optionalfeatures", "Optional features"),
+            (
+                "Optional Features",
+                "ms-settings:optionalfeatures",
+                "Optional features",
+            ),
             ("About", "ms-settings:about", "System info"),
-            ("Windows Update", "ms-settings:windowsupdate", "Windows Update"),
+            (
+                "Windows Update",
+                "ms-settings:windowsupdate",
+                "Windows Update",
+            ),
             ("Mouse", "ms-settings:mousetouchpad", "Mouse settings"),
             ("Keyboard", "ms-settings:keyboard", "Keyboard settings"),
             ("Apps", "ms-settings:appsfeatures", "Apps & features"),
@@ -60,8 +88,16 @@ impl Plugin for WindowsSettingsPlugin {
             ("Focus", "ms-settings:quiethours", "Focus assist"),
             ("Multitasking", "ms-settings:multitasking", "Multitasking"),
             ("Clipboard", "ms-settings:clipboard", "Clipboard settings"),
-            ("Remote Desktop", "ms-settings:remotedesktop", "Remote desktop"),
-            ("Firewall", "ms-settings:windowsdefender", "Windows Security"),
+            (
+                "Remote Desktop",
+                "ms-settings:remotedesktop",
+                "Remote desktop",
+            ),
+            (
+                "Firewall",
+                "ms-settings:windowsdefender",
+                "Windows Security",
+            ),
         ];
 
         settings

@@ -37,7 +37,10 @@ impl Plugin for TimerPlugin {
             return vec![QueryResult {
                 id: format!("timer:{}", seconds),
                 title: format!("Timer: {} ({})", display_str, display),
-                subtitle: Some(format!("Press Enter to start a {}-{} timer", seconds, label)),
+                subtitle: Some(format!(
+                    "Press Enter to start a {}-{} timer",
+                    seconds, label
+                )),
                 icon: Some("⏰".to_string()),
                 score: 100,
                 action_type: "shell".to_string(),
@@ -83,7 +86,8 @@ impl Plugin for TimerPlugin {
 
 /// Parse a duration string like "5m", "30s", "1h", "90s"
 fn parse_duration(input: &str) -> Option<u64> {
-    let re = Regex::new(r"^(\d+)\s*(s|sec|second|seconds|m|min|minute|minutes|h|hr|hour|hours)$").ok()?;
+    let re = Regex::new(r"^(\d+)\s*(s|sec|second|seconds|m|min|minute|minutes|h|hr|hour|hours)$")
+        .ok()?;
     if let Some(caps) = re.captures(input.trim()) {
         let value: u64 = caps.get(1)?.as_str().parse().ok()?;
         let unit = caps.get(2)?.as_str().to_lowercase();

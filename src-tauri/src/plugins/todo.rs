@@ -116,7 +116,7 @@ impl Plugin for TodoPlugin {
                 format!("Removed: {}", removed)
             }
             "clear" => {
-                save_todos(&vec![]);
+                save_todos(&[]);
                 "Todo list cleared.".to_string()
             }
             "note_save" => {
@@ -172,5 +172,8 @@ fn load_todos() -> Vec<String> {
 fn save_todos(items: &[String]) {
     let path = todos_path();
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(&std::path::PathBuf::from(".")));
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(items).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(items).unwrap_or_default(),
+    );
 }

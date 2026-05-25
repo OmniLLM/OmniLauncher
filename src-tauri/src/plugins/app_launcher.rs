@@ -1,8 +1,8 @@
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
-use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
 
 pub struct AppLauncherPlugin {
     pub apps: Vec<AppEntry>,
@@ -91,28 +91,27 @@ impl AppLauncherPlugin {
                 .join("Microsoft\\Windows\\Start Menu\\Programs"),
         ];
         for dir in paths {
-            let walker =
-                walkdir::WalkDir::new(&dir)
-                    .into_iter()
-                    .try_fold(vec![], |mut acc, e| {
-                        if let Ok(e) = e {
-                            if e.path().extension().map(|x| x == "lnk").unwrap_or(false) {
-                                let name = e
-                                    .path()
-                                    .file_stem()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string();
-                                acc.push(AppEntry {
-                                    name,
-                                    exec: e.path().to_string_lossy().to_string(),
-                                    icon: Some("🪟".to_string()),
-                                });
-                            }
+            let walker = walkdir::WalkDir::new(&dir)
+                .into_iter()
+                .try_fold(vec![], |mut acc, e| {
+                    if let Ok(e) = e {
+                        if e.path().extension().map(|x| x == "lnk").unwrap_or(false) {
+                            let name = e
+                                .path()
+                                .file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            acc.push(AppEntry {
+                                name,
+                                exec: e.path().to_string_lossy().to_string(),
+                                icon: Some("🪟".to_string()),
+                            });
                         }
-                        Ok::<_, std::convert::Infallible>(acc)
-                    })
-                    .unwrap_or_default();
+                    }
+                    Ok::<_, std::convert::Infallible>(acc)
+                })
+                .unwrap_or_default();
             apps.extend(walker);
         }
         apps
@@ -299,20 +298,14 @@ fn launch_app(exec: &str) {
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open")
-            .arg(exec)
-            .spawn();
+        let _ = std::process::Command::new("open").arg(exec).spawn();
     }
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("sh")
-            .args(["-c", exec])
-            .spawn();
+        let _ = std::process::Command::new("sh").args(["-c", exec]).spawn();
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
-        let _ = std::process::Command::new("sh")
-            .args(["-c", exec])
-            .spawn();
+        let _ = std::process::Command::new("sh").args(["-c", exec]).spawn();
     }
 }

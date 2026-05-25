@@ -30,7 +30,12 @@ impl Plugin for NetworkPlugin {
             ("ip", "🌍", "Show public IP address", get_ip_cmd()),
             ("localip", "🖥️", "Show local IP address", get_local_ip_cmd()),
             ("flush", "🔄", "Flush DNS cache", flush_dns_cmd()),
-            ("connections", "🔗", "Show active connections", connections_cmd()),
+            (
+                "connections",
+                "🔗",
+                "Show active connections",
+                connections_cmd(),
+            ),
             ("ports", "📡", "Show listening ports", ports_cmd()),
             ("wifi", "📶", "Show WiFi profiles", wifi_cmd()),
         ];

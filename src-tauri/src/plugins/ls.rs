@@ -57,9 +57,14 @@ impl Plugin for LsPlugin {
             // Use system command for recursive listing
             let output = if cfg!(target_os = "windows") {
                 Command::new("powershell")
-                    .args(["-NoProfile", "-Command", &format!(
-                        "Get-ChildItem -Path '{}' -Recurse -Name | Select-Object -First 200", path
-                    )])
+                    .args([
+                        "-NoProfile",
+                        "-Command",
+                        &format!(
+                            "Get-ChildItem -Path '{}' -Recurse -Name | Select-Object -First 200",
+                            path
+                        ),
+                    ])
                     .output()
             } else {
                 Command::new("find")

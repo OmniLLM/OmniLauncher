@@ -19,7 +19,10 @@ impl Plugin for UrlOpenerPlugin {
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = q.raw.trim();
-        if raw.starts_with("http://") || raw.starts_with("https://") || raw.starts_with("localhost:") {
+        if raw.starts_with("http://")
+            || raw.starts_with("https://")
+            || raw.starts_with("localhost:")
+        {
             vec![QueryResult {
                 id: format!("url:{}", raw),
                 title: format!("Open: {}", raw),

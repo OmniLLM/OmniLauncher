@@ -36,25 +36,12 @@ impl ConversationContext {
     }
 
     pub fn add_user(&mut self, text: &str) {
-        self.messages.push(Message {
-            role: "user".to_string(),
-            content: text.to_string(),
-        });
+        self.messages.push(Message::user(text));
         self.trim_to_max();
     }
 
     pub fn add_assistant(&mut self, text: &str) {
-        self.messages.push(Message {
-            role: "assistant".to_string(),
-            content: text.to_string(),
-        });
-    }
-
-    pub fn add_tool_result(&mut self, tool_name: &str, result: &str) {
-        self.messages.push(Message {
-            role: "tool".to_string(),
-            content: format!("[{}]: {}", tool_name, result),
-        });
+        self.messages.push(Message::assistant(text));
     }
 
     pub fn clear(&mut self) {
@@ -71,10 +58,7 @@ impl ConversationContext {
     }
 
     pub fn get_messages_with_system(&self, system_prompt: &str) -> Vec<Message> {
-        let mut msgs = vec![Message {
-            role: "system".to_string(),
-            content: system_prompt.to_string(),
-        }];
+        let mut msgs = vec![Message::system(system_prompt)];
         msgs.extend(self.messages.clone());
         msgs
     }
@@ -96,7 +80,7 @@ impl ConversationContext {
         let total: usize = self
             .messages
             .iter()
-            .map(|m| estimate_tokens(&m.content))
+            .map(|m| estimate_tokens(m.content_str()))
             .sum();
 
         if total > (TOKEN_BUDGET * 70 / 100) {
@@ -106,13 +90,10 @@ impl ConversationContext {
                 self.messages.drain(0..dropped);
                 self.messages.insert(
                     0,
-                    Message {
-                        role: "system".to_string(),
-                        content: format!(
-                            "[{} older messages dropped to stay within token budget]",
-                            dropped
-                        ),
-                    },
+                    Message::system(&format!(
+                        "[{} older messages dropped to stay within token budget]",
+                        dropped
+                    )),
                 );
             }
         }
@@ -144,9 +125,7 @@ impl Router {
         let trimmed = input.trim();
 
         // Explicit AI prefix triggers
-        if trimmed.starts_with('?')
-            || trimmed.to_lowercase().starts_with("ai ")
-        {
+        if trimmed.starts_with('?') || trimmed.to_lowercase().starts_with("ai ") {
             return RouteDecision::Ai;
         }
 
@@ -156,8 +135,8 @@ impl Router {
     /// Strip the AI trigger prefix so the underlying prompt is clean.
     pub fn strip_ai_prefix(input: &str) -> &str {
         let trimmed = input.trim();
-        if trimmed.starts_with('?') {
-            trimmed[1..].trim()
+        if let Some(stripped) = trimmed.strip_prefix('?') {
+            stripped.trim()
         } else if trimmed.len() >= 3 && trimmed[..3].to_lowercase() == "ai " {
             trimmed[3..].trim()
         } else {
@@ -247,18 +226,17 @@ impl Router {
                 .collect::<Vec<_>>()
                 .join("\n\n");
 
-            let skill_msg = Message {
-                role: "user".to_string(),
-                content: format!(
+            let skill_msg = Message::user(&format!(
                     "--- Active Skills ---\n{}\n--- End Skills ---\nPlease follow these skill instructions for my request.",
                     skill_context
-                ),
-            };
+                ));
 
             // Insert skill context before the last user message
             let last_idx = messages.len().saturating_sub(1);
             // Find the last user message index
-            let insert_before = messages.iter().rposition(|m| m.role == "user")
+            let insert_before = messages
+                .iter()
+                .rposition(|m| m.role == "user")
                 .unwrap_or(last_idx);
             messages.insert(insert_before, skill_msg);
         }
@@ -280,7 +258,7 @@ impl Router {
             max_turns: context.max_turns,
         };
 
-        for _iteration in 0..6 {
+        for _iteration in 0..10 {
             // ── Context compression (sliding window) ──────────────────────────
             local_ctx.compress_if_needed();
             // Rebuild loop_messages to reflect any compression that occurred
@@ -312,12 +290,15 @@ impl Router {
                     Use tools proactively to help the user.",
                     os_info.0, os_info.1, os_info.2
                 );
-                let mut rebuilt = local_ctx.get_messages_with_system(&system_prompt_rebuild);
+                let rebuilt = local_ctx.get_messages_with_system(&system_prompt_rebuild);
                 // Re-append any tool results from previous iterations that aren't in local_ctx
                 rebuilt
             };
 
-            match ai_client.chat_with_tools(loop_messages.clone(), tools.clone()).await {
+            match ai_client
+                .chat_with_tools(loop_messages.clone(), tools.clone())
+                .await
+            {
                 Ok(resp) => {
                     if let Some(tool_calls) = resp.tool_calls {
                         if tool_calls.is_empty() {
@@ -346,7 +327,6 @@ impl Router {
 
                         // Execute all tools in this iteration
                         let mut tool_result_messages: Vec<Message> = vec![];
-                        let mut tc_json_list: Vec<serde_json::Value> = vec![];
 
                         for tc in &tool_calls {
                             all_tools_used.push(tc.function.name.clone());
@@ -354,40 +334,30 @@ impl Router {
                                 serde_json::from_str(&tc.function.arguments).unwrap_or_default();
                             let result = plugin_manager.execute_tool(&tc.function.name, args).await;
 
-                            tc_json_list.push(serde_json::json!({
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments
-                                }
-                            }));
-
-                            tool_result_messages.push(Message {
-                                role: "tool".to_string(),
-                                content: format!(
-                                    "{{\"tool_call_id\":\"{}\",\"content\":{}}}",
-                                    tc.id,
-                                    serde_json::json!(result)
-                                ),
-                            });
+                            tool_result_messages.push(Message::tool_result(
+                                &tc.id,
+                                &tc.function.name,
+                                &result,
+                            ));
                         }
 
-                        // Append assistant message with tool_calls
-                        local_ctx.messages.push(Message {
-                            role: "assistant".to_string(),
-                            content: format!(
-                                "[tool_calls: {}]",
-                                serde_json::to_string(&tc_json_list).unwrap_or_default()
-                            ),
-                        });
-                        loop_messages.push(Message {
-                            role: "assistant".to_string(),
-                            content: format!(
-                                "[tool_calls: {}]",
-                                serde_json::to_string(&tc_json_list).unwrap_or_default()
-                            ),
-                        });
+                        // Append assistant message with tool_calls (proper OpenAI format)
+                        let assistant_msg = Message::assistant_tool_calls(
+                            resp.content.clone(),
+                            tool_calls
+                                .iter()
+                                .map(|tc| crate::ai::client::ToolCall {
+                                    id: tc.id.clone(),
+                                    call_type: Some("function".to_string()),
+                                    function: crate::ai::client::FunctionCall {
+                                        name: tc.function.name.clone(),
+                                        arguments: tc.function.arguments.clone(),
+                                    },
+                                })
+                                .collect(),
+                        );
+                        local_ctx.messages.push(assistant_msg.clone());
+                        loop_messages.push(assistant_msg);
 
                         // Append tool results
                         for msg in tool_result_messages {
@@ -406,15 +376,11 @@ impl Router {
                     // ── Error classification ───────────────────────────────────
                     match classify_error(&e) {
                         ErrorClass::ModelError => {
-                            // Push a corrective message and continue the loop
-                            let corrective = Message {
-                                role: "user".to_string(),
-                                content: format!(
-                                    "Your last response contained an invalid tool call or malformed output: {}. \
-                                    Please correct your tool usage and try again.",
-                                    e
-                                ),
-                            };
+                            let corrective = Message::user(&format!(
+                                "Your last response contained an invalid tool call or malformed output: {}. \
+                                Please correct your tool usage and try again.",
+                                e
+                            ));
                             local_ctx.messages.push(corrective.clone());
                             loop_messages.push(corrective);
                             // continue to next iteration
@@ -442,11 +408,8 @@ impl Router {
         // If we have tool results but no final content, ask AI to format them
         if final_content.is_empty() && !all_tools_used.is_empty() {
             let mut followup = loop_messages.clone();
-            followup.push(Message {
-                role: "user".to_string(),
-                content: "Please summarize the tool results above in clean Markdown. \
-                         Be concise. Do NOT show raw output. Only show the formatted/summarized version.".to_string(),
-            });
+            followup.push(Message::user("Please summarize the tool results above in clean Markdown. \
+                         Be concise. Do NOT show raw output. Only show the formatted/summarized version."));
             match ai_client.chat(followup).await {
                 Ok(formatted) => final_content = formatted,
                 Err(e) => final_content = format!("AI error: {}", e),
@@ -454,7 +417,7 @@ impl Router {
         }
 
         // Merge skill badges into tools_used
-        all_tools_used.extend(skills_used.drain(..));
+        all_tools_used.append(&mut skills_used);
 
         AiResponse {
             content: final_content,
@@ -465,7 +428,12 @@ impl Router {
     }
 
     /// Handle slash commands — instant, no AI involved
-    async fn slash_command(input: &str, plugin_manager: &PluginManager, skill_manager: &SkillManager) -> AiResponse {
+    #[allow(dead_code)]
+    async fn slash_command(
+        input: &str,
+        plugin_manager: &PluginManager,
+        skill_manager: &SkillManager,
+    ) -> AiResponse {
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
         let cmd = parts[0];
         let arg = parts.get(1).unwrap_or(&"").trim();
@@ -475,13 +443,16 @@ impl Router {
                 // Run a shell command instantly
                 if arg.is_empty() {
                     return AiResponse {
-                        content: "Usage: `/run <command>`\n\nExecutes a shell command immediately.".to_string(),
+                        content: "Usage: `/run <command>`\n\nExecutes a shell command immediately."
+                            .to_string(),
                         tools_used: vec!["shell_exec".to_string()],
                         results: vec![],
                         is_ai: false,
                     };
                 }
-                let result = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": arg })).await;
+                let result = plugin_manager
+                    .execute_tool("shell_exec", serde_json::json!({ "command": arg }))
+                    .await;
                 AiResponse {
                     content: format!("```\n$ {}\n{}\n```", arg, result),
                     tools_used: vec!["shell_exec".to_string()],
@@ -506,7 +477,9 @@ impl Router {
                 } else {
                     format!("xdg-open '{}'", arg)
                 };
-                let _ = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": open_cmd })).await;
+                let _ = plugin_manager
+                    .execute_tool("shell_exec", serde_json::json!({ "command": open_cmd }))
+                    .await;
                 AiResponse {
                     content: format!("Opened **{}**", arg),
                     tools_used: vec!["open".to_string()],
@@ -518,15 +491,21 @@ impl Router {
                 // Quick app launch — find and immediately execute the top match
                 if arg.is_empty() {
                     return AiResponse {
-                        content: "Usage: `/app <name>`\n\nLaunches the best matching application.".to_string(),
+                        content: "Usage: `/app <name>`\n\nLaunches the best matching application."
+                            .to_string(),
                         tools_used: vec![],
                         results: vec![],
                         is_ai: false,
                     };
                 }
-                let result = plugin_manager.execute_tool("app_launcher", serde_json::json!({
-                    "name": arg
-                })).await;
+                let result = plugin_manager
+                    .execute_tool(
+                        "app_launcher",
+                        serde_json::json!({
+                            "name": arg
+                        }),
+                    )
+                    .await;
                 AiResponse {
                     content: format!("🚀 {}", result),
                     tools_used: vec!["app_launcher".to_string()],
@@ -538,7 +517,8 @@ impl Router {
                 // Quick calculator
                 if arg.is_empty() {
                     return AiResponse {
-                        content: "Usage: `/calc <expression>`\n\nExample: `/calc 2^10 * 3`".to_string(),
+                        content: "Usage: `/calc <expression>`\n\nExample: `/calc 2^10 * 3`"
+                            .to_string(),
                         tools_used: vec![],
                         results: vec![],
                         is_ai: false,
@@ -592,10 +572,15 @@ impl Router {
                 let grep_parts: Vec<&str> = arg.splitn(2, ' ').collect();
                 let pattern = grep_parts[0];
                 let path = grep_parts.get(1).unwrap_or(&".");
-                let result = plugin_manager.execute_tool("grep_search", serde_json::json!({
-                    "pattern": pattern,
-                    "path": path
-                })).await;
+                let result = plugin_manager
+                    .execute_tool(
+                        "grep_search",
+                        serde_json::json!({
+                            "pattern": pattern,
+                            "path": path
+                        }),
+                    )
+                    .await;
                 AiResponse {
                     content: format!("```\n{}\n```", result),
                     tools_used: vec!["grep_search".to_string()],
@@ -613,7 +598,9 @@ impl Router {
                         is_ai: false,
                     };
                 }
-                let result = plugin_manager.execute_tool("file_read", serde_json::json!({ "path": arg })).await;
+                let result = plugin_manager
+                    .execute_tool("file_read", serde_json::json!({ "path": arg }))
+                    .await;
                 AiResponse {
                     content: format!("```\n{}\n```", result),
                     tools_used: vec!["file_read".to_string()],
@@ -624,7 +611,9 @@ impl Router {
             "/ls" => {
                 // Quick directory list
                 let path = if arg.is_empty() { "." } else { arg };
-                let result = plugin_manager.execute_tool("list_dir", serde_json::json!({ "path": path })).await;
+                let result = plugin_manager
+                    .execute_tool("list_dir", serde_json::json!({ "path": path }))
+                    .await;
                 AiResponse {
                     content: format!("```\n{}\n```", result),
                     tools_used: vec!["list_dir".to_string()],
@@ -635,7 +624,9 @@ impl Router {
             "/git" => {
                 // Quick git command
                 let subcmd = if arg.is_empty() { "status" } else { arg };
-                let result = plugin_manager.execute_tool("git_ops", serde_json::json!({ "subcommand": subcmd })).await;
+                let result = plugin_manager
+                    .execute_tool("git_ops", serde_json::json!({ "subcommand": subcmd }))
+                    .await;
                 AiResponse {
                     content: format!("```\n{}\n```", result),
                     tools_used: vec!["git_ops".to_string()],
@@ -646,10 +637,13 @@ impl Router {
             "/todo" | "/t" => {
                 // Quick todo
                 if arg.is_empty() {
-                    let result = plugin_manager.execute_tool("todo_memory", serde_json::json!({ "action": "list" })).await;
+                    let result = plugin_manager
+                        .execute_tool("todo_memory", serde_json::json!({ "action": "list" }))
+                        .await;
                     return AiResponse {
                         content: if result.is_empty() || result == "Todo list is empty." {
-                            "📝 **Todo list is empty.**\n\nUse `/todo <text>` to add an item.".to_string()
+                            "📝 **Todo list is empty.**\n\nUse `/todo <text>` to add an item."
+                                .to_string()
                         } else {
                             format!("📝 **Todos:**\n\n{}", result)
                         },
@@ -659,10 +653,15 @@ impl Router {
                     };
                 }
                 // Add a todo
-                let result = plugin_manager.execute_tool("todo_memory", serde_json::json!({
-                    "action": "add",
-                    "text": arg
-                })).await;
+                let result = plugin_manager
+                    .execute_tool(
+                        "todo_memory",
+                        serde_json::json!({
+                            "action": "add",
+                            "text": arg
+                        }),
+                    )
+                    .await;
                 AiResponse {
                     content: format!("✅ {}", result),
                     tools_used: vec!["todo_memory".to_string()],
@@ -709,7 +708,9 @@ impl Router {
                 } else {
                     "ss -tlnp"
                 };
-                let result = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": cmd })).await;
+                let result = plugin_manager
+                    .execute_tool("shell_exec", serde_json::json!({ "command": cmd }))
+                    .await;
                 AiResponse {
                     content: format!("**Listening Ports:**\n```\n{}\n```", result),
                     tools_used: vec!["shell_exec".to_string()],
@@ -723,7 +724,9 @@ impl Router {
                 } else {
                     "ps aux --sort=-pcpu | head -16"
                 };
-                let result = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": cmd })).await;
+                let result = plugin_manager
+                    .execute_tool("shell_exec", serde_json::json!({ "command": cmd }))
+                    .await;
                 AiResponse {
                     content: format!("**Top Processes:**\n```\n{}\n```", result),
                     tools_used: vec!["shell_exec".to_string()],
@@ -753,7 +756,9 @@ impl Router {
                         format!("pkill -f '{}'", arg)
                     }
                 };
-                let result = plugin_manager.execute_tool("shell_exec", serde_json::json!({ "command": cmd })).await;
+                let result = plugin_manager
+                    .execute_tool("shell_exec", serde_json::json!({ "command": cmd }))
+                    .await;
                 AiResponse {
                     content: format!("```\n{}\n```", result),
                     tools_used: vec!["shell_exec".to_string()],
@@ -788,7 +793,8 @@ impl Router {
             "/color" => {
                 if arg.is_empty() {
                     return AiResponse {
-                        content: "Usage: `/color <hex|rgb|name>`\n\nExample: `/color #ff6600`".to_string(),
+                        content: "Usage: `/color <hex|rgb|name>`\n\nExample: `/color #ff6600`"
+                            .to_string(),
                         tools_used: vec![],
                         results: vec![],
                         is_ai: false,
@@ -803,8 +809,15 @@ impl Router {
                         is_ai: false,
                     }
                 } else {
-                    let formatted = results.iter()
-                        .map(|r| format!("- **{}**: `{}`", r.subtitle.as_deref().unwrap_or(""), r.title))
+                    let formatted = results
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "- **{}**: `{}`",
+                                r.subtitle.as_deref().unwrap_or(""),
+                                r.title
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join("\n");
                     AiResponse {
@@ -843,7 +856,11 @@ impl Router {
                         is_ai: false,
                     }
                 } else {
-                    let help_cmd = if arg.starts_with('/') { arg.to_string() } else { format!("/{}", arg) };
+                    let help_cmd = if arg.starts_with('/') {
+                        arg.to_string()
+                    } else {
+                        format!("/{}", arg)
+                    };
                     let detail = get_command_help(&help_cmd);
                     AiResponse {
                         content: detail,
@@ -955,34 +972,37 @@ impl Router {
                             is_ai: false,
                         }
                     }
-                    "help" => {
-                        AiResponse {
-                            content: SKILL_HELP.to_string(),
-                            tools_used: vec![],
-                            results: vec![],
-                            is_ai: false,
-                        }
-                    }
+                    "help" => AiResponse {
+                        content: SKILL_HELP.to_string(),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    },
                     _ => AiResponse {
-                        content: format!("Unknown skill subcommand: `{}`\n\n{}", subcmd, SKILL_HELP),
+                        content: format!(
+                            "Unknown skill subcommand: `{}`\n\n{}",
+                            subcmd, SKILL_HELP
+                        ),
                         tools_used: vec![],
                         results: vec![],
                         is_ai: false,
                     },
                 }
             }
-            _ => {
-                AiResponse {
-                    content: format!("Unknown command: `{}`\n\nType `/help` to see available commands.", cmd),
-                    tools_used: vec![],
-                    results: vec![],
-                    is_ai: false,
-                }
-            }
+            _ => AiResponse {
+                content: format!(
+                    "Unknown command: `{}`\n\nType `/help` to see available commands.",
+                    cmd
+                ),
+                tools_used: vec![],
+                results: vec![],
+                is_ai: false,
+            },
         }
     }
 }
 
+#[allow(dead_code)]
 const SLASH_HELP: &str = "\
 ## ⚡ Slash Commands (Instant — No AI)
 
@@ -1029,6 +1049,7 @@ const SLASH_HELP: &str = "\
 **Tip:** Type `/` to see the command palette. Anything without `/` goes to AI.
 ";
 
+#[allow(dead_code)]
 const SKILL_HELP: &str = "\
 ## 🎯 Skill Commands
 
@@ -1056,6 +1077,7 @@ When your query matches a skill's triggers, the skill's instructions are automat
 ```
 ";
 
+#[allow(dead_code)]
 fn get_command_help(cmd: &str) -> String {
     match cmd {
         "/run" | "/r" => "## `/run` (shortcut: `/r`)\n\nExecute a shell command and display output.\n\n**Usage:** `/run <command>`\n\n**Examples:**\n```\n/run dir\n/run git status\n/run npm test\n/run Get-Process | Select -First 5\n/r cargo build --release\n```\n\n**Notes:**\n- Uses PowerShell on Windows, bash on macOS/Linux\n- Output is displayed in a code block\n- Long output is truncated to 4000 chars".to_string(),
@@ -1134,8 +1156,14 @@ mod tests {
     #[test]
     fn test_ai_routes() {
         assert_eq!(Router::decide("?what is the weather"), RouteDecision::Ai);
-        assert_eq!(Router::decide("? summarize my clipboard"), RouteDecision::Ai);
-        assert_eq!(Router::decide("ai help me write an email"), RouteDecision::Ai);
+        assert_eq!(
+            Router::decide("? summarize my clipboard"),
+            RouteDecision::Ai
+        );
+        assert_eq!(
+            Router::decide("ai help me write an email"),
+            RouteDecision::Ai
+        );
         assert_eq!(Router::decide("AI explain this error"), RouteDecision::Ai);
     }
 

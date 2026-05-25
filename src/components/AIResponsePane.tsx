@@ -17,12 +17,12 @@ interface AiResponse {
 }
 
 interface Props {
-  response: AiResponse | null
-  colors: Record<string, string>
+  response: AiResponse | null;
+  colors: Record<string, string>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export default function AIResponsePane(_props: Props) {
   // No-op: chat rendering is handled by App.tsx ChatBubble + conversationHistory.
-  return null
+  return null;
 }

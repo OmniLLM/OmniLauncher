@@ -17,8 +17,10 @@ impl Guardrails {
 
         // Pipe to sh or bash = potential remote code execution
         // Match: "| sh", "| bash", "|sh", "|bash"
-        if lower.contains("| sh") || lower.contains("|sh")
-            || lower.contains("| bash") || lower.contains("|bash")
+        if lower.contains("| sh")
+            || lower.contains("|sh")
+            || lower.contains("| bash")
+            || lower.contains("|bash")
         {
             return GuardrailAction::Deny(
                 "piping to sh/bash is a remote code execution risk".to_string(),
@@ -26,9 +28,7 @@ impl Guardrails {
         }
 
         // Fork bomb pattern:  :(){ :|:& };:
-        if lower.contains(":()")
-            || (lower.contains(":|:") && lower.contains("};"))
-        {
+        if lower.contains(":()") || (lower.contains(":|:") && lower.contains("};")) {
             return GuardrailAction::Deny("fork bomb pattern detected".to_string());
         }
 
@@ -147,9 +147,18 @@ mod tests {
 
     #[test]
     fn test_allow_safe_commands() {
-        assert_eq!(Guardrails::check_shell_command("ls -la"), GuardrailAction::Allow);
-        assert_eq!(Guardrails::check_shell_command("git status"), GuardrailAction::Allow);
-        assert_eq!(Guardrails::check_shell_command("cargo build"), GuardrailAction::Allow);
+        assert_eq!(
+            Guardrails::check_shell_command("ls -la"),
+            GuardrailAction::Allow
+        );
+        assert_eq!(
+            Guardrails::check_shell_command("git status"),
+            GuardrailAction::Allow
+        );
+        assert_eq!(
+            Guardrails::check_shell_command("cargo build"),
+            GuardrailAction::Allow
+        );
     }
 
     #[test]
@@ -170,7 +179,13 @@ mod tests {
 
     #[test]
     fn test_file_write_allow_safe_paths() {
-        assert_eq!(Guardrails::check_file_write("/home/user/file.txt"), GuardrailAction::Allow);
-        assert_eq!(Guardrails::check_file_write("/tmp/scratch.txt"), GuardrailAction::Allow);
+        assert_eq!(
+            Guardrails::check_file_write("/home/user/file.txt"),
+            GuardrailAction::Allow
+        );
+        assert_eq!(
+            Guardrails::check_file_write("/tmp/scratch.txt"),
+            GuardrailAction::Allow
+        );
     }
 }

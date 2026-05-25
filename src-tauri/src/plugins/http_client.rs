@@ -80,7 +80,9 @@ impl Plugin for HttpClientPlugin {
 
         // Add body
         if let Some(b) = body {
-            req = req.header("Content-Type", "application/json").body(b.to_string());
+            req = req
+                .header("Content-Type", "application/json")
+                .body(b.to_string());
         }
 
         match req.send().await {
@@ -101,7 +103,10 @@ impl Plugin for HttpClientPlugin {
                         } else {
                             text
                         };
-                        format!("Status: {}\n\nHeaders:\n{}\n\nBody:\n{}", status, headers_str, body_str)
+                        format!(
+                            "Status: {}\n\nHeaders:\n{}\n\nBody:\n{}",
+                            status, headers_str, body_str
+                        )
                     }
                     Err(e) => format!("Status: {}\nError reading body: {}", status, e),
                 }

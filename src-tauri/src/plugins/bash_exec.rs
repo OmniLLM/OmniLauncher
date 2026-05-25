@@ -115,7 +115,10 @@ impl Plugin for ShellExecPlugin {
                     result.push_str(&stderr);
                 }
                 if result.is_empty() {
-                    format!("Command completed with exit code: {}", output.status.code().unwrap_or(-1))
+                    format!(
+                        "Command completed with exit code: {}",
+                        output.status.code().unwrap_or(-1)
+                    )
                 } else {
                     // Truncate very long output
                     if result.len() > 4000 {

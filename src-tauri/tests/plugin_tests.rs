@@ -7,14 +7,22 @@ use omnilauncher_lib::create_plugin_manager;
 #[tokio::test]
 async fn test_plugin_manager_creation() {
     let pm = create_plugin_manager();
-    assert!(pm.plugins.len() > 20, "Expected 20+ plugins, got {}", pm.plugins.len());
+    assert!(
+        pm.plugins.len() > 20,
+        "Expected 20+ plugins, got {}",
+        pm.plugins.len()
+    );
 }
 
 #[tokio::test]
 async fn test_plugin_manager_all_tool_schemas() {
     let pm = create_plugin_manager();
     let schemas = pm.all_tool_schemas();
-    assert!(schemas.len() >= 10, "Expected 10+ tool schemas, got {}", schemas.len());
+    assert!(
+        schemas.len() >= 10,
+        "Expected 10+ tool schemas, got {}",
+        schemas.len()
+    );
     for schema in &schemas {
         assert!(schema["function"]["name"].is_string());
         assert!(schema["function"]["description"].is_string());
@@ -69,14 +77,18 @@ async fn test_calc_power() {
 #[tokio::test]
 async fn test_shell_exec_echo() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("shell_exec", serde_json::json!({"command": "echo hello"})).await;
+    let r = pm
+        .execute_tool("shell_exec", serde_json::json!({"command": "echo hello"}))
+        .await;
     assert!(r.to_lowercase().contains("hello"), "Got: {}", r);
 }
 
 #[tokio::test]
 async fn test_shell_exec_empty() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("shell_exec", serde_json::json!({"command": ""})).await;
+    let r = pm
+        .execute_tool("shell_exec", serde_json::json!({"command": ""}))
+        .await;
     assert!(r.to_lowercase().contains("error") || r.contains("no command"));
 }
 
@@ -84,11 +96,16 @@ async fn test_shell_exec_empty() {
 async fn test_shell_exec_working_dir() {
     let pm = create_plugin_manager();
     let (cmd, dir, expect) = if cfg!(target_os = "windows") {
-        ("cd", "C:\\", "C:\\")
+        ("Get-Location", "C:\\", "C:\\")
     } else {
         ("pwd", "/", "/")
     };
-    let r = pm.execute_tool("shell_exec", serde_json::json!({"command": cmd, "working_dir": dir})).await;
+    let r = pm
+        .execute_tool(
+            "shell_exec",
+            serde_json::json!({"command": cmd, "working_dir": dir}),
+        )
+        .await;
     assert!(r.contains(expect), "Got: {}", r);
 }
 
@@ -101,7 +118,12 @@ async fn test_file_read() {
     let pm = create_plugin_manager();
     let p = std::env::temp_dir().join("omni_test_read.txt");
     std::fs::write(&p, "hello\nworld\nfoo").unwrap();
-    let r = pm.execute_tool("file_read", serde_json::json!({"path": p.to_string_lossy()})).await;
+    let r = pm
+        .execute_tool(
+            "file_read",
+            serde_json::json!({"path": p.to_string_lossy()}),
+        )
+        .await;
     assert!(r.contains("hello") && r.contains("world"));
     let _ = std::fs::remove_file(&p);
 }
@@ -109,7 +131,12 @@ async fn test_file_read() {
 #[tokio::test]
 async fn test_file_read_nonexistent() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("file_read", serde_json::json!({"path": "/tmp/no_such_file_xyz"})).await;
+    let r = pm
+        .execute_tool(
+            "file_read",
+            serde_json::json!({"path": "/tmp/no_such_file_xyz"}),
+        )
+        .await;
     assert!(r.to_lowercase().contains("error"));
 }
 
@@ -118,7 +145,12 @@ async fn test_file_read_line_range() {
     let pm = create_plugin_manager();
     let p = std::env::temp_dir().join("omni_test_range.txt");
     std::fs::write(&p, "L1\nL2\nL3\nL4\nL5").unwrap();
-    let r = pm.execute_tool("file_read", serde_json::json!({"path": p.to_string_lossy(), "start_line": 2, "end_line": 3})).await;
+    let r = pm
+        .execute_tool(
+            "file_read",
+            serde_json::json!({"path": p.to_string_lossy(), "start_line": 2, "end_line": 3}),
+        )
+        .await;
     assert!(r.contains("L2") && r.contains("L3"));
     assert!(!r.contains("L4"));
     let _ = std::fs::remove_file(&p);
@@ -127,7 +159,9 @@ async fn test_file_read_line_range() {
 #[tokio::test]
 async fn test_file_read_empty_path() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("file_read", serde_json::json!({"path": ""})).await;
+    let r = pm
+        .execute_tool("file_read", serde_json::json!({"path": ""}))
+        .await;
     assert!(r.to_lowercase().contains("error") || r.contains("no path"));
 }
 
@@ -139,7 +173,12 @@ async fn test_file_read_empty_path() {
 async fn test_file_write_and_verify() {
     let pm = create_plugin_manager();
     let p = std::env::temp_dir().join("omni_test_write.txt");
-    let r = pm.execute_tool("file_write", serde_json::json!({"path": p.to_string_lossy(), "content": "written"})).await;
+    let r = pm
+        .execute_tool(
+            "file_write",
+            serde_json::json!({"path": p.to_string_lossy(), "content": "written"}),
+        )
+        .await;
     assert!(r.contains("Successfully"));
     assert_eq!(std::fs::read_to_string(&p).unwrap(), "written");
     let _ = std::fs::remove_file(&p);
@@ -150,7 +189,12 @@ async fn test_file_write_append() {
     let pm = create_plugin_manager();
     let p = std::env::temp_dir().join("omni_test_append.txt");
     std::fs::write(&p, "A").unwrap();
-    let _ = pm.execute_tool("file_write", serde_json::json!({"path": p.to_string_lossy(), "content": "B", "append": true})).await;
+    let _ = pm
+        .execute_tool(
+            "file_write",
+            serde_json::json!({"path": p.to_string_lossy(), "content": "B", "append": true}),
+        )
+        .await;
     assert_eq!(std::fs::read_to_string(&p).unwrap(), "AB");
     let _ = std::fs::remove_file(&p);
 }
@@ -158,8 +202,16 @@ async fn test_file_write_append() {
 #[tokio::test]
 async fn test_file_write_creates_dirs() {
     let pm = create_plugin_manager();
-    let p = std::env::temp_dir().join("omni_nested").join("d").join("f.txt");
-    let _ = pm.execute_tool("file_write", serde_json::json!({"path": p.to_string_lossy(), "content": "x"})).await;
+    let p = std::env::temp_dir()
+        .join("omni_nested")
+        .join("d")
+        .join("f.txt");
+    let _ = pm
+        .execute_tool(
+            "file_write",
+            serde_json::json!({"path": p.to_string_lossy(), "content": "x"}),
+        )
+        .await;
     assert!(p.exists());
     let _ = std::fs::remove_dir_all(std::env::temp_dir().join("omni_nested"));
 }
@@ -209,7 +261,12 @@ async fn test_grep_finds() {
     let d = std::env::temp_dir().join("omni_grep");
     let _ = std::fs::create_dir_all(&d);
     std::fs::write(d.join("a.txt"), "hello world\nfoo\nhello again").unwrap();
-    let r = pm.execute_tool("grep_search", serde_json::json!({"pattern": "hello", "path": d.to_string_lossy()})).await;
+    let r = pm
+        .execute_tool(
+            "grep_search",
+            serde_json::json!({"pattern": "hello", "path": d.to_string_lossy()}),
+        )
+        .await;
     assert!(r.contains("hello"), "Got: {}", r);
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -217,7 +274,9 @@ async fn test_grep_finds() {
 #[tokio::test]
 async fn test_grep_empty_pattern() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("grep_search", serde_json::json!({"pattern": ""})).await;
+    let r = pm
+        .execute_tool("grep_search", serde_json::json!({"pattern": ""}))
+        .await;
     assert!(r.to_lowercase().contains("error") || r.contains("no pattern"));
 }
 
@@ -232,7 +291,12 @@ async fn test_glob_matches() {
     let _ = std::fs::create_dir_all(&d);
     std::fs::write(d.join("x.rs"), "").unwrap();
     std::fs::write(d.join("y.txt"), "").unwrap();
-    let r = pm.execute_tool("glob_files", serde_json::json!({"pattern": "*.rs", "path": d.to_string_lossy()})).await;
+    let r = pm
+        .execute_tool(
+            "glob_files",
+            serde_json::json!({"pattern": "*.rs", "path": d.to_string_lossy()}),
+        )
+        .await;
     assert!(r.contains("x.rs"));
     assert!(!r.contains("y.txt"));
     let _ = std::fs::remove_dir_all(&d);
@@ -244,7 +308,12 @@ async fn test_glob_no_match() {
     let d = std::env::temp_dir().join("omni_glob2");
     let _ = std::fs::create_dir_all(&d);
     std::fs::write(d.join("a.txt"), "").unwrap();
-    let r = pm.execute_tool("glob_files", serde_json::json!({"pattern": "*.xyz", "path": d.to_string_lossy()})).await;
+    let r = pm
+        .execute_tool(
+            "glob_files",
+            serde_json::json!({"pattern": "*.xyz", "path": d.to_string_lossy()}),
+        )
+        .await;
     assert!(r.contains("No files"));
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -259,7 +328,9 @@ async fn test_ls_shows_entries() {
     let d = std::env::temp_dir().join("omni_ls");
     let _ = std::fs::create_dir_all(d.join("sub"));
     std::fs::write(d.join("f.txt"), "").unwrap();
-    let r = pm.execute_tool("list_dir", serde_json::json!({"path": d.to_string_lossy()})).await;
+    let r = pm
+        .execute_tool("list_dir", serde_json::json!({"path": d.to_string_lossy()}))
+        .await;
     assert!(r.contains("sub/") && r.contains("f.txt"));
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -267,7 +338,9 @@ async fn test_ls_shows_entries() {
 #[tokio::test]
 async fn test_ls_nonexistent() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("list_dir", serde_json::json!({"path": "/no_such_dir_xyz"})).await;
+    let r = pm
+        .execute_tool("list_dir", serde_json::json!({"path": "/no_such_dir_xyz"}))
+        .await;
     assert!(r.to_lowercase().contains("error") || r.contains("not exist"));
 }
 
@@ -278,7 +351,9 @@ async fn test_ls_nonexistent() {
 #[tokio::test]
 async fn test_git_status_runs() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("git_ops", serde_json::json!({"subcommand": "status"})).await;
+    let r = pm
+        .execute_tool("git_ops", serde_json::json!({"subcommand": "status"}))
+        .await;
     assert!(!r.is_empty());
 }
 
@@ -289,23 +364,54 @@ async fn test_git_status_runs() {
 #[tokio::test]
 async fn test_todo_lifecycle() {
     let pm = create_plugin_manager();
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "clear"})).await;
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "add", "text": "item1"})).await;
-    let list = pm.execute_tool("todo_memory", serde_json::json!({"action": "list"})).await;
+    let _ = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "clear"}))
+        .await;
+    let _ = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "add", "text": "item1"}),
+        )
+        .await;
+    let list = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "list"}))
+        .await;
     assert!(list.contains("item1"));
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "remove", "text": "1"})).await;
-    let list2 = pm.execute_tool("todo_memory", serde_json::json!({"action": "list"})).await;
+    let _ = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "remove", "text": "1"}),
+        )
+        .await;
+    let list2 = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "list"}))
+        .await;
     assert!(!list2.contains("item1"));
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "clear"})).await;
+    let _ = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "clear"}))
+        .await;
 }
 
 #[tokio::test]
 async fn test_todo_notes() {
     let pm = create_plugin_manager();
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "note_save", "text": "_t", "content": "data"})).await;
-    let r = pm.execute_tool("todo_memory", serde_json::json!({"action": "note_read", "text": "_t"})).await;
+    let _ = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "note_save", "text": "_t", "content": "data"}),
+        )
+        .await;
+    let r = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "note_read", "text": "_t"}),
+        )
+        .await;
     assert!(r.contains("data"));
-    let notes = dirs::home_dir().unwrap().join(".omnilauncher").join("notes");
+    let notes = dirs::home_dir()
+        .unwrap()
+        .join(".omnilauncher")
+        .join("notes");
     let _ = std::fs::remove_file(notes.join("_t.md"));
 }
 
@@ -359,7 +465,12 @@ async fn test_web_google() {
 #[tokio::test]
 async fn test_web_tool() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("web_search", serde_json::json!({"query": "hi", "engine": "youtube"})).await;
+    let r = pm
+        .execute_tool(
+            "web_search",
+            serde_json::json!({"query": "hi", "engine": "youtube"}),
+        )
+        .await;
     assert!(r.contains("youtube.com"));
 }
 
@@ -392,7 +503,9 @@ async fn test_network_list() {
 #[tokio::test]
 async fn test_sysinfo_os() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("sys_info", serde_json::json!({"info_type": "os"})).await;
+    let r = pm
+        .execute_tool("sys_info", serde_json::json!({"info_type": "os"}))
+        .await;
     assert!(!r.is_empty());
 }
 
@@ -403,14 +516,24 @@ async fn test_sysinfo_os() {
 #[tokio::test]
 async fn test_http_get() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("http_request", serde_json::json!({"method": "GET", "url": "https://httpbin.org/get"})).await;
+    let r = pm
+        .execute_tool(
+            "http_request",
+            serde_json::json!({"method": "GET", "url": "https://httpbin.org/get"}),
+        )
+        .await;
     assert!(r.contains("200") || r.contains("httpbin"));
 }
 
 #[tokio::test]
 async fn test_http_no_url() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("http_request", serde_json::json!({"method": "GET", "url": ""})).await;
+    let r = pm
+        .execute_tool(
+            "http_request",
+            serde_json::json!({"method": "GET", "url": ""}),
+        )
+        .await;
     assert!(r.contains("Error") || r.contains("no URL"));
 }
 
@@ -421,14 +544,26 @@ async fn test_http_no_url() {
 #[tokio::test]
 async fn test_code_python() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("code_execute", serde_json::json!({"language": "python", "code": "print(7*6)"})).await;
-    if !r.to_lowercase().contains("error") { assert!(r.contains("42")); }
+    let r = pm
+        .execute_tool(
+            "code_execute",
+            serde_json::json!({"language": "python", "code": "print(7*6)"}),
+        )
+        .await;
+    if !r.to_lowercase().contains("error") {
+        assert!(r.contains("42"));
+    }
 }
 
 #[tokio::test]
 async fn test_code_unsupported() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("code_execute", serde_json::json!({"language": "cobol", "code": "x"})).await;
+    let r = pm
+        .execute_tool(
+            "code_execute",
+            serde_json::json!({"language": "cobol", "code": "x"}),
+        )
+        .await;
     assert!(r.contains("Unsupported"));
 }
 
@@ -439,7 +574,12 @@ async fn test_code_unsupported() {
 #[tokio::test]
 async fn test_app_launcher_not_found() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("app_launcher", serde_json::json!({"name": "zzz_no_app_999"})).await;
+    let r = pm
+        .execute_tool(
+            "app_launcher",
+            serde_json::json!({"name": "zzz_no_app_999"}),
+        )
+        .await;
     assert!(r.contains("No application found"));
 }
 
@@ -483,17 +623,17 @@ async fn test_tool_not_found() {
 
 #[test]
 fn test_nl_positive() {
-    use omnilauncher_lib::ai::router::Router;
-    assert!(Router::is_natural_language("what is the time"));
-    assert!(Router::is_natural_language("how to install rust?"));
-    assert!(Router::is_natural_language("find all files in src"));
+    use omnilauncher_lib::ai::router::{RouteDecision, Router};
+    assert_eq!(Router::decide("? what is the time"), RouteDecision::Ai);
+    assert_eq!(Router::decide("ai how to install rust?"), RouteDecision::Ai);
+    assert_eq!(Router::decide("?find all files in src"), RouteDecision::Ai);
 }
 
 #[test]
 fn test_nl_negative() {
-    use omnilauncher_lib::ai::router::Router;
-    assert!(!Router::is_natural_language("notepad"));
-    assert!(!Router::is_natural_language("chrome"));
+    use omnilauncher_lib::ai::router::{RouteDecision, Router};
+    assert_eq!(Router::decide("notepad"), RouteDecision::Local);
+    assert_eq!(Router::decide("chrome"), RouteDecision::Local);
 }
 
 // ============================================================
@@ -503,13 +643,20 @@ fn test_nl_negative() {
 #[tokio::test]
 async fn test_web_fetch_ok() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("web_fetch", serde_json::json!({"url": "https://httpbin.org/html"})).await;
+    let r = pm
+        .execute_tool(
+            "web_fetch",
+            serde_json::json!({"url": "https://httpbin.org/html"}),
+        )
+        .await;
     assert!(!r.is_empty() && !r.contains("Error fetching"));
 }
 
 #[tokio::test]
 async fn test_web_fetch_empty() {
     let pm = create_plugin_manager();
-    let r = pm.execute_tool("web_fetch", serde_json::json!({"url": ""})).await;
+    let r = pm
+        .execute_tool("web_fetch", serde_json::json!({"url": ""}))
+        .await;
     assert!(r.contains("Error") || r.contains("no URL"));
 }
