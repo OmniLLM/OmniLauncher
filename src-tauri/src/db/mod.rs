@@ -3,6 +3,10 @@
 /// Migrations are numbered SQL files embedded at compile-time via
 /// `include_str!`. Each migration runs exactly once; progress is tracked
 /// in a `_migrations` table inside the same database.
+///
+/// Each statement within a migration is executed individually so that
+/// additive changes (e.g. `ALTER TABLE … ADD COLUMN`) are tolerated on
+/// databases that were created by older code and already have those columns.
 use rusqlite::{Connection, Result};
 
 /// A single migration: a version number and the SQL to execute.
@@ -24,6 +28,38 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../../migrations/002_add_extra_columns.sql"),
         },
     ]
+}
+
+/// Returns true for errors that mean the schema change is already present
+/// (e.g. column already exists, table already exists).
+fn is_already_exists_error(e: &rusqlite::Error) -> bool {
+    let msg = e.to_string().to_lowercase();
+    msg.contains("duplicate column name")
+        || msg.contains("already exists")
+        || msg.contains("table already exists")
+}
+
+/// Execute a multi-statement SQL string one statement at a time.
+/// Errors that indicate the change is already applied are silently ignored;
+/// all other errors are returned immediately.
+fn exec_statements(conn: &Connection, sql: &str) -> Result<()> {
+    for raw in sql.split(';') {
+        let stmt = raw.trim();
+        // Skip blank lines and comment-only lines
+        let meaningful = stmt
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--") && !l.trim().is_empty())
+            .count();
+        if meaningful == 0 {
+            continue;
+        }
+        if let Err(e) = conn.execute_batch(stmt) {
+            if !is_already_exists_error(&e) {
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Ensures the `_migrations` tracking table exists, then runs every
@@ -50,8 +86,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             continue;
         }
 
-        // Execute the migration SQL (may contain multiple statements).
-        conn.execute_batch(m.sql)?;
+        exec_statements(conn, m.sql)?;
 
         conn.execute(
             "INSERT INTO _migrations (version) VALUES (?1)",
