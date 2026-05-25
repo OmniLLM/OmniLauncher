@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SearchBar from "./components/SearchBar";
 import ResultList from "./components/ResultList";
@@ -51,6 +52,16 @@ export function isAiPrefix(input: string): boolean {
   return t.startsWith("?") || t.toLowerCase().startsWith("ai ");
 }
 
+function isConversationResetCommand(input: string): boolean {
+  const t = input.trim().toLowerCase();
+  return t === "/new" || t === "/clear";
+}
+
+function isHelpQuery(input: string): boolean {
+  const t = input.trim().toLowerCase();
+  return t === "/help" || t === "/?";
+}
+
 const DARK_COLORS = {
   bg: "#1E1E2E",
   surface: "#313244",
@@ -85,7 +96,15 @@ function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function safeHref(href: string): string {
+  const trimmed = href.trim();
+  if (/^(https?:|mailto:)/i.test(trimmed)) return escapeHtml(trimmed);
+  return "#";
 }
 
 function inlineFormat(text: string): string {
@@ -96,7 +115,8 @@ function inlineFormat(text: string): string {
     .replace(/~~(.+?)~~/g, "<del>$1</del>")
     .replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a class="md-link" href="$2" target="_blank">$1</a>',
+      (_match, label, href) =>
+        `<a class="md-link" href="${safeHref(href)}" target="_blank">${label}</a>`,
     );
 }
 
@@ -106,7 +126,7 @@ function renderTable(rows: string[]): string {
     row
       .split("|")
       .filter((_c, i, arr) => i > 0 && i < arr.length - 1)
-      .map((c) => c.trim());
+      .map((c) => escapeHtml(c.trim()));
 
   let html = '<table class="md-table"><thead><tr>';
   const header = parseRow(rows[0]);
@@ -170,7 +190,7 @@ function renderMarkdown(text: string): string {
 
     if (line.match(/^#{1,6}\s/)) {
       const level = line.match(/^(#{1,6})\s/)![1].length;
-      const content = line.replace(/^#{1,6}\s/, "");
+      const content = escapeHtml(line.replace(/^#{1,6}\s/, ""));
       result.push(
         `<h${level} class="md-h${level}">${inlineFormat(content)}</h${level}>`,
       );
@@ -184,7 +204,9 @@ function renderMarkdown(text: string): string {
         inList = true;
         listType = "ul";
       }
-      result.push(`<li>${inlineFormat(line.replace(/^\s*[-*]\s/, ""))}</li>`);
+      result.push(
+        `<li>${inlineFormat(escapeHtml(line.replace(/^\s*[-*]\s/, "")))}</li>`,
+      );
       continue;
     }
 
@@ -195,7 +217,9 @@ function renderMarkdown(text: string): string {
         inList = true;
         listType = "ol";
       }
-      result.push(`<li>${inlineFormat(line.replace(/^\s*\d+\.\s/, ""))}</li>`);
+      result.push(
+        `<li>${inlineFormat(escapeHtml(line.replace(/^\s*\d+\.\s/, "")))}</li>`,
+      );
       continue;
     }
 
@@ -207,7 +231,7 @@ function renderMarkdown(text: string): string {
       result.push('<div class="md-spacer"></div>');
       continue;
     }
-    result.push(`<p class="md-p">${inlineFormat(line)}</p>`);
+    result.push(`<p class="md-p">${inlineFormat(escapeHtml(line))}</p>`);
   }
 
   if (inList) result.push(listType === "ul" ? "</ul>" : "</ol>");
@@ -252,8 +276,22 @@ const SLASH_COMMANDS: SlashCommand[] = [
     cmd: "/find",
     shortcut: "/f",
     description: "Search files by name",
-    usage: "/find <filename>",
-    examples: ["/find readme", "/f .gitignore", "/find *.rs"],
+    usage: "* <filename>",
+    examples: ["* readme", "* .gitignore", "/find *.rs"],
+  },
+  {
+    cmd: "*",
+    shortcut: "/find",
+    description: "Flow-style file search",
+    usage: "* <filename>",
+    examples: ["* readme", "* invoice.pdf", "* .gitignore"],
+  },
+  {
+    cmd: "b",
+    shortcut: "bm",
+    description: "Flow-style bookmark search",
+    usage: "b <query>",
+    examples: ["b github", "bm docs"],
   },
   {
     cmd: "/grep",
@@ -357,6 +395,18 @@ const SLASH_COMMANDS: SlashCommand[] = [
     examples: ["/skill list", "/skill view web-summarizer", "/skill help"],
   },
   {
+    cmd: "/new",
+    description: "Start a new AI conversation",
+    usage: "/new",
+    examples: ["/new"],
+  },
+  {
+    cmd: "/clear",
+    description: "Clear the current AI conversation",
+    usage: "/clear",
+    examples: ["/clear"],
+  },
+  {
     cmd: "/help",
     shortcut: "/?",
     description: "Show all available commands",
@@ -364,6 +414,16 @@ const SLASH_COMMANDS: SlashCommand[] = [
     examples: ["/help"],
   },
 ];
+
+const HELP_RESULTS: QueryResult[] = SLASH_COMMANDS.map((command) => ({
+  id: `help-${command.cmd}`,
+  title: command.shortcut ? `${command.cmd}  ${command.shortcut}` : command.cmd,
+  subtitle: `${command.description} · ${command.usage}`,
+  icon: "⌘",
+  score: 1,
+  action_type: "help_command",
+  action_data: `${command.cmd} `,
+}));
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
@@ -384,6 +444,11 @@ export default function App() {
 
   const colors = theme === "dark" ? DARK_COLORS : LIGHT_COLORS;
 
+  const focusInput = useCallback((select = false) => {
+    inputRef.current?.focus();
+    if (select) inputRef.current?.select();
+  }, []);
+
   const isAiMode = aiModeEnabled || isAiPrefix(query);
 
   // Load settings on mount
@@ -397,6 +462,16 @@ export default function App() {
   }, []);
 
   const doSearch = useCallback(async (q: string) => {
+    if (isHelpQuery(q)) {
+      setResults(HELP_RESULTS);
+      return;
+    }
+
+    if (isConversationResetCommand(q)) {
+      setResults([]);
+      return;
+    }
+
     if (!q.trim() || isAiPrefix(q)) {
       setResults([]);
       return;
@@ -411,31 +486,40 @@ export default function App() {
 
   // Focus input on mount
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    focusInput();
+  }, [focusInput]);
 
-  // Re-focus input when window becomes visible
+  // Re-focus input when the native window is shown or focused
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    getCurrentWebviewWindow()
-      .onFocusChanged(({ payload: focused }) => {
-        if (focused) {
-          inputRef.current?.focus();
-          setTimeout(() => {
-            inputRef.current?.focus();
-            inputRef.current?.select();
-          }, 50);
-          setTimeout(() => inputRef.current?.focus(), 150);
-        }
-      })
+    const focusVisibleInput = () => {
+      focusInput();
+      setTimeout(() => focusInput(true), 50);
+      setTimeout(() => focusInput(), 150);
+    };
+
+    let unlistenFocus: (() => void) | undefined;
+    let unlistenShown: (() => void) | undefined;
+
+    listen("omnilauncher://shown", focusVisibleInput)
       .then((fn) => {
-        unlisten = fn;
+        unlistenShown = fn;
       })
       .catch(() => {});
+
+    getCurrentWebviewWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (focused) focusVisibleInput();
+      })
+      .then((fn) => {
+        unlistenFocus = fn;
+      })
+      .catch(() => {});
+
     return () => {
-      unlisten?.();
+      unlistenFocus?.();
+      unlistenShown?.();
     };
-  }, []);
+  }, [focusInput]);
 
   const doAiQuery = useCallback(async (q: string) => {
     if (!q.trim()) return;
@@ -475,12 +559,26 @@ export default function App() {
       });
     } finally {
       setLoading(false);
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setTimeout(() => focusInput(), 50);
     }
-  }, []);
+  }, [focusInput]);
 
   const handleQueryChange = useCallback(
     (value: string) => {
+      if (isHelpQuery(value)) {
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        setQuery(value);
+        setResults(HELP_RESULTS);
+        return;
+      }
+
+      if (isConversationResetCommand(value)) {
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        setQuery(value);
+        setResults([]);
+        return;
+      }
+
       if (value.trim() === "?") {
         setAiModeEnabled((prev) => !prev);
         setQuery("");
@@ -499,8 +597,29 @@ export default function App() {
     [aiModeEnabled, doSearch],
   );
 
+  const handleNewConversation = useCallback(async () => {
+    try {
+      await invoke("clear_conversation");
+    } catch (e) {
+      console.error("clear_conversation error:", e);
+    }
+    setConversationHistory([]);
+    setResults([]);
+    setQuery("");
+  }, []);
+
   const handleSubmit = useCallback(
     (value: string, forceAi: boolean) => {
+      if (isConversationResetCommand(value)) {
+        handleNewConversation();
+        return;
+      }
+
+      if (isHelpQuery(value)) {
+        setResults(HELP_RESULTS);
+        return;
+      }
+
       if (value.trim() === "?") {
         setAiModeEnabled((prev) => !prev);
         setQuery("");
@@ -519,21 +638,17 @@ export default function App() {
         setQuery("");
       }
     },
-    [aiModeEnabled, doAiQuery],
+    [aiModeEnabled, doAiQuery, handleNewConversation],
   );
 
-  const handleNewConversation = useCallback(async () => {
-    try {
-      await invoke("clear_conversation");
-    } catch (e) {
-      console.error("clear_conversation error:", e);
-    }
-    setConversationHistory([]);
-    setResults([]);
-    setQuery("");
-  }, []);
-
   const handleExecute = useCallback(async (result: QueryResult) => {
+    if (result.action_type === "help_command") {
+      setQuery(result.action_data);
+      setResults([]);
+      setTimeout(() => focusInput(), 50);
+      return;
+    }
+
     if (result.action_type === "copy") {
       try {
         await navigator.clipboard.writeText(result.action_data);
@@ -547,9 +662,7 @@ export default function App() {
     } catch (e) {
       console.error("Execute error:", e);
     }
-  }, []);
-
-  // Scroll chat to bottom on new messages
+  }, [focusInput]);
   useEffect(() => {
     if (isAiMode && chatScrollRef.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
@@ -579,9 +692,11 @@ export default function App() {
   const maxHeight = `${panelHeight}px`;
 
   useEffect(() => {
-    const nativeWindowHeight = panelHeight;
-    invoke("set_window_height", { height: nativeWindowHeight }).catch(() => {});
-  }, [panelHeight]);
+    invoke("set_window_geometry", {
+      height: panelHeight,
+      aiMode: isAiMode,
+    }).catch(() => {});
+  }, [panelHeight, isAiMode]);
 
   return (
     <>

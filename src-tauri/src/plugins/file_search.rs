@@ -20,7 +20,9 @@ impl Plugin for FileSearchPlugin {
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = &q.raw;
-        let term = if let Some(t) = raw.strip_prefix("f ") {
+        let term = if let Some(t) = raw.strip_prefix("* ") {
+            t.trim()
+        } else if let Some(t) = raw.strip_prefix("f ") {
             t.trim()
         } else if let Some(t) = raw.strip_prefix("open ") {
             t.trim()

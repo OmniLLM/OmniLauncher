@@ -14,11 +14,11 @@ impl Plugin for CalculatorPlugin {
     }
 
     fn keyword(&self) -> Option<&str> {
-        Some("= ")
+        Some("=")
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        let expr = q.raw.strip_prefix("= ").unwrap_or(&q.raw).trim();
+        let expr = q.raw.strip_prefix('=').unwrap_or(&q.raw).trim();
         match evaluate(expr) {
             Some(result) => vec![QueryResult {
                 id: format!("calc:{}", expr),

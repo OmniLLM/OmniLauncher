@@ -1,4 +1,4 @@
-.PHONY: help dev prod restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle stop-running stop-dev-server
+.PHONY: help dev dev-debug prod prod-debug restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle stop-running stop-dev-server
 
 SHELL := pwsh
 
@@ -6,7 +6,9 @@ help:
 	@echo OmniLauncher - Makefile targets:
 	@powershell -Command "Write-Host ''"
 	@echo   dev              Start dev server with hot reload (Vite + Tauri)
+	@echo   dev-debug        Start dev server with verbose file logging (--debug)
 	@echo   prod             Build and start app in production mode (release)
+	@echo   prod-debug       Build and start app in production mode with --debug logging
 	@echo   restart          Restart production app (use REBUILD=1 to rebuild)
 	@echo   restart-rebuild  Rebuild release binary and restart production app
 	@echo   build            Build frontend + Tauri (debug)
@@ -24,8 +26,14 @@ help:
 dev: stop-running stop-dev-server
 	@cmd /c "set CARGO_TARGET_DIR=target\dev&& npm run tauri dev"
 
+dev-debug: stop-running stop-dev-server
+	@cmd /c "set CARGO_TARGET_DIR=target\dev&& npm run tauri dev -- --debug"
+
 prod: stop-running release
 	@pwsh -NoProfile -Command "if (Test-Path src-tauri/target/release/omnilauncher.exe) { Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' } else { Write-Error 'Release binary not found. Run make release first.'; exit 1 }"
+
+prod-debug: stop-running release
+	@pwsh -NoProfile -Command "if (Test-Path src-tauri/target/release/omnilauncher.exe) { Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' -ArgumentList '--debug' } else { Write-Error 'Release binary not found. Run make release first.'; exit 1 }"
 
 restart: stop-running
 ifeq ($(REBUILD),1)

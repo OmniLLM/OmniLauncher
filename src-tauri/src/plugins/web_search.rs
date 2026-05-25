@@ -59,6 +59,9 @@ impl Plugin for WebSearchPlugin {
             && !raw.starts_with('=')
             && !raw.starts_with("sys ")
             && !raw.starts_with("f ")
+            && !raw.starts_with("* ")
+            && !raw.starts_with("bm ")
+            && !raw.starts_with("b ")
         {
             // fallback: bare query → Google
             let encoded = urlencoding(raw);

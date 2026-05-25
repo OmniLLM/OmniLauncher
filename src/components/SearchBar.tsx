@@ -18,7 +18,8 @@ interface Props {
 const HINT_ITEMS = [
   { key: "=", label: "calc" },
   { key: ">", label: "shell" },
-  { key: "cb", label: "clipboard" },
+  { key: "*", label: "files" },
+  { key: "b", label: "bookmarks" },
   { key: "g", label: "web" },
   { key: "?", label: "AI" },
   { key: "/", label: "commands" },

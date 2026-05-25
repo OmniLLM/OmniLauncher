@@ -122,16 +122,19 @@ impl Plugin for BrowserBookmarksPlugin {
     }
 
     fn keyword(&self) -> Option<&str> {
-        Some("bm ")
+        None
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        let term = q
-            .raw
-            .strip_prefix("bm ")
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
+        let raw = q.raw.trim();
+        let term = if let Some(t) = raw.strip_prefix("bm ") {
+            t.trim()
+        } else if let Some(t) = raw.strip_prefix("b ") {
+            t.trim()
+        } else {
+            return vec![];
+        }
+        .to_lowercase();
         if term.is_empty() {
             return vec![];
         }

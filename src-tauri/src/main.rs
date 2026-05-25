@@ -6,14 +6,61 @@ use omnilauncher_lib::{
     create_plugin_manager, load_settings, save_settings, AppSettings, QueryResult, SkillInfo,
     SkillManager,
 };
-use std::sync::Arc;
+use simplelog::{ColorChoice, ConfigBuilder, LevelFilter, TerminalMode, TermLogger, WriteLogger};
+use std::{
+    fs::{self, OpenOptions},
+    path::PathBuf,
+    sync::Arc,
+};
 use tauri::{
     image::Image,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    LogicalPosition, LogicalSize, Manager, Position, Size,
+    Emitter, LogicalPosition, LogicalSize, Manager, Position, Size,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tokio::sync::Mutex;
+
+fn debug_log_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".config")
+        .join("omnilauncher")
+        .join("omnilauncher.log")
+}
+
+fn init_debug_logging(enable_debug: bool) {
+    if !enable_debug {
+        return;
+    }
+
+    let path = debug_log_path();
+    if let Some(parent) = path.parent() {
+        if let Err(err) = fs::create_dir_all(parent) {
+            eprintln!("Failed to create debug log directory {}: {err}", parent.display());
+            return;
+        }
+    }
+
+    let file = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("Failed to open debug log file {}: {err}", path.display());
+            return;
+        }
+    };
+
+    let config = ConfigBuilder::new()
+        .set_time_format_rfc3339()
+        .set_thread_level(LevelFilter::Debug)
+        .build();
+
+    if WriteLogger::init(LevelFilter::Trace, config, file).is_err() {
+        eprintln!("Failed to initialize debug logger at {}", path.display());
+        return;
+    }
+
+    log::info!("Debug logging enabled at {}", path.display());
+}
 
 pub struct AppState {
     pub plugin_manager: Arc<Mutex<omnilauncher_lib::PluginManager>>,
@@ -25,7 +72,15 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    log::info!("Starting OmniLauncher runtime");
     let settings = load_settings();
+    log::debug!(
+        "Loaded settings (base_url={}, model={}, max_results={})",
+        settings.ai_base_url,
+        settings.ai_model,
+        settings.max_results
+    );
+
     let ai_client = AiClient::new(
         settings.ai_base_url.clone(),
         settings.ai_api_key.clone(),
@@ -34,6 +89,7 @@ pub fn run() {
 
     let mut skill_manager = SkillManager::new();
     skill_manager.load_all();
+    log::debug!("Loaded skill manager");
 
     let state = AppState {
         plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
@@ -49,6 +105,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .setup(move |app| {
+            log::debug!("Running Tauri setup");
             let window = app.get_webview_window("main").unwrap();
 
             // Center the initial window before the frontend performs its first resize.
@@ -88,6 +145,7 @@ pub fn run() {
                         } else {
                             let _ = tray_window.show();
                             let _ = tray_window.set_focus();
+                            let _ = tray_window.emit("omnilauncher://shown", ());
                         }
                     }
                 })
@@ -98,15 +156,18 @@ pub fn run() {
             global_shortcut
                 .on_shortcut(shortcut, move |_app, _shortcut, event| {
                     if let tauri_plugin_global_shortcut::ShortcutState::Pressed = event.state() {
+                        log::trace!("Global shortcut pressed; toggling main window visibility");
                         if window.is_visible().unwrap_or(false) {
                             let _ = window.hide();
                         } else {
                             let _ = window.show();
                             let _ = window.set_focus();
+                            let _ = window.emit("omnilauncher://shown", ());
                         }
                     }
                 })
                 .unwrap_or_else(|err| {
+                    log::warn!("Failed to register global shortcut: {err}");
                     eprintln!("Failed to register global shortcut: {err}");
                 });
 
@@ -124,19 +185,28 @@ pub fn run() {
             list_skills,
             reload_skills,
             install_skill,
-            set_window_height,
+            set_window_geometry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 #[tauri::command]
-async fn set_window_height(window: tauri::WebviewWindow, height: f64) -> Result<bool, String> {
-    sync_window_geometry(&window, height).await
+async fn set_window_geometry(
+    window: tauri::WebviewWindow,
+    height: f64,
+    ai_mode: bool,
+) -> Result<bool, String> {
+    sync_window_geometry(&window, height, ai_mode).await
 }
 
-async fn sync_window_geometry(window: &tauri::WebviewWindow, height: f64) -> Result<bool, String> {
+async fn sync_window_geometry(
+    window: &tauri::WebviewWindow,
+    height: f64,
+    ai_mode: bool,
+) -> Result<bool, String> {
     let clamped_height = height.clamp(56.0, 640.0);
+    log::trace!("sync_window_geometry requested height={height}, clamped={clamped_height}");
 
     if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
         let scale_factor = monitor.scale_factor();
@@ -147,9 +217,16 @@ async fn sync_window_geometry(window: &tauri::WebviewWindow, height: f64) -> Res
         let monitor_x = monitor_position.x as f64 / scale_factor;
         let monitor_y = monitor_position.y as f64 / scale_factor;
 
-        let window_width = monitor_width / 3.0;
+        let window_width = if ai_mode {
+            monitor_width * 0.4
+        } else {
+            monitor_width / 3.0
+        };
         let window_x = monitor_x + (monitor_width - window_width) / 2.0;
         let window_y = monitor_y + (monitor_height - clamped_height) / 2.0;
+        log::debug!(
+            "Applying centered geometry width={window_width:.2}, height={clamped_height:.2}, x={window_x:.2}, y={window_y:.2}"
+        );
 
         window
             .set_size(Size::Logical(LogicalSize::new(
@@ -162,8 +239,15 @@ async fn sync_window_geometry(window: &tauri::WebviewWindow, height: f64) -> Res
             .map_err(|e| e.to_string())?;
         Ok(true)
     } else {
+        let fallback_width = if ai_mode { 768.0 } else { 680.0 };
+        log::debug!(
+            "No monitor info available; applying fallback geometry width={fallback_width:.2} height={clamped_height:.2}"
+        );
         window
-            .set_size(Size::Logical(LogicalSize::new(680.0, clamped_height)))
+            .set_size(Size::Logical(LogicalSize::new(
+                fallback_width,
+                clamped_height,
+            )))
             .map_err(|e| e.to_string())?;
         Ok(true)
     }
@@ -174,6 +258,7 @@ async fn search(
     query: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<QueryResult>, String> {
+    log::trace!("search invoked with query={query}");
     let pm = state.plugin_manager.lock().await;
     Ok(pm.query_all(&query).await)
 }
@@ -183,6 +268,7 @@ async fn ai_query(
     query: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<omnilauncher_lib::AiResponse, String> {
+    log::debug!("ai_query invoked with {} characters", query.len());
     // Add to conversation context
     {
         let mut ctx = state.conversation.lock().await;
@@ -209,6 +295,7 @@ async fn ai_query(
 
 #[tauri::command]
 async fn clear_conversation(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    log::debug!("clear_conversation invoked");
     let mut ctx = state.conversation.lock().await;
     ctx.clear();
     Ok(true)
@@ -219,6 +306,7 @@ async fn slash_preview(
     query: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<QueryResult>, String> {
+    log::trace!("slash_preview invoked with query={query}");
     let pm = state.plugin_manager.lock().await;
     let lower = query.to_lowercase();
 
@@ -338,6 +426,12 @@ async fn slash_preview(
 
 #[tauri::command]
 async fn execute_result(result: QueryResult) -> Result<bool, String> {
+    log::debug!(
+        "execute_result invoked action_type={} id={} title={}",
+        result.action_type,
+        result.id,
+        result.title
+    );
     use std::process::Command;
     let success = match result.action_type.as_str() {
         "url" | "open_url" => {
@@ -387,6 +481,11 @@ async fn execute_result(result: QueryResult) -> Result<bool, String> {
 
 #[tauri::command]
 async fn list_models(base_url: String, api_key: String) -> Result<Vec<String>, String> {
+    log::debug!(
+        "list_models invoked for base_url={} (api_key_present={})",
+        base_url,
+        !api_key.is_empty()
+    );
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -420,6 +519,7 @@ async fn list_models(base_url: String, api_key: String) -> Result<Vec<String>, S
 
 #[tauri::command]
 async fn get_settings(state: tauri::State<'_, AppState>) -> Result<AppSettings, String> {
+    log::trace!("get_settings invoked");
     let settings = state.settings.lock().await;
     Ok(settings.clone())
 }
@@ -429,6 +529,12 @@ async fn save_settings_cmd(
     settings: AppSettings,
     state: tauri::State<'_, AppState>,
 ) -> Result<bool, String> {
+    log::debug!(
+        "save_settings_cmd invoked (base_url={}, model={}, max_results={})",
+        settings.ai_base_url,
+        settings.ai_model,
+        settings.max_results
+    );
     let mut current = state.settings.lock().await;
     *current = settings.clone();
     // Recreate AiClient with new settings
@@ -445,12 +551,14 @@ async fn save_settings_cmd(
 
 #[tauri::command]
 async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillInfo>, String> {
+    log::trace!("list_skills invoked");
     let mgr = state.skill_manager.lock().await;
     Ok(mgr.list_meta().into_iter().map(SkillInfo::from).collect())
 }
 
 #[tauri::command]
 async fn reload_skills(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    log::debug!("reload_skills invoked");
     let mut mgr = state.skill_manager.lock().await;
     mgr.reload();
     Ok(true)
@@ -461,6 +569,7 @@ async fn install_skill(
     source: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
+    log::debug!("install_skill invoked with source={source}");
     let mut mgr = state.skill_manager.lock().await;
     if source.starts_with("http://") || source.starts_with("https://") {
         mgr.install_from_url(&source)
@@ -470,5 +579,23 @@ async fn install_skill(
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let debug_enabled = args.iter().any(|arg| arg == "--debug");
+    init_debug_logging(debug_enabled);
+
+    if debug_enabled {
+        log::info!("Running with --debug");
+        log::debug!("CLI args: {:?}", args);
+    } else if TermLogger::init(
+        LevelFilter::Info,
+        ConfigBuilder::new().build(),
+        TerminalMode::Stderr,
+        ColorChoice::Never,
+    )
+    .is_ok()
+    {
+        log::info!("Running without debug file logging");
+    }
+
     run();
 }

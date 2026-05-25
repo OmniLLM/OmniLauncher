@@ -20,11 +20,11 @@ impl Plugin for ShellExecPlugin {
     }
 
     fn keyword(&self) -> Option<&str> {
-        Some("> ")
+        Some(">")
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        let cmd = q.raw.strip_prefix("> ").unwrap_or("").trim();
+        let cmd = q.raw.strip_prefix('>').unwrap_or("").trim();
         if cmd.is_empty() {
             return vec![QueryResult {
                 id: "shell:help".to_string(),

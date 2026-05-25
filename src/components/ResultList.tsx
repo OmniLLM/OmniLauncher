@@ -22,6 +22,7 @@ const ACTION_BADGE: Record<string, string> = {
   url: "↵ Open",
   shell: "↵ Run",
   copy: "↵ Copy",
+  help_command: "↵ Use",
 };
 
 export default function ResultList({

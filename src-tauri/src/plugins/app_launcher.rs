@@ -192,7 +192,7 @@ impl Plugin for AppLauncherPlugin {
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         if q.raw.is_empty()
-            || q.raw.starts_with("= ")
+            || q.raw.starts_with('=')
             || q.raw.starts_with('>')
             || q.raw.starts_with("sys ")
         {
