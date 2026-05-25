@@ -4,6 +4,7 @@ use omnilauncher_lib::{
         router::{ConversationContext, Router},
     },
     create_plugin_manager, load_settings, save_settings, AppSettings, QueryResult,
+    SkillInfo, SkillManager,
 };
 use std::sync::Arc;
 use tauri::Manager;
@@ -15,6 +16,7 @@ pub struct AppState {
     pub ai_client: Mutex<AiClient>,
     pub settings: Arc<Mutex<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
+    pub skill_manager: Arc<Mutex<SkillManager>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -26,11 +28,15 @@ pub fn run() {
         settings.ai_model.clone(),
     );
 
+    let mut skill_manager = SkillManager::new();
+    skill_manager.load_all();
+
     let state = AppState {
         plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
         ai_client: Mutex::new(ai_client),
         settings: Arc::new(Mutex::new(settings)),
         conversation: Arc::new(Mutex::new(ConversationContext::default())),
+        skill_manager: Arc::new(Mutex::new(skill_manager)),
     };
 
     let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyO);
@@ -77,6 +83,9 @@ pub fn run() {
             save_settings_cmd,
             clear_conversation,
             list_models,
+            list_skills,
+            reload_skills,
+            install_skill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -105,9 +114,11 @@ async fn ai_query(
     let pm = state.plugin_manager.lock().await;
     let client = state.ai_client.lock().await;
     let ctx = state.conversation.lock().await;
+    let skill_mgr = state.skill_manager.lock().await;
     // Always use AI route in chat mode (bypass NL detection)
-    let response = Router::ai_route(&pm, &client, &ctx).await;
+    let response = Router::ai_route(&query, &pm, &client, &ctx, &skill_mgr).await;
     drop(ctx);
+    drop(skill_mgr);
 
     // Add assistant response to context
     {
@@ -343,6 +354,34 @@ async fn save_settings_cmd(
         settings.ai_model.clone(),
     );
     Ok(save_settings(&settings))
+}
+
+// ─── Skill commands ───────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillInfo>, String> {
+    let mgr = state.skill_manager.lock().await;
+    Ok(mgr.list_meta().into_iter().map(SkillInfo::from).collect())
+}
+
+#[tauri::command]
+async fn reload_skills(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    let mut mgr = state.skill_manager.lock().await;
+    mgr.reload();
+    Ok(true)
+}
+
+#[tauri::command]
+async fn install_skill(
+    source: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let mut mgr = state.skill_manager.lock().await;
+    if source.starts_with("http://") || source.starts_with("https://") {
+        mgr.install_from_url(&source)
+    } else {
+        mgr.install_from_path(&source)
+    }
 }
 
 fn main() {

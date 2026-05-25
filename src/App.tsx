@@ -245,6 +245,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: "/color", description: "Convert color formats (hex/rgb/name)", usage: "/color <value>", examples: ["/color #ff6600", "/color rgb(0,128,255)", "/color teal"] },
   { cmd: "/sys", description: "System commands: lock, sleep, shutdown, restart", usage: "/sys <action>", examples: ["/sys lock", "/sys sleep", "/sys shutdown"] },
   { cmd: "/clip", shortcut: "/cb", description: "Search clipboard history", usage: "/clip [term]", examples: ["/clip", "/cb password", "/clip url"] },
+  { cmd: "/skill", description: "Manage skills (list, view, install, reload)", usage: "/skill [list|view|install|reload|help]", examples: ["/skill list", "/skill view web-summarizer", "/skill help"] },
   { cmd: "/help", shortcut: "/?", description: "Show all available commands", usage: "/help", examples: ["/help"] },
 ];
 
@@ -580,6 +581,7 @@ export default function App() {
 // ─── Chat bubble sub-component ─────────────────────────────────────────────
 
 function toolIcon(tool: string): string {
+  if (tool.startsWith('🎯')) return '' // skill badge already has emoji
   if (tool.includes('file')) return '📁'
   if (tool.includes('web') || tool.includes('search')) return '🔍'
   if (tool.includes('calc')) return '🧮'
@@ -612,20 +614,24 @@ function ChatBubble({ turn, colors }: { turn: ConversationTurn; colors: typeof D
       {/* Tool chips — only for assistant */}
       {!isUser && turn.tools_used && turn.tools_used.length > 0 && (
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', paddingLeft: '4px' }}>
-          {turn.tools_used.map((tool, i) => (
-            <span
-              key={i}
-              style={{
-                fontSize: '11px',
-                background: colors.surface2,
-                padding: '2px 7px',
-                borderRadius: '10px',
-                color: colors.sub,
-              }}
-            >
-              {toolIcon(tool)} {tool}
-            </span>
-          ))}
+          {turn.tools_used.map((tool, i) => {
+            const isSkill = tool.startsWith('🎯')
+            return (
+              <span
+                key={i}
+                style={{
+                  fontSize: '11px',
+                  background: isSkill ? `${colors.accent}22` : colors.surface2,
+                  border: isSkill ? `1px solid ${colors.accent}55` : 'none',
+                  padding: '2px 7px',
+                  borderRadius: '10px',
+                  color: isSkill ? colors.accent : colors.sub,
+                }}
+              >
+                {isSkill ? tool : `${toolIcon(tool)} ${tool}`}
+              </span>
+            )
+          })}
         </div>
       )}
 

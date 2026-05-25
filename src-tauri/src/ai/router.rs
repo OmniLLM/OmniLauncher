@@ -1,5 +1,6 @@
 use crate::ai::client::{AiClient, Message};
 use crate::plugins::{PluginManager, QueryResult};
+use crate::skills::SkillManager;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +131,7 @@ impl Router {
         plugin_manager: &PluginManager,
         ai_client: &AiClient,
         context: &ConversationContext,
+        skill_manager: &SkillManager,
     ) -> AiResponse {
         match Self::decide(input) {
             RouteDecision::Local => {
@@ -143,15 +145,17 @@ impl Router {
             }
             RouteDecision::Ai => {
                 let prompt = Self::strip_ai_prefix(input);
-                Self::ai_route(prompt, plugin_manager, ai_client).await
+                Self::ai_route(prompt, plugin_manager, ai_client, context, skill_manager).await
             }
         }
     }
 
     pub async fn ai_route(
+        query: &str,
         plugin_manager: &PluginManager,
         ai_client: &AiClient,
         context: &ConversationContext,
+        skill_manager: &SkillManager,
     ) -> AiResponse {
         let tools = plugin_manager.all_tool_schemas();
 
@@ -183,83 +187,138 @@ impl Router {
             os_info.0, os_info.1, os_info.2
         );
 
-        // Use conversation context (includes prior turns) + current user message
-        let messages = context.get_messages_with_system(&system_prompt);
-        // The current user message is already added to context before route() is called,
-        // so it's already in get_messages_with_system output.
+        // Find relevant skills
+        let relevant_skills = skill_manager.find_relevant(query);
+        let mut skills_used: Vec<String> = relevant_skills
+            .iter()
+            .map(|s| format!("🎯 {}", s.meta.name))
+            .collect();
 
-        match ai_client.chat_with_tools(messages.clone(), tools).await {
-            Ok(resp) => {
-                let mut tools_used = vec![];
-                let mut tool_results: Vec<(String, String)> = vec![];
-                let mut final_content = resp.content.clone().unwrap_or_default();
+        // Build messages: system + history + optional skill context + current user msg
+        // The current user message is already added to context before route() is called.
+        let mut messages = context.get_messages_with_system(&system_prompt);
 
-                if let Some(tool_calls) = resp.tool_calls {
-                    for tc in &tool_calls {
-                        tools_used.push(tc.function.name.clone());
-                        let args: serde_json::Value =
-                            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                        let result = plugin_manager.execute_tool(&tc.function.name, args).await;
-                        tool_results.push((tc.function.name.clone(), result));
-                    }
+        // Inject skill context as a user message just before the last user message
+        // (Hermes pattern: skill body injected before the actual query)
+        if !relevant_skills.is_empty() {
+            let skill_context = relevant_skills
+                .iter()
+                .map(|s| format!("--- Active Skill: {} ---\n{}", s.meta.name, s.body))
+                .collect::<Vec<_>>()
+                .join("\n\n");
 
-                    // Always format tool results via a follow-up AI call
-                    if !tool_results.is_empty() {
-                        let tool_output = tool_results
-                            .iter()
-                            .map(|(name, result)| format!("[Tool: {}]\n{}", name, result))
-                            .collect::<Vec<_>>()
-                            .join("\n\n");
+            let skill_msg = Message {
+                role: "user".to_string(),
+                content: format!(
+                    "--- Active Skills ---\n{}\n--- End Skills ---\nPlease follow these skill instructions for my request.",
+                    skill_context
+                ),
+            };
 
-                        let mut followup_msgs = messages.clone();
-                        followup_msgs.push(Message {
-                            role: "assistant".to_string(),
-                            content: format!("I called tools and got these results:\n\n{}", tool_output),
-                        });
-                        followup_msgs.push(Message {
-                            role: "user".to_string(),
-                            content: "Present these results in a clean, formatted way using Markdown. \
-                                     Use tables for structured data, bullet lists for multiple items. \
-                                     Be concise. Do NOT include raw output, do NOT show the original command output, \
-                                     do NOT add a 'Raw output' section. Only show the formatted/summarized version.".to_string(),
-                        });
+            // Insert skill context before the last user message
+            let last_idx = messages.len().saturating_sub(1);
+            // Find the last user message index
+            let insert_before = messages.iter().rposition(|m| m.role == "user")
+                .unwrap_or(last_idx);
+            messages.insert(insert_before, skill_msg);
+        }
 
-                        match ai_client.chat(followup_msgs).await {
-                            Ok(formatted) => {
-                                final_content = formatted;
-                            }
-                            Err(_) => {
-                                // Fallback: wrap raw output in code blocks
-                                final_content = tool_results
-                                    .iter()
-                                    .map(|(name, result)| {
-                                        format!("**{}**\n```\n{}\n```", name, result)
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n\n");
-                            }
+        // Agentic loop: up to 6 iterations
+        let mut all_tools_used: Vec<String> = vec![];
+        let mut loop_messages = messages.clone();
+        let mut final_content = String::new();
+
+        for _iteration in 0..6 {
+            match ai_client.chat_with_tools(loop_messages.clone(), tools.clone()).await {
+                Ok(resp) => {
+                    if let Some(tool_calls) = resp.tool_calls {
+                        if tool_calls.is_empty() {
+                            final_content = resp.content.unwrap_or_default();
+                            break;
                         }
+
+                        // Execute all tools in this iteration
+                        let mut tool_result_messages: Vec<Message> = vec![];
+                        let mut tc_json_list: Vec<serde_json::Value> = vec![];
+
+                        for tc in &tool_calls {
+                            all_tools_used.push(tc.function.name.clone());
+                            let args: serde_json::Value =
+                                serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                            let result = plugin_manager.execute_tool(&tc.function.name, args).await;
+
+                            tc_json_list.push(serde_json::json!({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            }));
+
+                            tool_result_messages.push(Message {
+                                role: "tool".to_string(),
+                                content: format!(
+                                    "{{\"tool_call_id\":\"{}\",\"content\":{}}}",
+                                    tc.id,
+                                    serde_json::json!(result)
+                                ),
+                            });
+                        }
+
+                        // Append assistant message with tool_calls
+                        loop_messages.push(Message {
+                            role: "assistant".to_string(),
+                            content: format!(
+                                "[tool_calls: {}]",
+                                serde_json::to_string(&tc_json_list).unwrap_or_default()
+                            ),
+                        });
+
+                        // Append tool results
+                        loop_messages.extend(tool_result_messages);
+
+                        // Continue to next iteration
+                    } else {
+                        // No tool calls: final text response
+                        final_content = resp.content.unwrap_or_default();
+                        break;
                     }
                 }
-
-                AiResponse {
-                    content: final_content,
-                    tools_used,
-                    results: vec![],
-                    is_ai: true,
+                Err(e) => {
+                    final_content = format!("AI error: {}", e);
+                    break;
                 }
             }
-            Err(e) => AiResponse {
-                content: format!("AI error: {}", e),
-                tools_used: vec![],
-                results: vec![],
-                is_ai: true,
-            },
+        }
+
+        // If we have tool results but no final content, ask AI to format them
+        if final_content.is_empty() && !all_tools_used.is_empty() {
+            let mut followup = loop_messages.clone();
+            followup.push(Message {
+                role: "user".to_string(),
+                content: "Please summarize the tool results above in clean Markdown. \
+                         Be concise. Do NOT show raw output. Only show the formatted/summarized version.".to_string(),
+            });
+            match ai_client.chat(followup).await {
+                Ok(formatted) => final_content = formatted,
+                Err(e) => final_content = format!("AI error: {}", e),
+            }
+        }
+
+        // Merge skill badges into tools_used
+        all_tools_used.extend(skills_used.drain(..));
+
+        AiResponse {
+            content: final_content,
+            tools_used: all_tools_used,
+            results: vec![],
+            is_ai: true,
         }
     }
 
     /// Handle slash commands — instant, no AI involved
-    async fn slash_command(input: &str, plugin_manager: &PluginManager) -> AiResponse {
+    async fn slash_command(input: &str, plugin_manager: &PluginManager, skill_manager: &SkillManager) -> AiResponse {
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
         let cmd = parts[0];
         let arg = parts.get(1).unwrap_or(&"").trim();
@@ -647,6 +706,124 @@ impl Router {
                     }
                 }
             }
+            "/skill" => {
+                let sub_parts: Vec<&str> = arg.splitn(2, ' ').collect();
+                let subcmd = sub_parts[0];
+                let subarg = sub_parts.get(1).unwrap_or(&"").trim();
+
+                match subcmd {
+                    "list" | "" => {
+                        let metas = skill_manager.list_meta();
+                        if metas.is_empty() {
+                            return AiResponse {
+                                content: "No skills loaded. Install skills with `/skill install <url|path>`".to_string(),
+                                tools_used: vec![],
+                                results: vec![],
+                                is_ai: false,
+                            };
+                        }
+                        let mut lines = vec!["## 🎯 Installed Skills\n".to_string()];
+                        for meta in &metas {
+                            let triggers = meta.triggers.join(", ");
+                            lines.push(format!(
+                                "### {} `v{}`\n{}\n\n**Triggers:** {}\n**Tags:** {}\n",
+                                meta.name,
+                                meta.version,
+                                meta.description,
+                                triggers,
+                                meta.tags.join(", ")
+                            ));
+                        }
+                        AiResponse {
+                            content: lines.join("\n"),
+                            tools_used: vec![],
+                            results: vec![],
+                            is_ai: false,
+                        }
+                    }
+                    "view" => {
+                        if subarg.is_empty() {
+                            return AiResponse {
+                                content: "Usage: `/skill view <name>`".to_string(),
+                                tools_used: vec![],
+                                results: vec![],
+                                is_ai: false,
+                            };
+                        }
+                        match skill_manager.get_by_name(subarg) {
+                            Some(skill) => {
+                                let content = format!(
+                                    "## 🎯 Skill: {}\n\n**Description:** {}\n**Version:** {}\n**Triggers:** {}\n**Tags:** {}\n\n---\n\n{}",
+                                    skill.meta.name,
+                                    skill.meta.description,
+                                    skill.meta.version,
+                                    skill.meta.triggers.join(", "),
+                                    skill.meta.tags.join(", "),
+                                    skill.body
+                                );
+                                AiResponse {
+                                    content,
+                                    tools_used: vec![],
+                                    results: vec![],
+                                    is_ai: false,
+                                }
+                            }
+                            None => AiResponse {
+                                content: format!("Skill `{}` not found. Use `/skill list` to see available skills.", subarg),
+                                tools_used: vec![],
+                                results: vec![],
+                                is_ai: false,
+                            },
+                        }
+                    }
+                    "install" => {
+                        if subarg.is_empty() {
+                            return AiResponse {
+                                content: "Usage: `/skill install <url|path>`".to_string(),
+                                tools_used: vec![],
+                                results: vec![],
+                                is_ai: false,
+                            };
+                        }
+                        // Note: skill_manager is &SkillManager (immutable) in this context.
+                        // Installation requires mutable access — instruct user to use the Tauri command.
+                        AiResponse {
+                            content: format!(
+                                "To install a skill, use the `install_skill` command programmatically or copy the SKILL.md file to:\n\n`{}`\n\nThen run `/skill reload`.",
+                                SkillManager::skill_dir().display()
+                            ),
+                            tools_used: vec![],
+                            results: vec![],
+                            is_ai: false,
+                        }
+                    }
+                    "reload" => {
+                        // reload requires &mut — instruct user to use Tauri command
+                        AiResponse {
+                            content: "Use the `reload_skills` Tauri command or restart the app to reload skills.\n\nSkills dir: `".to_string()
+                                + &SkillManager::skill_dir().display().to_string()
+                                + "`",
+                            tools_used: vec![],
+                            results: vec![],
+                            is_ai: false,
+                        }
+                    }
+                    "help" => {
+                        AiResponse {
+                            content: SKILL_HELP.to_string(),
+                            tools_used: vec![],
+                            results: vec![],
+                            is_ai: false,
+                        }
+                    }
+                    _ => AiResponse {
+                        content: format!("Unknown skill subcommand: `{}`\n\n{}", subcmd, SKILL_HELP),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    },
+                }
+            }
             _ => {
                 AiResponse {
                     content: format!("Unknown command: `{}`\n\nType `/help` to see available commands.", cmd),
@@ -703,6 +880,33 @@ const SLASH_HELP: &str = "\
 ```
 
 **Tip:** Type `/` to see the command palette. Anything without `/` goes to AI.
+";
+
+const SKILL_HELP: &str = "\
+## 🎯 Skill Commands
+
+| Command | Description |
+|---------|-------------|
+| `/skill list` | List all installed skills |
+| `/skill view <name>` | Show full skill content |
+| `/skill install <url>` | Install skill from URL |
+| `/skill install <path>` | Install skill from local path |
+| `/skill reload` | Hot-reload all skills |
+| `/skill help` | Show this help |
+
+**About Skills:**
+Skills are Markdown files (`SKILL.md`) with YAML frontmatter that inject behavior into the AI assistant.
+When your query matches a skill's triggers, the skill's instructions are automatically included.
+
+**User skills directory:**
+`~/.config/omnilauncher/skills/<skill-name>/SKILL.md`
+
+**Examples:**
+```
+/skill list                          → see all skills
+/skill view web-summarizer           → view skill details
+/skill install ~/my-skill/SKILL.md  → install local skill
+```
 ";
 
 fn get_command_help(cmd: &str) -> String {
