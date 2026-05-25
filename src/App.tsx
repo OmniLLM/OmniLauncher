@@ -942,7 +942,7 @@ export default function App() {
           loading={loading}
           colors={colors}
           onSettingsClick={() => setShowSettings((s) => !s)}
-          showHintBar={!isAiMode && isHelpHintQuery(query)}
+          showHintBar={!isAiMode && (isHelpHintQuery(query) || query.trim() === "")}
           inputRef={inputRef}
         />
       </div>

@@ -15,14 +15,33 @@ interface Props {
   inputRef?: RefObject<HTMLInputElement>;
 }
 
-const HINT_ITEMS = [
+// Core plugin prefixes (always shown)
+const HINT_CORE = [
   { key: "=", label: "calc" },
   { key: ">", label: "shell" },
-  { key: "*", label: "files" },
-  { key: "b", label: "bookmarks" },
-  { key: "g", label: "web" },
+  { key: "* / f", label: "files" },
+  { key: "b / bm", label: "bookmarks" },
   { key: "?", label: "AI" },
   { key: "/", label: "commands" },
+];
+
+// Web search prefixes (shown in a second row)
+const HINT_SEARCH = [
+  { key: "g", label: "Google" },
+  { key: "yt / youtube", label: "YouTube" },
+  { key: "gh / github", label: "GitHub" },
+  { key: "wiki", label: "Wikipedia" },
+  { key: "maps", label: "Maps" },
+  { key: "so", label: "StackOverflow" },
+  { key: "ddg", label: "DuckDuckGo" },
+  { key: "bing", label: "Bing" },
+  { key: "image", label: "Images" },
+  { key: "lucky", label: "Feeling Lucky" },
+  { key: "translate", label: "Translate" },
+  { key: "ytmusic", label: "YT Music" },
+  { key: "netflix", label: "Netflix" },
+  { key: "gist", label: "Gist" },
+  { key: "wolframalpha", label: "Wolfram" },
 ];
 
 export default function SearchBar({
@@ -199,49 +218,61 @@ export default function SearchBar({
         {showHintBar && (
           <div
             style={{
-              display: "flex",
-              gap: "4px",
               padding: "4px 16px 8px",
-              alignItems: "center",
-              flexWrap: "wrap",
               animation: "omni-hint-fadein 200ms ease both",
             }}
           >
-            {HINT_ITEMS.map(({ key, label }) => (
-              <span
-                key={key}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "3px",
-                  fontSize: "11px",
-                  color: colors.sub,
-                  userSelect: "none",
-                  marginRight: "6px",
-                }}
-              >
-                <kbd
-                  style={{
-                    fontFamily:
-                      "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-                    fontSize: "10px",
-                    background: colors.surface,
-                    color: colors.accent,
-                    padding: "1px 5px",
-                    borderRadius: "4px",
-                    border: `1px solid ${colors.surface2}`,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {key}
-                </kbd>
-                <span style={{ opacity: 0.7 }}>{label}</span>
-              </span>
-            ))}
+            {/* Core prefixes row */}
+            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginBottom: "4px" }}>
+              {HINT_CORE.map(({ key, label }) => (
+                <HintChip key={key} prefix={key} label={label} colors={colors} />
+              ))}
+            </div>
+            {/* Web search prefixes row */}
+            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+              {HINT_SEARCH.map(({ key, label }) => (
+                <HintChip key={key} prefix={key} label={label} colors={colors} />
+              ))}
+            </div>
           </div>
         )}
       </div>
     </>
+  );
+}
+
+// ─── Hint chip ────────────────────────────────────────────────────────────────
+
+function HintChip({ prefix, label, colors }: { prefix: string; label: string; colors: Record<string, string> }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "3px",
+        fontSize: "11px",
+        color: colors.sub,
+        userSelect: "none",
+        marginRight: "4px",
+      }}
+    >
+      <kbd
+        style={{
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+          fontSize: "10px",
+          background: colors.surface,
+          color: colors.accent,
+          padding: "1px 5px",
+          borderRadius: "4px",
+          border: `1px solid ${colors.surface2}`,
+          lineHeight: 1.6,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {prefix}
+      </kbd>
+      <span style={{ opacity: 0.7 }}>{label}</span>
+    </span>
   );
 }
 
