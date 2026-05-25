@@ -695,6 +695,17 @@ async fn test_todo_view_tool_returns_live_page_url() {
 }
 
 #[tokio::test]
+async fn test_todo_view_tool_reports_browser_open_success() {
+    let pm = create_plugin_manager();
+    let result = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "view"}))
+        .await;
+
+    assert!(result.contains("Opened"), "Expected direct success message, got: {}", result);
+    assert!(result.contains("http://127.0.0.1:1421/todo"), "Got: {}", result);
+}
+
+#[tokio::test]
 async fn test_todo_view_query_opens_live_page() {
     let pm = create_plugin_manager();
     let results = pm.query_all("todo view").await;

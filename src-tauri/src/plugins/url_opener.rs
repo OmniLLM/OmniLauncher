@@ -1,6 +1,27 @@
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 
+pub(crate) fn open_url_in_browser(url: &str) -> std::io::Result<()> {
+    let result = {
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "", url])
+                .spawn()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open").arg(url).spawn()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            std::process::Command::new("xdg-open").arg(url).spawn()
+        }
+    };
+
+    result.map(|_| ())
+}
+
 pub struct UrlOpenerPlugin;
 
 #[async_trait]
@@ -63,26 +84,9 @@ impl Plugin for UrlOpenerPlugin {
             return "Error: no URL provided".to_string();
         }
 
-        let result = {
-            #[cfg(target_os = "windows")]
-            {
-                std::process::Command::new("cmd")
-                    .args(["/C", "start", "", url])
-                    .spawn()
-            }
-            #[cfg(target_os = "macos")]
-            {
-                std::process::Command::new("open").arg(url).spawn()
-            }
-            #[cfg(target_os = "linux")]
-            {
-                std::process::Command::new("xdg-open").arg(url).spawn()
-            }
-        };
-
-        match result {
-            Ok(_) => format!("Opened {}", url),
-            Err(e) => format!("Failed to open {}: {}", url, e),
+        match open_url_in_browser(url) {
+            Ok(_) => format!("Opened {} in your browser.", url),
+            Err(e) => format!("Failed to open {} in your browser: {}", url, e),
         }
     }
 }

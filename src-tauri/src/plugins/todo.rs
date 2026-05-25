@@ -1,4 +1,5 @@
 use crate::db;
+use crate::plugins::url_opener::open_url_in_browser;
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
@@ -1008,7 +1009,16 @@ impl Plugin for TodoPlugin {
                 set_status(id, "todo")
             }
             "clear" => clear_todos(),
-            "view" => format!("Open {} in your browser.", todo_live_url()),
+            "view" => {
+                let url = todo_live_url().to_string();
+                match open_url_in_browser(&url) {
+                    Ok(_) => format!("Opened {} in your browser.", url),
+                    Err(e) => format!(
+                        "Failed to open {} in your browser: {}. Open it manually if needed.",
+                        url, e
+                    ),
+                }
+            }
             "set_status" => {
                 let id: i64 = text.parse().unwrap_or(0);
                 if id == 0 {
