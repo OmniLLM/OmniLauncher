@@ -50,12 +50,85 @@ impl AiClient {
             .map_err(|e| e.to_string())
     }
 
+    /// Returns true if the error message indicates a retriable failure.
+    fn is_retriable(err: &str) -> bool {
+        let lower = err.to_lowercase();
+        // Network-level errors (reqwest errors contain these keywords)
+        if lower.contains("connection") || lower.contains("network") || lower.contains("timed out") {
+            return true;
+        }
+        // HTTP status codes and textual rate-limit messages
+        lower.contains("rate limit")
+            || lower.contains("429")
+            || lower.contains("503")
+            || lower.contains("502")
+    }
+
     pub async fn chat(&self, messages: Vec<Message>) -> Result<String, String> {
         let resp = self.chat_with_tools(messages, vec![]).await?;
         Ok(resp.content.unwrap_or_default())
     }
 
+    /// Wrapper with retry logic (max 3 attempts, 2 s base delay + 0–1 s jitter).
+    ///
+    /// Retries on: network errors, rate-limit, 429, 502, 503.
+    /// Does NOT retry on 4xx auth/bad-request errors (400, 401, 403, 404, 422).
     pub async fn chat_with_tools(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<serde_json::Value>,
+    ) -> Result<ChatResponse, String> {
+        const MAX_ATTEMPTS: u32 = 3;
+        const BASE_DELAY_MS: u64 = 2_000;
+
+        let mut last_err = String::new();
+
+        for attempt in 0..MAX_ATTEMPTS {
+            // Exponential backoff with random jitter (0–1 s) for retries
+            if attempt > 0 {
+                let backoff_ms = BASE_DELAY_MS * (1u64 << (attempt - 1));
+                // Simple pseudo-random jitter using sub-millisecond system time
+                let jitter_ms = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_millis() as u64)
+                    % 1_000;
+                let sleep_ms = backoff_ms + jitter_ms;
+                tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
+            }
+
+            match self.chat_with_tools_once(messages.clone(), tools.clone()).await {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    // Do NOT retry on non-429 4xx errors (auth, bad request, etc.)
+                    let lower = e.to_lowercase();
+                    let is_4xx_non_retriable = (lower.contains("400")
+                        || lower.contains("401")
+                        || lower.contains("403")
+                        || lower.contains("404")
+                        || lower.contains("422"))
+                        && !lower.contains("429");
+
+                    if is_4xx_non_retriable {
+                        return Err(e);
+                    }
+
+                    if Self::is_retriable(&e) {
+                        last_err = e;
+                        // continue to next attempt
+                    } else {
+                        // Non-retriable unknown error — fail immediately
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Err(last_err)
+    }
+
+    /// Single (non-retrying) API call — used internally by `chat_with_tools`.
+    async fn chat_with_tools_once(
         &self,
         messages: Vec<Message>,
         tools: Vec<serde_json::Value>,

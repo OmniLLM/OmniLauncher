@@ -1,4 +1,5 @@
 use crate::ai::client::{AiClient, Message};
+use crate::ai::errors::{classify_error, ErrorClass};
 use crate::plugins::{PluginManager, QueryResult};
 use crate::skills::SkillManager;
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,45 @@ impl ConversationContext {
         }];
         msgs.extend(self.messages.clone());
         msgs
+    }
+}
+
+/// Rough token estimate: 1 token ≈ 4 characters.
+fn estimate_tokens(text: &str) -> usize {
+    text.len() / 4
+}
+
+impl ConversationContext {
+    /// Sliding-window context compression.
+    ///
+    /// If the total estimated token count exceeds 70 % of `TOKEN_BUDGET`,
+    /// drop oldest messages and insert a summary placeholder so the LLM
+    /// always has a bounded context window.
+    pub fn compress_if_needed(&mut self) {
+        const TOKEN_BUDGET: usize = 32_000;
+        let total: usize = self
+            .messages
+            .iter()
+            .map(|m| estimate_tokens(&m.content))
+            .sum();
+
+        if total > (TOKEN_BUDGET * 70 / 100) {
+            let keep = 6;
+            if self.messages.len() > keep {
+                let dropped = self.messages.len() - keep;
+                self.messages.drain(0..dropped);
+                self.messages.insert(
+                    0,
+                    Message {
+                        role: "system".to_string(),
+                        content: format!(
+                            "[{} older messages dropped to stay within token budget]",
+                            dropped
+                        ),
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -228,12 +268,79 @@ impl Router {
         let mut loop_messages = messages.clone();
         let mut final_content = String::new();
 
+        // For loop detection: track the last 3 assistant tool-call fingerprints.
+        // A fingerprint is "<tool_name>|<arguments>" joined for all calls in one iteration.
+        let mut recent_fingerprints: std::collections::VecDeque<String> =
+            std::collections::VecDeque::with_capacity(3);
+
+        // We need a mutable clone of context so compress_if_needed can work on
+        // a local copy without requiring mutable access to the shared context.
+        let mut local_ctx = ConversationContext {
+            messages: context.messages.clone(),
+            max_turns: context.max_turns,
+        };
+
         for _iteration in 0..6 {
+            // ── Context compression (sliding window) ──────────────────────────
+            local_ctx.compress_if_needed();
+            // Rebuild loop_messages to reflect any compression that occurred
+            loop_messages = {
+                let os_info = get_os_info();
+                let system_prompt_rebuild = format!(
+                    "You are OmniLauncher, an AI-powered desktop assistant with full tool access.\n\
+                    \n\
+                    SYSTEM ENVIRONMENT:\n\
+                    - Operating System: {}\n\
+                    - Shell: {}\n\
+                    \n\
+                    IMPORTANT: When executing shell commands via shell_exec or code_execute, you MUST use the correct shell syntax for this OS:\n\
+                    {}\n\
+                    \n\
+                    Available tools: shell_exec, file_read, file_write, file_edit, grep_search, glob_files, \
+                    list_dir, git_ops, code_execute (python/javascript/powershell/bash/rust), \
+                    http_request, web_fetch, web_search, sys_info, todo_memory.\n\
+                    \n\
+                    OUTPUT FORMATTING:\n\
+                    - Always use well-formatted Markdown in your responses\n\
+                    - Use **bold** for emphasis, `inline code` for commands/paths/values\n\
+                    - Use ```language\\ncode\\n``` for multi-line code or command output\n\
+                    - Use bullet lists (- item) or numbered lists for multiple items\n\
+                    - Use tables (| col1 | col2 |) for structured data\n\
+                    - Use headers (## Section) to organize longer responses\n\
+                    - Keep responses concise but visually clear and scannable\n\
+                    \n\
+                    Use tools proactively to help the user.",
+                    os_info.0, os_info.1, os_info.2
+                );
+                let mut rebuilt = local_ctx.get_messages_with_system(&system_prompt_rebuild);
+                // Re-append any tool results from previous iterations that aren't in local_ctx
+                rebuilt
+            };
+
             match ai_client.chat_with_tools(loop_messages.clone(), tools.clone()).await {
                 Ok(resp) => {
                     if let Some(tool_calls) = resp.tool_calls {
                         if tool_calls.is_empty() {
                             final_content = resp.content.unwrap_or_default();
+                            break;
+                        }
+
+                        // ── Loop detection ─────────────────────────────────────
+                        let fingerprint = tool_calls
+                            .iter()
+                            .map(|tc| format!("{}|{}", tc.function.name, tc.function.arguments))
+                            .collect::<Vec<_>>()
+                            .join(";");
+
+                        recent_fingerprints.push_back(fingerprint.clone());
+                        if recent_fingerprints.len() > 3 {
+                            recent_fingerprints.pop_front();
+                        }
+
+                        if recent_fingerprints.len() == 3
+                            && recent_fingerprints.iter().all(|fp| fp == &fingerprint)
+                        {
+                            final_content = "Agent stuck in a loop: repeated identical tool calls detected. Stopping.".to_string();
                             break;
                         }
 
@@ -267,6 +374,13 @@ impl Router {
                         }
 
                         // Append assistant message with tool_calls
+                        local_ctx.messages.push(Message {
+                            role: "assistant".to_string(),
+                            content: format!(
+                                "[tool_calls: {}]",
+                                serde_json::to_string(&tc_json_list).unwrap_or_default()
+                            ),
+                        });
                         loop_messages.push(Message {
                             role: "assistant".to_string(),
                             content: format!(
@@ -276,7 +390,10 @@ impl Router {
                         });
 
                         // Append tool results
-                        loop_messages.extend(tool_result_messages);
+                        for msg in tool_result_messages {
+                            local_ctx.messages.push(msg.clone());
+                            loop_messages.push(msg);
+                        }
 
                         // Continue to next iteration
                     } else {
@@ -286,8 +403,38 @@ impl Router {
                     }
                 }
                 Err(e) => {
-                    final_content = format!("AI error: {}", e);
-                    break;
+                    // ── Error classification ───────────────────────────────────
+                    match classify_error(&e) {
+                        ErrorClass::ModelError => {
+                            // Push a corrective message and continue the loop
+                            let corrective = Message {
+                                role: "user".to_string(),
+                                content: format!(
+                                    "Your last response contained an invalid tool call or malformed output: {}. \
+                                    Please correct your tool usage and try again.",
+                                    e
+                                ),
+                            };
+                            local_ctx.messages.push(corrective.clone());
+                            loop_messages.push(corrective);
+                            // continue to next iteration
+                        }
+                        ErrorClass::ResourceError => {
+                            // Compress context and continue
+                            local_ctx.compress_if_needed();
+                            // continue to next iteration
+                        }
+                        ErrorClass::Permanent => {
+                            final_content = format!("AI error: {}", e);
+                            break;
+                        }
+                        ErrorClass::Transient => {
+                            // Already handled by retry backoff in client.rs; if we
+                            // still get here all retries have been exhausted.
+                            final_content = format!("AI error: {}", e);
+                            break;
+                        }
+                    }
                 }
             }
         }

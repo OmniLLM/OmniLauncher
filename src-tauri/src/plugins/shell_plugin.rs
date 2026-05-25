@@ -1,3 +1,4 @@
+use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::process::Command;
@@ -39,6 +40,16 @@ impl Plugin for ShellPlugin {
         let cmd = args["command"].as_str().unwrap_or("");
         if cmd.is_empty() {
             return "No command specified".to_string();
+        }
+        // Guardrails check
+        match Guardrails::check_shell_command(cmd) {
+            GuardrailAction::Deny(reason) => {
+                return format!("Blocked by guardrails: {}", reason);
+            }
+            GuardrailAction::Warn(reason) => {
+                eprintln!("[guardrails] WARNING: {} — command: {}", reason, cmd);
+            }
+            GuardrailAction::Allow => {}
         }
         run_shell(cmd)
     }
