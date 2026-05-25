@@ -138,8 +138,9 @@ function safeHref(href: string): string {
 }
 
 function inlineFormat(text: string): string {
+  // Process bold/italic/strikethrough BEFORE code spans so that
+  // markdown inside backticks is NOT re-processed (e.g. `**bold**` stays literal)
   return text
-    .replace(/`(.+?)`/g, '<code class="md-inline-code">$1</code>')
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
     .replace(/~~(.+?)~~/g, "<del>$1</del>")
@@ -147,7 +148,8 @@ function inlineFormat(text: string): string {
       /\[([^\]]+)\]\(([^)]+)\)/g,
       (_match, label, href) =>
         `<a class="md-link" href="${safeHref(href)}" target="_blank">${label}</a>`,
-    );
+    )
+    .replace(/`(.+?)`/g, '<code class="md-inline-code">$1</code>');
 }
 
 function renderTable(rows: string[]): string {

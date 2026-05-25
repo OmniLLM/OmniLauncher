@@ -28,7 +28,9 @@ fn db_path() -> std::path::PathBuf {
 
 fn open_db() -> rusqlite::Result<Connection> {
     let dir = config_dir();
-    let _ = std::fs::create_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        rusqlite::Error::InvalidPath(format!("Failed to create config dir {:?}: {}", dir, e).into())
+    })?;
     let conn = Connection::open(db_path())?;
     db::run_migrations(&conn)?;
     migrate_json(&conn);
@@ -1069,6 +1071,10 @@ impl Plugin for TodoPlugin {
             "note_save" => {
                 if text.is_empty() || content.is_empty() {
                     return "Error: need text (key) and content".to_string();
+                }
+                // Validate key: no path separators to prevent directory traversal
+                if text.contains('/') || text.contains('\\') || text.contains("..") {
+                    return "Error: note key must not contain path separators".to_string();
                 }
                 let notes_dir = config_dir().join("notes");
                 let _ = std::fs::create_dir_all(&notes_dir);

@@ -1,3 +1,4 @@
+use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::process::Command;
@@ -20,7 +21,8 @@ impl Plugin for ShellExecPlugin {
     }
 
     fn keyword(&self) -> Option<&str> {
-        Some(">")
+        // This plugin is an AI tool only — no UI keyword to avoid duplicate `>` with ShellPlugin
+        None
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
@@ -84,6 +86,17 @@ impl Plugin for ShellExecPlugin {
 
         if command.is_empty() {
             return "Error: no command provided".to_string();
+        }
+
+        // Guardrails check — same protection as ShellPlugin (user-facing `>` prefix)
+        match Guardrails::check_shell_command(command) {
+            GuardrailAction::Deny(reason) => {
+                return format!("Blocked by guardrails: {}", reason);
+            }
+            GuardrailAction::Warn(reason) => {
+                log::warn!("[guardrails] shell_exec WARN: {}", reason);
+            }
+            GuardrailAction::Allow => {}
         }
 
         let mut cmd = if cfg!(target_os = "windows") {

@@ -132,7 +132,11 @@ impl Plugin for CodeExecPlugin {
         };
 
         let temp_dir = std::env::temp_dir();
-        let temp_file = temp_dir.join(format!("omnilauncher_exec.{}", ext));
+        let run_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        let temp_file = temp_dir.join(format!("omnilauncher_exec_{}_{}.{}", std::process::id(), run_id, ext));
         if let Err(e) = std::fs::write(&temp_file, code) {
             return format!("Error writing temp file: {}", e);
         }
@@ -180,8 +184,12 @@ impl Plugin for CodeExecPlugin {
 
 fn execute_rust(code: &str) -> String {
     let temp_dir = std::env::temp_dir();
-    let src = temp_dir.join("omnilauncher_exec.rs");
-    let exe = temp_dir.join("omnilauncher_exec_bin");
+    let run_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let src = temp_dir.join(format!("omnilauncher_exec_{}_{}.rs", std::process::id(), run_id));
+    let exe = temp_dir.join(format!("omnilauncher_exec_bin_{}_{}", std::process::id(), run_id));
 
     if let Err(e) = std::fs::write(&src, code) {
         return format!("Error writing temp file: {}", e);

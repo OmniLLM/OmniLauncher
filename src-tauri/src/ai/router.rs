@@ -470,16 +470,24 @@ impl Router {
                         is_ai: false,
                     };
                 }
-                let open_cmd = if cfg!(target_os = "windows") {
-                    format!("Start-Process '{}'", arg)
+                // Spawn directly (no shell) to prevent injection via single-quote bypass
+                let open_result = if cfg!(target_os = "windows") {
+                    std::process::Command::new("cmd")
+                        .args(["/c", "start", "", arg])
+                        .spawn()
                 } else if cfg!(target_os = "macos") {
-                    format!("open '{}'", arg)
+                    std::process::Command::new("open").arg(arg).spawn()
                 } else {
-                    format!("xdg-open '{}'", arg)
+                    std::process::Command::new("xdg-open").arg(arg).spawn()
                 };
-                let _ = plugin_manager
-                    .execute_tool("shell_exec", serde_json::json!({ "command": open_cmd }))
-                    .await;
+                if let Err(e) = open_result {
+                    return AiResponse {
+                        content: format!("Error opening '{}': {}", arg, e),
+                        tools_used: vec![],
+                        results: vec![],
+                        is_ai: false,
+                    };
+                }
                 AiResponse {
                     content: format!("Opened **{}**", arg),
                     tools_used: vec!["open".to_string()],
@@ -743,22 +751,40 @@ impl Router {
                         is_ai: false,
                     };
                 }
-                let cmd = if cfg!(target_os = "windows") {
+                let result = if cfg!(target_os = "windows") {
                     if arg.parse::<u32>().is_ok() {
-                        format!("taskkill /PID {} /F", arg)
+                        // PID-based kill — safe, arg is verified numeric
+                        std::process::Command::new("taskkill")
+                            .args(["/PID", arg, "/F"])
+                            .output()
+                            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                            .unwrap_or_else(|e| format!("Error: {}", e))
                     } else {
-                        format!("taskkill /IM {} /F", arg)
+                        std::process::Command::new("taskkill")
+                            .args(["/IM", arg, "/F"])
+                            .output()
+                            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                            .unwrap_or_else(|e| format!("Error: {}", e))
                     }
+                } else if arg.parse::<u32>().is_ok() {
+                    // PID-based kill — safe, arg is verified numeric
+                    std::process::Command::new("kill")
+                        .args(["-9", arg])
+                        .output()
+                        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                        .unwrap_or_else(|e| format!("Error: {}", e))
                 } else {
-                    if arg.parse::<u32>().is_ok() {
-                        format!("kill -9 {}", arg)
-                    } else {
-                        format!("pkill -f '{}'", arg)
-                    }
+                    // Name-based kill — pass as argument directly, no shell interpolation
+                    std::process::Command::new("pkill")
+                        .args(["-f", arg])
+                        .output()
+                        .map(|o| {
+                            let code = o.status.code().unwrap_or(-1);
+                            if code == 0 { format!("Killed processes matching '{}'", arg) }
+                            else { format!("No processes found matching '{}'", arg) }
+                        })
+                        .unwrap_or_else(|e| format!("Error: {}", e))
                 };
-                let result = plugin_manager
-                    .execute_tool("shell_exec", serde_json::json!({ "command": cmd }))
-                    .await;
                 AiResponse {
                     content: format!("```\n{}\n```", result),
                     tools_used: vec!["shell_exec".to_string()],
