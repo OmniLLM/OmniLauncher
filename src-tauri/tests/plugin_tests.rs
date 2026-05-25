@@ -1,8 +1,6 @@
 use omnilauncher_lib::create_plugin_manager;
 use std::sync::Mutex;
 
-// All tests that mutate OMNILAUNCHER_CONFIG_DIR must hold this lock for the
-// duration of the test so they don't race each other on the env var.
 static TODO_LOCK: Mutex<()> = Mutex::new(());
 
 // ============================================================
@@ -370,7 +368,9 @@ async fn test_git_status_runs() {
 async fn test_todo_lifecycle() {
     let _guard = TODO_LOCK.lock().unwrap();
     let dir = temp_config_dir("todo_lifecycle");
-    unsafe { std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir); }
+    unsafe {
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir);
+    }
     let pm = create_plugin_manager();
     let _ = pm
         .execute_tool("todo_memory", serde_json::json!({"action": "clear"}))
@@ -398,7 +398,9 @@ async fn test_todo_lifecycle() {
     let _ = pm
         .execute_tool("todo_memory", serde_json::json!({"action": "clear"}))
         .await;
-    unsafe { std::env::remove_var("OMNILAUNCHER_CONFIG_DIR"); }
+    unsafe {
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+    }
 }
 
 #[tokio::test]
@@ -660,7 +662,10 @@ async fn test_web_fetch_ok() {
         .await;
     // Allow network errors (e.g. in CI/offline) — we only care that the tool
     // returns something and doesn't panic.
-    assert!(!r.is_empty(), "Expected a non-empty response, got empty string");
+    assert!(
+        !r.is_empty(),
+        "Expected a non-empty response, got empty string"
+    );
 }
 
 #[tokio::test]
@@ -672,13 +677,6 @@ async fn test_web_fetch_empty() {
     assert!(r.contains("Error") || r.contains("no URL"));
 }
 
-fn temp_home_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("omni_test_home_{}_{}", name, std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 fn temp_config_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("omni_test_cfg_{}_{}", name, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -687,46 +685,154 @@ fn temp_config_dir(name: &str) -> std::path::PathBuf {
 }
 
 #[tokio::test]
+async fn test_todo_view_tool_returns_live_page_url() {
+    let pm = create_plugin_manager();
+    let result = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "view"}))
+        .await;
+
+    assert!(result.contains("http://127.0.0.1:1421/todo"), "Got: {}", result);
+}
+
+#[tokio::test]
+async fn test_todo_view_query_opens_live_page() {
+    let pm = create_plugin_manager();
+    let results = pm.query_all("todo view").await;
+
+    assert!(!results.is_empty());
+    assert_eq!(results[0].id, "todo:view");
+    assert_eq!(results[0].action_type, "open_url");
+    assert_eq!(results[0].action_data, "/todo");
+}
+
+#[tokio::test]
+async fn test_slash_todo_view_query_opens_live_page() {
+    let pm = create_plugin_manager();
+    let results = pm.query_all("/todo view").await;
+
+    assert!(!results.is_empty());
+    assert_eq!(results[0].id, "todo:view");
+    assert_eq!(results[0].action_type, "open_url");
+    assert_eq!(results[0].action_data, "/todo");
+}
+
+#[tokio::test]
 async fn test_todo_status_transitions_and_list_output() {
     let _guard = TODO_LOCK.lock().unwrap();
     let dir = temp_config_dir("todo_status");
-    unsafe { std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir); }
+    unsafe {
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir);
+    }
 
     let pm = create_plugin_manager();
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "clear"})).await;
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "add", "text": "item1"})).await;
-    let set = pm.execute_tool("todo_memory", serde_json::json!({"action": "set_status", "text": "1", "status": "in_progress"})).await;
+    let _ = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "clear"}))
+        .await;
+    let _ = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "add", "text": "item1"}),
+        )
+        .await;
+    let set = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "set_status", "text": "1", "status": "in_progress"}),
+        )
+        .await;
     assert!(set.contains("In Progress"), "Got: {}", set);
 
-    let list = pm.execute_tool("todo_memory", serde_json::json!({"action": "list"})).await;
+    let list = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "list"}))
+        .await;
     assert!(list.contains("status:🟦 In Progress"), "Got: {}", list);
 
-    let done = pm.execute_tool("todo_memory", serde_json::json!({"action": "done", "text": "1"})).await;
+    let done = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "done", "text": "1"}),
+        )
+        .await;
     assert!(done.contains("Done"), "Got: {}", done);
 
-    let undone = pm.execute_tool("todo_memory", serde_json::json!({"action": "undone", "text": "1"})).await;
+    let undone = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "undone", "text": "1"}),
+        )
+        .await;
     assert!(undone.contains("Todo"), "Got: {}", undone);
 
-    unsafe { std::env::remove_var("OMNILAUNCHER_CONFIG_DIR"); }
+    unsafe {
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+    }
 }
 
 #[tokio::test]
 async fn test_todo_query_and_live_json_include_status() {
     let _guard = TODO_LOCK.lock().unwrap();
     let dir = temp_config_dir("todo_query");
-    unsafe { std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir); }
+    unsafe {
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir);
+    }
 
     let pm = create_plugin_manager();
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "clear"})).await;
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "add", "text": "ship feature"})).await;
-    let _ = pm.execute_tool("todo_memory", serde_json::json!({"action": "set_status", "text": "1", "status": "blocked"})).await;
+    let _ = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "clear"}))
+        .await;
+    let _ = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "add", "text": "ship feature"}),
+        )
+        .await;
+    let _ = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "set_status", "text": "1", "status": "blocked"}),
+        )
+        .await;
 
     let results = pm.query_all("todo list").await;
     assert!(!results.is_empty());
-    assert!(results[0].title.contains("Blocked") || results.iter().any(|r| r.title.contains("Blocked")));
+    assert!(
+        results[0].title.contains("Blocked") || results.iter().any(|r| r.title.contains("Blocked"))
+    );
 
     let json = omnilauncher_lib::plugins::todo::todo_live_data_json();
     assert!(json.contains("\"status\":\"blocked\""), "Got: {}", json);
 
-    unsafe { std::env::remove_var("OMNILAUNCHER_CONFIG_DIR"); }
+    unsafe {
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+    }
+}
+
+#[tokio::test]
+async fn test_todo_live_html_defines_status_helpers_used_by_render() {
+    let _guard = TODO_LOCK.lock().unwrap();
+    let dir = temp_config_dir("todo_html_helpers");
+    unsafe {
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir);
+    }
+
+    let pm = create_plugin_manager();
+    let _ = pm
+        .execute_tool("todo_memory", serde_json::json!({"action": "clear"}))
+        .await;
+    let _ = pm
+        .execute_tool(
+            "todo_memory",
+            serde_json::json!({"action": "add", "text": "render me"}),
+        )
+        .await;
+
+    let html = omnilauncher_lib::plugins::todo::todo_live_html();
+    assert!(html.contains("function statusLabel"), "Got: {}", html);
+    assert!(html.contains("function statusClass"), "Got: {}", html);
+    assert!(html.contains("function statusSortKey"), "Got: {}", html);
+    assert!(html.contains("function statusFromLabel"), "Got: {}", html);
+
+    unsafe {
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+    }
 }

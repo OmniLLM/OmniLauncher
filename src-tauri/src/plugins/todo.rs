@@ -1,7 +1,7 @@
 use crate::db;
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 
 pub struct TodoPlugin;
 
@@ -35,6 +35,13 @@ fn open_db() -> rusqlite::Result<Connection> {
 }
 
 fn migrate_json(conn: &Connection) {
+    // Skip legacy migration when running under a test-specific config dir override —
+    // the override dir is always empty so there is nothing to migrate, and reading
+    // from `dirs::home_dir()` would contaminate the test DB with real user todos.
+    if std::env::var("OMNILAUNCHER_CONFIG_DIR").is_ok() {
+        return;
+    }
+
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM todos", [], |r| r.get(0))
         .unwrap_or(0);
@@ -161,7 +168,9 @@ fn remove_todo(id: i64) -> String {
     match open_db() {
         Ok(conn) => {
             let text: Option<String> = conn
-                .query_row("SELECT text FROM todos WHERE id = ?1", params![id], |r| r.get(0))
+                .query_row("SELECT text FROM todos WHERE id = ?1", params![id], |r| {
+                    r.get(0)
+                })
                 .ok();
             match conn.execute("DELETE FROM todos WHERE id = ?1", params![id]) {
                 Ok(0) => format!("No todo with id {}", id),
@@ -195,7 +204,9 @@ fn set_status(id: i64, status: &str) -> String {
                 Ok(0) => format!("No todo with id {}", id),
                 Ok(_) => {
                     let text: String = conn
-                        .query_row("SELECT text FROM todos WHERE id = ?1", params![id], |r| r.get(0))
+                        .query_row("SELECT text FROM todos WHERE id = ?1", params![id], |r| {
+                            r.get(0)
+                        })
                         .unwrap_or_else(|_| id.to_string());
                     format!("{}: {}", status_label(status), text)
                 }
@@ -211,10 +222,7 @@ fn clear_todos() -> String {
         Ok(conn) => match conn.execute("DELETE FROM todos", []) {
             Ok(n) => {
                 // Reset the autoincrement counter so the next inserted row starts at id=1.
-                let _ = conn.execute(
-                    "DELETE FROM sqlite_sequence WHERE name = 'todos'",
-                    [],
-                );
+                let _ = conn.execute("DELETE FROM sqlite_sequence WHERE name = 'todos'", []);
                 format!("Cleared {} todos.", n)
             }
             Err(e) => format!("DB error: {}", e),
@@ -246,7 +254,11 @@ fn set_field(id: i64, field: &str, value: &str) -> String {
 fn generate_html(items: &[TodoItem]) -> String {
     let total = items.len();
     let done_count = items.iter().filter(|t| t.status == "done").count();
-    let pct = if total > 0 { done_count * 100 / total } else { 0 };
+    let pct = if total > 0 {
+        done_count * 100 / total
+    } else {
+        0
+    };
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
@@ -431,6 +443,10 @@ const PRI_CLASS = {{1:'pri-1',2:'pri-2',3:'pri-3',4:'pri-4'}};
 const STATUS_LABEL = {{todo:'⬜ Todo',in_progress:'🟦 In Progress',blocked:'⛔ Blocked',done:'✅ Done'}};
 const STATUS_CLASS = {{todo:'badge-todo',in_progress:'badge-in-progress',blocked:'badge-blocked',done:'badge-done'}};
 const STATUS_ORDER = {{todo:1,in_progress:2,blocked:3,done:4}};
+function statusLabel(status) {{ return STATUS_LABEL[status] || STATUS_LABEL.todo; }}
+function statusClass(status) {{ return STATUS_CLASS[status] || STATUS_CLASS.todo; }}
+function statusSortKey(status) {{ return STATUS_ORDER[status] || STATUS_ORDER.todo; }}
+function statusFromLabel(label) {{ return Object.keys(STATUS_LABEL).find(key => STATUS_LABEL[key] === label) || 'todo'; }}
 let sortCol='id', sortDir=1, groupBy='none', filterText='', expanded=new Set();
 // columnFilters: map of filterable col key → selected value string (or null)
 const columnFilters = {{}};
@@ -716,6 +732,10 @@ render();
     )
 }
 
+fn todo_live_url() -> &'static str {
+    "http://127.0.0.1:1421/todo"
+}
+
 pub fn todo_live_data_json() -> String {
     let rows = load_todos()
         .into_iter()
@@ -723,10 +743,12 @@ pub fn todo_live_data_json() -> String {
             let comments = t
                 .comments
                 .into_iter()
-                .map(|c| serde_json::json!({
-                    "body": c.body,
-                    "at": c.created_at.chars().take(10).collect::<String>(),
-                }))
+                .map(|c| {
+                    serde_json::json!({
+                        "body": c.body,
+                        "at": c.created_at.chars().take(10).collect::<String>(),
+                    })
+                })
                 .collect::<Vec<_>>();
             serde_json::json!({
                 "id": t.id,
@@ -755,12 +777,28 @@ pub fn todo_live_html() -> String {
 
 #[async_trait]
 impl Plugin for TodoPlugin {
-    fn name(&self) -> &str { "todo_memory" }
-    fn description(&self) -> &str { "Manage a persistent todo list (SQLite) with browser view" }
-    fn keyword(&self) -> Option<&str> { Some("todo ") }
+    fn name(&self) -> &str {
+        "todo_memory"
+    }
+    fn description(&self) -> &str {
+        "Manage a persistent todo list (SQLite) with browser view"
+    }
+    fn keyword(&self) -> Option<&str> {
+        None
+    }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        let term = q.raw.strip_prefix("todo ").unwrap_or("").trim();
+        let term = if let Some(term) = q.raw.strip_prefix("todo ") {
+            term.trim()
+        } else if let Some(term) = q.raw.strip_prefix("/todo ") {
+            term.trim()
+        } else if let Some(term) = q.raw.strip_prefix("/t ") {
+            term.trim()
+        } else if q.raw == "todo" || q.raw == "/todo" || q.raw == "/t" {
+            ""
+        } else {
+            return vec![];
+        };
 
         if term.is_empty() || term == "list" {
             let items = load_todos();
@@ -775,18 +813,32 @@ impl Plugin for TodoPlugin {
                     action_data: String::new(),
                 }];
             }
-            return items.iter().map(|item| {
-                let due_str = if !item.due_date.is_empty() { format!(" · due {}", item.due_date) } else { String::new() };
-                QueryResult {
-                    id: format!("todo:{}", item.id),
-                    title: format!("{} {}", status_label(&item.status), item.text),
-                    subtitle: Some(format!("#{} · {} · {} · p{}{}", item.id, &item.created_at[..10], status_label(&item.status), item.priority, due_str)),
-                    icon: None,
-                    score: 60,
-                    action_type: "copy".to_string(),
-                    action_data: item.text.clone(),
-                }
-            }).collect();
+            return items
+                .iter()
+                .map(|item| {
+                    let due_str = if !item.due_date.is_empty() {
+                        format!(" · due {}", item.due_date)
+                    } else {
+                        String::new()
+                    };
+                    QueryResult {
+                        id: format!("todo:{}", item.id),
+                        title: format!("{} {}", status_label(&item.status), item.text),
+                        subtitle: Some(format!(
+                            "#{} · {} · {} · p{}{}",
+                            item.id,
+                            &item.created_at[..10],
+                            status_label(&item.status),
+                            item.priority,
+                            due_str
+                        )),
+                        icon: None,
+                        score: 60,
+                        action_type: "copy".to_string(),
+                        action_data: item.text.clone(),
+                    }
+                })
+                .collect();
         }
 
         if term == "view" || term == "show" {
@@ -797,7 +849,7 @@ impl Plugin for TodoPlugin {
                 icon: Some("🌐".to_string()),
                 score: 80,
                 action_type: "open_url".to_string(),
-                action_data: "http://127.0.0.1:1421/todo".to_string(),
+                action_data: "/todo".to_string(),
             }];
         }
 
@@ -821,8 +873,18 @@ impl Plugin for TodoPlugin {
         parse_id_action!("done ", "todo_done", "✅", "Mark done");
         parse_id_action!("undone ", "todo_undone", "↩", "Mark undone");
         parse_id_action!("status todo ", "todo_status_todo", "⬜", "Mark todo");
-        parse_id_action!("status in_progress ", "todo_status_in_progress", "🟦", "Mark in progress");
-        parse_id_action!("status blocked ", "todo_status_blocked", "⛔", "Mark blocked");
+        parse_id_action!(
+            "status in_progress ",
+            "todo_status_in_progress",
+            "🟦",
+            "Mark in progress"
+        );
+        parse_id_action!(
+            "status blocked ",
+            "todo_status_blocked",
+            "⛔",
+            "Mark blocked"
+        );
         parse_id_action!("status done ", "todo_status_done", "✅", "Mark done");
         parse_id_action!("remove ", "todo_remove", "🗑", "Remove");
         parse_id_action!("rm ", "todo_remove", "🗑", "Remove");
@@ -887,52 +949,95 @@ impl Plugin for TodoPlugin {
         match action {
             "list" => {
                 let items = load_todos();
-                if items.is_empty() { return "Todo list is empty.".to_string(); }
-                items.iter().map(|t| {
-                    let due = if t.due_date.is_empty() { String::new() } else { format!(" due:{}", t.due_date) };
-                    let tags = if t.tags.is_empty() { String::new() } else { format!(" [{}]", t.tags) };
-                    format!("{}. [{}] {} (id:{} status:{} p:{}{}{})",
-                        t.id, if t.status == "done" {"x"} else {" "}, t.text, t.id,
-                        status_label(&t.status), priority_label(t.priority), due, tags)
-                }).collect::<Vec<_>>().join("\n")
+                if items.is_empty() {
+                    return "Todo list is empty.".to_string();
+                }
+                items
+                    .iter()
+                    .map(|t| {
+                        let due = if t.due_date.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" due:{}", t.due_date)
+                        };
+                        let tags = if t.tags.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{}]", t.tags)
+                        };
+                        format!(
+                            "{}. [{}] {} (id:{} status:{} p:{}{}{})",
+                            t.id,
+                            if t.status == "done" { "x" } else { " " },
+                            t.text,
+                            t.id,
+                            status_label(&t.status),
+                            priority_label(t.priority),
+                            due,
+                            tags
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
             "add" => {
-                if text.is_empty() { return "Error: no text provided".to_string(); }
+                if text.is_empty() {
+                    return "Error: no text provided".to_string();
+                }
                 add_todo(text)
             }
             "remove" => {
                 let id: i64 = text.parse().unwrap_or(0);
-                if id == 0 { return format!("Invalid id: '{}'", text); }
+                if id == 0 {
+                    return format!("Invalid id: '{}'", text);
+                }
                 remove_todo(id)
             }
             "done" => {
                 let id: i64 = text.parse().unwrap_or(0);
-                if id == 0 { return format!("Invalid id: '{}'", text); }
+                if id == 0 {
+                    return format!("Invalid id: '{}'", text);
+                }
                 set_status(id, "done")
             }
             "undone" => {
                 let id: i64 = text.parse().unwrap_or(0);
-                if id == 0 { return format!("Invalid id: '{}'", text); }
+                if id == 0 {
+                    return format!("Invalid id: '{}'", text);
+                }
                 set_status(id, "todo")
             }
             "clear" => clear_todos(),
-            "view" => "Todo live view is served by the app HTTP endpoint.".to_string(),
+            "view" => format!("Open {} in your browser.", todo_live_url()),
             "set_status" => {
                 let id: i64 = text.parse().unwrap_or(0);
-                if id == 0 { return format!("Invalid id: '{}'", text); }
-                if status.is_empty() { return "Error: status required (todo/in_progress/blocked/done)".to_string(); }
+                if id == 0 {
+                    return format!("Invalid id: '{}'", text);
+                }
+                if status.is_empty() {
+                    return "Error: status required (todo/in_progress/blocked/done)".to_string();
+                }
                 set_status(id, status)
             }
             "set_field" => {
                 let id: i64 = text.parse().unwrap_or(0);
-                if id == 0 { return format!("Invalid id: '{}'", text); }
-                if field.is_empty() { return "Error: field required (priority/due_date/tags/description)".to_string(); }
+                if id == 0 {
+                    return format!("Invalid id: '{}'", text);
+                }
+                if field.is_empty() {
+                    return "Error: field required (priority/due_date/tags/description)"
+                        .to_string();
+                }
                 set_field(id, field, content)
             }
             "comment_add" => {
                 let id: i64 = text.parse().unwrap_or(0);
-                if id == 0 { return format!("Invalid id: '{}'", text); }
-                if content.is_empty() { return "Error: content required".to_string(); }
+                if id == 0 {
+                    return format!("Invalid id: '{}'", text);
+                }
+                if content.is_empty() {
+                    return "Error: content required".to_string();
+                }
                 match open_db() {
                     Ok(conn) => match conn.execute(
                         "INSERT INTO todo_comments (todo_id, body) VALUES (?1, ?2)",
@@ -946,11 +1051,15 @@ impl Plugin for TodoPlugin {
             }
             "description_set" => {
                 let id: i64 = text.parse().unwrap_or(0);
-                if id == 0 { return format!("Invalid id: '{}'", text); }
+                if id == 0 {
+                    return format!("Invalid id: '{}'", text);
+                }
                 set_field(id, "description", content)
             }
             "note_save" => {
-                if text.is_empty() || content.is_empty() { return "Error: need text (key) and content".to_string(); }
+                if text.is_empty() || content.is_empty() {
+                    return "Error: need text (key) and content".to_string();
+                }
                 let notes_dir = config_dir().join("notes");
                 let _ = std::fs::create_dir_all(&notes_dir);
                 let path = notes_dir.join(format!("{}.md", text));
@@ -960,7 +1069,9 @@ impl Plugin for TodoPlugin {
                 }
             }
             "note_read" => {
-                if text.is_empty() { return "Error: need note key".to_string(); }
+                if text.is_empty() {
+                    return "Error: need note key".to_string();
+                }
                 let path = config_dir().join("notes").join(format!("{}.md", text));
                 match std::fs::read_to_string(&path) {
                     Ok(c) => c,

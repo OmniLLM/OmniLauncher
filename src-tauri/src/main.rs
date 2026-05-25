@@ -1,13 +1,13 @@
 use omnilauncher_lib::{
-    live_server::{LiveResponse, LiveServer},
     ai::{
         client::AiClient,
         router::{ConversationContext, Router},
     },
-    create_plugin_manager, load_settings, save_settings, AppSettings, QueryResult, SkillInfo,
-    SkillManager,
+    create_plugin_manager,
+    live_server::{LiveResponse, LiveServer},
+    load_settings, save_settings, AppSettings, QueryResult, SkillInfo, SkillManager,
 };
-use simplelog::{ColorChoice, ConfigBuilder, LevelFilter, TerminalMode, TermLogger, WriteLogger};
+use simplelog::{ColorChoice, ConfigBuilder, LevelFilter, TermLogger, TerminalMode, WriteLogger};
 use std::{
     fs::{self, OpenOptions},
     path::PathBuf,
@@ -22,6 +22,10 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut}
 use tokio::sync::Mutex;
 
 fn debug_log_path() -> PathBuf {
+    if cfg!(target_os = "windows") {
+        return std::env::temp_dir().join("omnilauncher.log");
+    }
+
     dirs::home_dir()
         .unwrap_or_default()
         .join(".config")
@@ -37,30 +41,37 @@ fn init_debug_logging(enable_debug: bool) {
     let path = debug_log_path();
     if let Some(parent) = path.parent() {
         if let Err(err) = fs::create_dir_all(parent) {
-            eprintln!("Failed to create debug log directory {}: {err}", parent.display());
+            eprintln!(
+                "Failed to create debug log directory {}: {err}",
+                parent.display()
+            );
             return;
         }
     }
-
-    let file = match OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(file) => file,
-        Err(err) => {
-            eprintln!("Failed to open debug log file {}: {err}", path.display());
-            return;
-        }
-    };
 
     let config = ConfigBuilder::new()
         .set_time_format_rfc3339()
         .set_thread_level(LevelFilter::Debug)
         .build();
 
-    if WriteLogger::init(LevelFilter::Trace, config, file).is_err() {
-        eprintln!("Failed to initialize debug logger at {}", path.display());
-        return;
+    match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(file) => {
+            if WriteLogger::init(LevelFilter::Trace, config, file).is_err() {
+                eprintln!("Failed to initialize debug logger at {}", path.display());
+            } else {
+                log::info!("Debug logging enabled at {}", path.display());
+            }
+        }
+        Err(err) => {
+            eprintln!("Failed to open debug log file {}: {err}", path.display());
+            let _ = TermLogger::init(
+                LevelFilter::Trace,
+                ConfigBuilder::new().set_time_format_rfc3339().build(),
+                TerminalMode::Stderr,
+                ColorChoice::Never,
+            );
+        }
     }
-
-    log::info!("Debug logging enabled at {}", path.display());
 }
 
 pub struct AppState {
@@ -98,6 +109,10 @@ pub fn run() {
     let live_server = LiveServer::new();
     let live_server_task = live_server.clone();
     tauri::async_runtime::spawn(async move {
+        log::info!(
+            "registering live server routes on port {}",
+            live_server_port
+        );
         live_server_task
             .register_route("/todo", || {
                 LiveResponse::html(omnilauncher_lib::plugins::todo::todo_live_html())
@@ -108,6 +123,10 @@ pub fn run() {
                 LiveResponse::json(omnilauncher_lib::plugins::todo::todo_live_data_json())
             })
             .await;
+        log::info!(
+            "starting live server on http://127.0.0.1:{}",
+            live_server_port
+        );
         live_server_task.serve(live_server_port).await;
     });
 
@@ -446,6 +465,25 @@ async fn slash_preview(
     }
 }
 
+fn spawn_external_command(program: &str, args: &[&str], description: &str) -> bool {
+    log::debug!("spawning external command for {description}: {program} {args:?}");
+    match std::process::Command::new(program).args(args).spawn() {
+        Ok(child) => {
+            log::info!(
+                "spawned external command for {description}: pid={}",
+                child.id()
+            );
+            true
+        }
+        Err(err) => {
+            log::error!(
+                "failed to spawn external command for {description}: {program} {args:?}: {err}"
+            );
+            false
+        }
+    }
+}
+
 #[tauri::command]
 async fn execute_result(
     result: QueryResult,
@@ -457,43 +495,63 @@ async fn execute_result(
         result.id,
         result.title
     );
-    use std::process::Command;
+    let action_data = if result.id == "todo:view" {
+        state.live_server.url(state.live_server_port, "/todo")
+    } else {
+        result.action_data.clone()
+    };
+    if action_data != result.action_data {
+        log::debug!(
+            "resolved action_data for id={}: {} -> {}",
+            result.id,
+            result.action_data,
+            action_data
+        );
+    }
+
     let success = match result.action_type.as_str() {
         "url" | "open_url" => {
+            log::info!("opening url: {}", action_data);
             #[cfg(target_os = "linux")]
-            let _ = Command::new("xdg-open").arg(&result.action_data).spawn();
+            {
+                spawn_external_command("xdg-open", &[&action_data], "open url")
+            }
             #[cfg(target_os = "macos")]
-            let _ = Command::new("open").arg(&result.action_data).spawn();
+            {
+                spawn_external_command("open", &[&action_data], "open url")
+            }
             #[cfg(target_os = "windows")]
-            let _ = Command::new("cmd")
-                .args(["/C", "start", "", &result.action_data])
-                .spawn();
-            true
+            {
+                spawn_external_command("cmd", &["/C", "start", "", &action_data], "open url")
+            }
         }
         "shell" | "open_app" => {
-            // Like Flow.Launcher: use ShellExecute to open the file (.lnk, .exe, etc.)
-            // `cmd /c start "" "path"` invokes ShellExecuteEx which resolves .lnk shortcuts
             #[cfg(target_os = "windows")]
-            let _ = Command::new("cmd")
-                .args(["/C", "start", "", &result.action_data])
-                .spawn();
+            {
+                spawn_external_command("cmd", &["/C", "start", "", &result.action_data], "open app")
+            }
             #[cfg(target_os = "macos")]
-            let _ = Command::new("open").arg(&result.action_data).spawn();
+            {
+                spawn_external_command("open", &[&result.action_data], "open app")
+            }
             #[cfg(target_os = "linux")]
-            let _ = Command::new("sh")
-                .arg("-c")
-                .arg(&result.action_data)
-                .spawn();
-            true
+            {
+                spawn_external_command("sh", &["-c", &result.action_data], "open app")
+            }
         }
         "open" => {
             #[cfg(target_os = "linux")]
-            let _ = Command::new("xdg-open").arg(&result.action_data).spawn();
+            {
+                spawn_external_command("xdg-open", &[&result.action_data], "open path")
+            }
             #[cfg(target_os = "macos")]
-            let _ = Command::new("open").arg(&result.action_data).spawn();
+            {
+                spawn_external_command("open", &[&result.action_data], "open path")
+            }
             #[cfg(target_os = "windows")]
-            let _ = Command::new("explorer").arg(&result.action_data).spawn();
-            true
+            {
+                spawn_external_command("explorer", &[&result.action_data], "open path")
+            }
         }
         "copy" => {
             // Just a copy action — frontend handles clipboard
@@ -639,6 +697,18 @@ async fn install_skill(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn spawn_external_command_reports_missing_command_failure() {
+        assert!(!super::spawn_external_command(
+            "omnilauncher-command-that-does-not-exist",
+            &[],
+            "test missing command",
+        ));
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let debug_enabled = args.iter().any(|arg| arg == "--debug");
@@ -660,4 +730,3 @@ fn main() {
 
     run();
 }
-

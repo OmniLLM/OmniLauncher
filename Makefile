@@ -80,7 +80,7 @@ check:
 	cd src-tauri && cargo check
 
 test: stop-running
-	@cmd /c "cd /d src-tauri && set CARGO_TARGET_DIR=target\test&& cargo test"
+	@cmd /c "cd /d src-tauri && set CARGO_TARGET_DIR=target\test&& cargo test -- --test-threads=1"
 
 stop-running:
 	@cmd /c "taskkill /IM omnilauncher.exe /F /T >NUL 2>&1 & exit /b 0"

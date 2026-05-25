@@ -92,10 +92,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
 
         exec_statements(conn, m.sql)?;
 
-        conn.execute(
-            "INSERT INTO _migrations (version) VALUES (?1)",
-            [m.version],
-        )?;
+        conn.execute("INSERT INTO _migrations (version) VALUES (?1)", [m.version])?;
     }
 
     Ok(())
