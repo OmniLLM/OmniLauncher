@@ -286,7 +286,7 @@ fn generate_html(items: &[TodoItem]) -> String {
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#1e1e2e;color:#cdd6f4;font-family:'Inter','Segoe UI',system-ui,sans-serif;min-height:100vh;padding:36px 20px}}
-.container{{max-width:960px;margin:0 auto}}
+.container{{max-width:1200px;margin:0 auto}}
 header{{display:flex;align-items:center;gap:14px;margin-bottom:28px}}
 .logo{{font-size:26px}}
 h1{{font-size:21px;font-weight:700;color:#cba6f7}}
@@ -317,13 +317,16 @@ tr.data-row.overdue td.col-due{{color:#f38ba8;font-weight:600}}
 td{{padding:11px 12px;font-size:14px;vertical-align:middle;border-bottom:1px solid #2a2a3d}}
 td.col-expand{{width:24px;color:#6c7086;font-size:12px;padding-right:0}}
 td.col-id{{color:#6c7086;width:44px;font-size:12px;font-variant-numeric:tabular-nums}}
-td.col-text{{line-height:1.5}}
+td.col-text{{line-height:1.5;min-width:180px}}
+td.col-text .desc-preview{{font-size:11px;color:#6c7086;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}}
 td.col-text.done-text{{color:#6c7086;text-decoration:line-through}}
 td.col-pri{{width:100px;white-space:nowrap}}
 td.col-status{{width:100px;white-space:nowrap}}
-td.col-due{{width:94px;font-size:12px;color:#6c7086;white-space:nowrap}}
-td.col-tags{{width:120px;font-size:12px}}
+td.col-due{{width:98px;font-size:12px;color:#6c7086;white-space:nowrap}}
+td.col-tags{{width:130px;font-size:12px}}
 td.col-date{{color:#6c7086;font-size:12px;width:94px;white-space:nowrap}}
+td.col-completed{{color:#a6e3a1;font-size:12px;width:94px;white-space:nowrap}}
+td.col-comments{{width:64px;font-size:12px;color:#6c7086;text-align:center}}
 .badge{{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;white-space:nowrap}}
 .badge-pending{{background:#f38ba820;color:#f38ba8;border:1px solid #f38ba840}}
 .badge-done{{background:#a6e3a120;color:#a6e3a1;border:1px solid #a6e3a140}}
@@ -390,9 +393,11 @@ tr.group-header td{{background:#252535;color:#6c7086;font-size:11px;font-weight:
           <th data-col="text">Task <span class="arr">↕</span></th>
           <th data-col="priority">Priority <span class="arr">↕</span></th>
           <th data-col="status">Status <span class="arr">↕</span></th>
-          <th data-col="due">Due <span class="arr">↕</span></th>
+          <th data-col="due">Due date <span class="arr">↕</span></th>
           <th data-col="tags">Tags <span class="arr">↕</span></th>
           <th data-col="date">Created <span class="arr">↕</span></th>
+          <th data-col="completed">Completed <span class="arr">↕</span></th>
+          <th data-col="comments">💬 <span class="arr">↕</span></th>
         </tr>
       </thead>
       <tbody id="tbody"></tbody>
@@ -466,7 +471,7 @@ function render() {{
     if(groupBy==='priority') keys.sort((a,b)=>Object.values(PRI_LABEL).indexOf(a)-Object.values(PRI_LABEL).indexOf(b));
     keys.forEach(key=>{{
       const hdr=document.createElement('tr'); hdr.className='group-header';
-      hdr.innerHTML=`<td colspan="8">${{key}} <span style="font-weight:400;opacity:.6">(${{groups.get(key).length}})</span></td>`;
+      hdr.innerHTML=`<td colspan="10">${{key}} <span style="font-weight:400;opacity:.6">(${{groups.get(key).length}})</span></td>`;
       tbody.appendChild(hdr);
       groups.get(key).forEach(insert);
     }});
@@ -480,15 +485,20 @@ function makeDataRow(t) {{
   tr.dataset.id=t.id;
   const tagHtml=t.tags?t.tags.split(',').map(s=>s.trim()).filter(Boolean).map(s=>`<span class="tag">${{esc(s)}}</span>`).join(''):'';
   const dueDisplay=t.due?(over?`⚠ ${{t.due}}`:t.due):'—';
+  const descPreview=t.desc?`<div class="desc-preview">${{esc(t.desc)}}</div>`:'';
+  const completedDisplay=t.completed||'—';
+  const commentCount=t.comments.length>0?`<span style="color:#cba6f7;font-weight:600">${{t.comments.length}}</span>`:'—';
   tr.innerHTML=`
     <td class="col-expand">${{expanded.has(t.id)?'▾':'▸'}}</td>
     <td class="col-id">#${{t.id}}</td>
-    <td class="col-text ${{t.done?'done-text':''}}">${{esc(t.text)}}</td>
+    <td class="col-text ${{t.done?'done-text':''}}">${{esc(t.text)}}${{descPreview}}</td>
     <td class="col-pri"><span class="${{PRI_CLASS[t.priority]||'pri-3'}}">${{PRI_LABEL[t.priority]||'Normal'}}</span></td>
     <td class="col-status"><span class="badge ${{t.done?'badge-done':'badge-pending'}}">${{t.done?'✅ Done':'⬜ Pending'}}</span></td>
     <td class="col-due">${{dueDisplay}}</td>
     <td class="col-tags">${{tagHtml||'<span style="color:#45475a">—</span>'}}</td>
     <td class="col-date">${{t.date}}</td>
+    <td class="col-completed">${{completedDisplay}}</td>
+    <td class="col-comments">${{commentCount}}</td>
   `;
   tr.addEventListener('click',()=>{{ if(expanded.has(t.id)) expanded.delete(t.id); else expanded.add(t.id); render(); }});
   return tr;
@@ -499,7 +509,7 @@ function makeDetailRow(t) {{
   const commentsHtml=t.comments.length===0
     ?'<div class="no-comments">No comments yet.</div>'
     :t.comments.map(c=>`<div class="comment"><div class="comment-body">${{esc(c.body)}}</div><div class="comment-meta">${{c.at}}</div></div>`).join('');
-  tr.innerHTML=`<td colspan="8"><div class="detail-panel">
+  tr.innerHTML=`<td colspan="10"><div class="detail-panel">
     <div class="detail-grid">
       <div class="detail-field"><div class="detail-field-lbl">Priority</div><div class="detail-field-val ${{PRI_CLASS[t.priority]||'pri-3'}}">${{PRI_LABEL[t.priority]||'Normal'}}</div></div>
       <div class="detail-field"><div class="detail-field-lbl">Due date</div><div class="detail-field-val">${{t.due||'—'}}</div></div>
