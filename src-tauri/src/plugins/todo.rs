@@ -1,3 +1,4 @@
+use crate::db;
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use rusqlite::{Connection, params};
@@ -27,30 +28,7 @@ fn open_db() -> rusqlite::Result<Connection> {
     let dir = config_dir();
     let _ = std::fs::create_dir_all(&dir);
     let conn = Connection::open(db_path())?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS todos (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            text         TEXT    NOT NULL,
-            done         INTEGER NOT NULL DEFAULT 0,
-            created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE TABLE IF NOT EXISTS todo_comments (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            todo_id    INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
-            body       TEXT    NOT NULL,
-            created_at TEXT    NOT NULL DEFAULT (datetime('now'))
-        );",
-    )?;
-    // Safe additive migrations — each silently ignored if column already exists
-    for sql in [
-        "ALTER TABLE todos ADD COLUMN description  TEXT    NOT NULL DEFAULT '';",
-        "ALTER TABLE todos ADD COLUMN priority      INTEGER NOT NULL DEFAULT 3;",
-        "ALTER TABLE todos ADD COLUMN due_date      TEXT    NOT NULL DEFAULT '';",
-        "ALTER TABLE todos ADD COLUMN tags          TEXT    NOT NULL DEFAULT '';",
-        "ALTER TABLE todos ADD COLUMN completed_at  TEXT    NOT NULL DEFAULT '';",
-    ] {
-        let _ = conn.execute_batch(sql);
-    }
+    db::run_migrations(&conn)?;
     migrate_json(&conn);
     Ok(conn)
 }
@@ -306,10 +284,17 @@ h1{{font-size:21px;font-weight:700;color:#cba6f7}}
 .toolbar input{{flex:1;min-width:140px}}
 .card{{background:#313244;border-radius:12px;overflow:hidden}}
 table{{width:100%;border-collapse:collapse}}
-th{{padding:10px 12px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#6c7086;text-align:left;cursor:pointer;user-select:none;white-space:nowrap;background:#2a2a3d;border-bottom:1px solid #45475a}}
+th{{position:relative;padding:10px 12px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#6c7086;text-align:left;cursor:pointer;user-select:none;white-space:nowrap;background:#2a2a3d;border-bottom:1px solid #45475a}}
 th:hover{{color:#cba6f7}}
 th .arr{{margin-left:4px;opacity:.4;font-size:10px}}
 th.active .arr{{opacity:1;color:#cba6f7}}
+th .col-filter-badge{{display:inline-block;margin-left:5px;background:#cba6f7;color:#1e1e2e;border-radius:10px;font-size:9px;font-weight:700;padding:1px 6px;vertical-align:middle;text-transform:none;letter-spacing:0}}
+.col-dropdown{{position:absolute;top:100%;left:0;z-index:200;min-width:160px;background:#2a2a3d;border:1px solid #45475a;border-radius:8px;box-shadow:0 8px 24px #00000080;overflow:hidden;display:none}}
+.col-dropdown.open{{display:block}}
+.col-dropdown-item{{padding:8px 14px;font-size:12px;color:#cdd6f4;cursor:pointer;white-space:nowrap;text-transform:none;letter-spacing:0;font-weight:400}}
+.col-dropdown-item:hover{{background:#313244;color:#cba6f7}}
+.col-dropdown-item.selected{{color:#a6e3a1;font-weight:600}}
+.col-dropdown-item.clear-item{{color:#f38ba8;border-top:1px solid #45475a;margin-top:2px}}
 tr.data-row{{cursor:pointer;transition:background 120ms}}
 tr.data-row:hover td{{background:#2e2e40}}
 tr.data-row.expanded td{{background:#2a2a3c;border-bottom:none}}
@@ -391,12 +376,12 @@ tr.group-header td{{background:#252535;color:#6c7086;font-size:11px;font-weight:
           <th style="width:24px;padding-right:0"></th>
           <th data-col="id" class="active">ID <span class="arr">▲</span></th>
           <th data-col="text">Task <span class="arr">↕</span></th>
-          <th data-col="priority">Priority <span class="arr">↕</span></th>
-          <th data-col="status">Status <span class="arr">↕</span></th>
-          <th data-col="due">Due date <span class="arr">↕</span></th>
-          <th data-col="tags">Tags <span class="arr">↕</span></th>
-          <th data-col="date">Created <span class="arr">↕</span></th>
-          <th data-col="completed">Completed <span class="arr">↕</span></th>
+          <th data-col="priority" data-filterable="priority">Priority <span class="arr">↕</span><div class="col-dropdown" id="dd-priority"></div></th>
+          <th data-col="status" data-filterable="status">Status <span class="arr">↕</span><div class="col-dropdown" id="dd-status"></div></th>
+          <th data-col="due" data-filterable="due">Due date <span class="arr">↕</span><div class="col-dropdown" id="dd-due"></div></th>
+          <th data-col="tags" data-filterable="tags">Tags <span class="arr">↕</span><div class="col-dropdown" id="dd-tags"></div></th>
+          <th data-col="date" data-filterable="date">Created <span class="arr">↕</span><div class="col-dropdown" id="dd-date"></div></th>
+          <th data-col="completed" data-filterable="completed">Completed <span class="arr">↕</span><div class="col-dropdown" id="dd-completed"></div></th>
           <th data-col="comments">💬 <span class="arr">↕</span></th>
         </tr>
       </thead>
@@ -414,15 +399,126 @@ const TODAY = '{today}';
 const PRI_LABEL = {{1:'🔴 Urgent',2:'🟠 High',3:'🟡 Normal',4:'🔵 Low'}};
 const PRI_CLASS = {{1:'pri-1',2:'pri-2',3:'pri-3',4:'pri-4'}};
 let sortCol='id', sortDir=1, groupBy='none', filterText='', expanded=new Set();
+// columnFilters: map of filterable col key → selected value string (or null)
+const columnFilters = {{}};
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
 
 function isOverdue(t) {{
   return !t.done && t.due && t.due < TODAY;
 }}
 
+function colValues(col) {{
+  const set = new Set();
+  RAW.forEach(t => {{
+    if (col === 'status') {{ set.add(t.done ? '✅ Done' : '⬜ Pending'); }}
+    else if (col === 'priority') {{ set.add(PRI_LABEL[t.priority] || 'Normal'); }}
+    else if (col === 'tags') {{
+      const tags = t.tags ? t.tags.split(',').map(s=>s.trim()).filter(Boolean) : [];
+      if (tags.length === 0) set.add('(no tags)');
+      else tags.forEach(tag => set.add(tag));
+    }}
+    else if (col === 'due') {{ set.add(t.due || '—'); }}
+    else if (col === 'date') {{ set.add(t.date); }}
+    else if (col === 'completed') {{ set.add(t.completed || '—'); }}
+  }});
+  return [...set].sort();
+}}
+
+function colMatchesFilter(t, col, selected) {{
+  if (col === 'status') return (t.done ? '✅ Done' : '⬜ Pending') === selected;
+  if (col === 'priority') return (PRI_LABEL[t.priority] || 'Normal') === selected;
+  if (col === 'tags') {{
+    const tags = t.tags ? t.tags.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    return selected === '(no tags)' ? tags.length === 0 : tags.includes(selected);
+  }}
+  if (col === 'due') return (t.due || '—') === selected;
+  if (col === 'date') return t.date === selected;
+  if (col === 'completed') return (t.completed || '—') === selected;
+  return true;
+}}
+
+// ─── dropdown ─────────────────────────────────────────────────────────────────
+
+let openDropdownCol = null;
+
+function openDropdown(col, th) {{
+  closeDropdown();
+  openDropdownCol = col;
+  const dd = document.getElementById('dd-' + col);
+  if (!dd) return;
+  dd.innerHTML = '';
+
+  const values = colValues(col);
+  values.forEach(val => {{
+    const item = document.createElement('div');
+    item.className = 'col-dropdown-item' + (columnFilters[col] === val ? ' selected' : '');
+    item.textContent = val;
+    item.addEventListener('mousedown', e => {{
+      e.stopPropagation();
+      columnFilters[col] = (columnFilters[col] === val) ? null : val;
+      closeDropdown();
+      updateFilterBadges();
+      render();
+    }});
+    dd.appendChild(item);
+  }});
+
+  if (columnFilters[col]) {{
+    const clear = document.createElement('div');
+    clear.className = 'col-dropdown-item clear-item';
+    clear.textContent = '✕ Clear filter';
+    clear.addEventListener('mousedown', e => {{
+      e.stopPropagation();
+      columnFilters[col] = null;
+      closeDropdown();
+      updateFilterBadges();
+      render();
+    }});
+    dd.appendChild(clear);
+  }}
+
+  dd.classList.add('open');
+}}
+
+function closeDropdown() {{
+  if (openDropdownCol) {{
+    const dd = document.getElementById('dd-' + openDropdownCol);
+    if (dd) dd.classList.remove('open');
+    openDropdownCol = null;
+  }}
+}}
+
+function updateFilterBadges() {{
+  document.querySelectorAll('th[data-filterable]').forEach(th => {{
+    const col = th.dataset.filterable;
+    const existing = th.querySelector('.col-filter-badge');
+    if (columnFilters[col]) {{
+      if (!existing) {{
+        const badge = document.createElement('span');
+        badge.className = 'col-filter-badge';
+        badge.textContent = columnFilters[col];
+        th.appendChild(badge);
+      }} else {{
+        existing.textContent = columnFilters[col];
+      }}
+    }} else if (existing) {{
+      existing.remove();
+    }}
+  }});
+}}
+
+// ─── render ───────────────────────────────────────────────────────────────────
+
 function render() {{
-  let data = RAW.filter(t => !filterText ||
-    t.text.toLowerCase().includes(filterText.toLowerCase()) ||
-    t.tags.toLowerCase().includes(filterText.toLowerCase()));
+  let data = RAW.filter(t => {{
+    if (filterText && !t.text.toLowerCase().includes(filterText.toLowerCase()) &&
+        !t.tags.toLowerCase().includes(filterText.toLowerCase())) return false;
+    for (const [col, val] of Object.entries(columnFilters)) {{
+      if (val && !colMatchesFilter(t, col, val)) return false;
+    }}
+    return true;
+  }});
 
   data.sort((a,b) => {{
     let av, bv;
@@ -527,13 +623,37 @@ function makeDetailRow(t) {{
 
 function esc(s) {{ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
 
+// ─── header click: sort + filterable columns open dropdown ────────────────────
+
 document.querySelectorAll('th[data-col]').forEach(th=>{{
-  th.addEventListener('click',()=>{{
-    const col=th.dataset.col; if(sortCol===col) sortDir*=-1; else {{sortCol=col;sortDir=1;}}
-    document.querySelectorAll('th').forEach(h=>{{h.classList.remove('active');h.querySelector('.arr')&&(h.querySelector('.arr').textContent='↕');}});
-    th.classList.add('active'); th.querySelector('.arr').textContent=sortDir===1?'▲':'▼';
-    render();
+  th.addEventListener('click', e=>{{
+    // If click was inside dropdown, skip sort toggle
+    if (e.target.closest('.col-dropdown')) return;
+
+    const col = th.dataset.col;
+    const filterable = th.dataset.filterable;
+
+    if (filterable) {{
+      // If same filterable header clicked again, toggle dropdown; otherwise open
+      if (openDropdownCol === filterable) {{
+        closeDropdown();
+      }} else {{
+        openDropdown(filterable, th);
+      }}
+      // Still toggle sort on second click (after dropdown open):
+      // sort toggle is secondary; open dropdown is primary action.
+    }} else {{
+      if (sortCol===col) sortDir*=-1; else {{sortCol=col;sortDir=1;}}
+      document.querySelectorAll('th').forEach(h=>{{h.classList.remove('active');h.querySelector('.arr')&&(h.querySelector('.arr').textContent='↕');}});
+      th.classList.add('active'); th.querySelector('.arr').textContent=sortDir===1?'▲':'▼';
+      render();
+    }}
   }});
+}});
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e=>{{
+  if (!e.target.closest('th[data-filterable]')) closeDropdown();
 }});
 
 document.getElementById('group-by').addEventListener('change',e=>{{groupBy=e.target.value;render();}});

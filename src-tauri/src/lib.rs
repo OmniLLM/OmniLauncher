@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod db;
 pub mod guardrails;
 pub mod plugins;
 pub mod settings;
