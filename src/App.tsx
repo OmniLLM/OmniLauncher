@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import SearchBar from './components/SearchBar'
 import ResultList from './components/ResultList'
 import SettingsPanel from './components/SettingsPanel'
@@ -26,6 +27,15 @@ interface ConversationTurn {
   content: string
   tools_used?: string[]
   isStreaming?: boolean
+}
+
+interface AppSettings {
+  ai_base_url: string;
+  ai_model: string;
+  ai_api_key: string;
+  theme: string;
+  hotkey: string;
+  max_results: number;
 }
 
 /**
@@ -69,118 +79,13 @@ const LIGHT_COLORS = {
   aiText: '#4C4F69',
 }
 
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-  tools?: string[];
-}
+// ─── Markdown renderer ────────────────────────────────────────────────────────
 
-function renderMarkdown(text: string): string {
-  // Process code blocks first (``` ... ```)
-  let html = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
-    const escaped = escapeHtml(code.trimEnd());
-    return `<pre class="md-codeblock"><code class="md-lang-${lang || 'text'}">${escaped}</code></pre>`;
-  });
-
-  // Split by lines for block-level processing
-  const lines = html.split('\n');
-  const result: string[] = [];
-  let inList = false;
-  let listType = '';
-  let inTable = false;
-  let tableRows: string[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    let line = lines[i];
-
-    // Skip if inside a pre block
-    if (line.includes('<pre class="md-codeblock">')) {
-      // Find end of pre block
-      result.push(line);
-      while (i < lines.length - 1 && !lines[i].includes('</pre>')) {
-        i++;
-        result.push(lines[i]);
-      }
-      continue;
-    }
-
-    // Table detection
-    if (line.match(/^\|(.+)\|$/)) {
-      if (!inTable) {
-        inTable = true;
-        tableRows = [];
-      }
-      // Skip separator rows
-      if (!line.match(/^\|[\s\-:|]+\|$/)) {
-        tableRows.push(line);
-      }
-      continue;
-    } else if (inTable) {
-      inTable = false;
-      result.push(renderTable(tableRows));
-      tableRows = [];
-    }
-
-    // Close list if needed
-    if (inList && !line.match(/^(\s*[-*]\s|^\s*\d+\.\s)/)) {
-      result.push(listType === 'ul' ? '</ul>' : '</ol>');
-      inList = false;
-    }
-
-    // Headers
-    if (line.match(/^#{1,6}\s/)) {
-      const level = line.match(/^(#{1,6})\s/)![1].length;
-      const content = line.replace(/^#{1,6}\s/, '');
-      result.push(`<h${level} class="md-h${level}">${inlineFormat(content)}</h${level}>`);
-      continue;
-    }
-
-    // Unordered list
-    if (line.match(/^\s*[-*]\s/)) {
-      if (!inList || listType !== 'ul') {
-        if (inList) result.push('</ol>');
-        result.push('<ul class="md-list">');
-        inList = true;
-        listType = 'ul';
-      }
-      const content = line.replace(/^\s*[-*]\s/, '');
-      result.push(`<li>${inlineFormat(content)}</li>`);
-      continue;
-    }
-
-    // Ordered list
-    if (line.match(/^\s*\d+\.\s/)) {
-      if (!inList || listType !== 'ol') {
-        if (inList) result.push('</ul>');
-        result.push('<ol class="md-list">');
-        inList = true;
-        listType = 'ol';
-      }
-      const content = line.replace(/^\s*\d+\.\s/, '');
-      result.push(`<li>${inlineFormat(content)}</li>`);
-      continue;
-    }
-
-    // Horizontal rule
-    if (line.match(/^---+$/)) {
-      result.push('<hr class="md-hr"/>');
-      continue;
-    }
-
-    // Empty line
-    if (line.trim() === '') {
-      result.push('<div class="md-spacer"></div>');
-      continue;
-    }
-
-    // Regular paragraph
-    result.push(`<p class="md-p">${inlineFormat(line)}</p>`);
-  }
-
-  if (inList) result.push(listType === 'ul' ? '</ul>' : '</ol>');
-  if (inTable) result.push(renderTable(tableRows));
-
-  return result.join('\n');
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
 
 function inlineFormat(text: string): string {
@@ -189,33 +94,106 @@ function inlineFormat(text: string): string {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/~~(.+?)~~/g, '<del>$1</del>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a class="md-link" href="$2" target="_blank">$1</a>');
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a class="md-link" href="$2" target="_blank">$1</a>')
 }
 
 function renderTable(rows: string[]): string {
-  if (rows.length === 0) return '';
+  if (rows.length === 0) return ''
   const parseRow = (row: string) =>
-    row.split('|').filter((_c, i, arr) => i > 0 && i < arr.length - 1).map(c => c.trim());
+    row.split('|').filter((_c, i, arr) => i > 0 && i < arr.length - 1).map(c => c.trim())
 
-  let html = '<table class="md-table"><thead><tr>';
-  const header = parseRow(rows[0]);
-  header.forEach(cell => { html += `<th>${inlineFormat(cell)}</th>`; });
-  html += '</tr></thead><tbody>';
+  let html = '<table class="md-table"><thead><tr>'
+  const header = parseRow(rows[0])
+  header.forEach(cell => { html += `<th>${inlineFormat(cell)}</th>` })
+  html += '</tr></thead><tbody>'
   for (let i = 1; i < rows.length; i++) {
-    html += '<tr>';
-    parseRow(rows[i]).forEach(cell => { html += `<td>${inlineFormat(cell)}</td>`; });
-    html += '</tr>';
+    html += '<tr>'
+    parseRow(rows[i]).forEach(cell => { html += `<td>${inlineFormat(cell)}</td>` })
+    html += '</tr>'
   }
-  html += '</tbody></table>';
-  return html;
+  html += '</tbody></table>'
+  return html
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+function renderMarkdown(text: string): string {
+  let html = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
+    const escaped = escapeHtml(code.trimEnd())
+    return `<pre class="md-codeblock"><code class="md-lang-${lang || 'text'}">${escaped}</code></pre>`
+  })
+
+  const lines = html.split('\n')
+  const result: string[] = []
+  let inList = false
+  let listType = ''
+  let inTable = false
+  let tableRows: string[] = []
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i]
+
+    if (line.includes('<pre class="md-codeblock">')) {
+      result.push(line)
+      while (i < lines.length - 1 && !lines[i].includes('</pre>')) {
+        i++
+        result.push(lines[i])
+      }
+      continue
+    }
+
+    if (line.match(/^\|(.+)\|$/)) {
+      if (!inTable) { inTable = true; tableRows = [] }
+      if (!line.match(/^\|[\s\-:|]+\|$/)) tableRows.push(line)
+      continue
+    } else if (inTable) {
+      inTable = false
+      result.push(renderTable(tableRows))
+      tableRows = []
+    }
+
+    if (inList && !line.match(/^(\s*[-*]\s|^\s*\d+\.\s)/)) {
+      result.push(listType === 'ul' ? '</ul>' : '</ol>')
+      inList = false
+    }
+
+    if (line.match(/^#{1,6}\s/)) {
+      const level = line.match(/^(#{1,6})\s/)![1].length
+      const content = line.replace(/^#{1,6}\s/, '')
+      result.push(`<h${level} class="md-h${level}">${inlineFormat(content)}</h${level}>`)
+      continue
+    }
+
+    if (line.match(/^\s*[-*]\s/)) {
+      if (!inList || listType !== 'ul') {
+        if (inList) result.push('</ol>')
+        result.push('<ul class="md-list">')
+        inList = true; listType = 'ul'
+      }
+      result.push(`<li>${inlineFormat(line.replace(/^\s*[-*]\s/, ''))}</li>`)
+      continue
+    }
+
+    if (line.match(/^\s*\d+\.\s/)) {
+      if (!inList || listType !== 'ol') {
+        if (inList) result.push('</ul>')
+        result.push('<ol class="md-list">')
+        inList = true; listType = 'ol'
+      }
+      result.push(`<li>${inlineFormat(line.replace(/^\s*\d+\.\s/, ''))}</li>`)
+      continue
+    }
+
+    if (line.match(/^---+$/)) { result.push('<hr class="md-hr"/>'); continue }
+    if (line.trim() === '') { result.push('<div class="md-spacer"></div>'); continue }
+    result.push(`<p class="md-p">${inlineFormat(line)}</p>`)
+  }
+
+  if (inList) result.push(listType === 'ul' ? '</ul>' : '</ol>')
+  if (inTable) result.push(renderTable(tableRows))
+
+  return result.join('\n')
 }
+
+// ─── Slash commands ───────────────────────────────────────────────────────────
 
 interface SlashCommand {
   cmd: string;
@@ -247,7 +225,9 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: "/clip", shortcut: "/cb", description: "Search clipboard history", usage: "/clip [term]", examples: ["/clip", "/cb password", "/clip url"] },
   { cmd: "/skill", description: "Manage skills (list, view, install, reload)", usage: "/skill [list|view|install|reload|help]", examples: ["/skill list", "/skill view web-summarizer", "/skill help"] },
   { cmd: "/help", shortcut: "/?", description: "Show all available commands", usage: "/help", examples: ["/help"] },
-];
+]
+
+// ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [query, setQuery] = useState('')
@@ -256,85 +236,65 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [conversationHistory, setConversationHistory] = useState<ConversationTurn[]>([])
+  const [settings, setSettings] = useState<AppSettings | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const chatScrollRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const colors = theme === 'dark' ? DARK_COLORS : LIGHT_COLORS
 
   const isAiMode = isAiPrefix(query)
 
+  // Load settings on mount
+  useEffect(() => {
+    invoke<AppSettings>('get_settings')
+      .then(s => {
+        setSettings(s)
+        if (s.theme === 'light') setTheme('light')
+      })
+      .catch(() => {})
+  }, [])
+
   const doSearch = useCallback(async (q: string) => {
-    if (!q.trim()) {
+    if (!q.trim() || isAiPrefix(q)) {
       setResults([])
       return
     }
-    if (isAiPrefix(q)) {
+    try {
+      const res = await invoke<QueryResult[]>('search', { query: q })
+      setResults(res)
+    } catch {
       setResults([])
-      return
     }
-    // Extract search term after the command prefix
-    const spaceIdx = query.indexOf(" ");
-    const searchTerm = spaceIdx >= 0 ? query.slice(spaceIdx + 1).trim() : "";
-    if (searchTerm.length === 0) {
-      setLiveResults([]);
-      return;
-    }
+  }, [])
 
-    // Debounce: wait 150ms before searching
-    if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
-    liveTimerRef.current = setTimeout(async () => {
-      try {
-        const results = await invoke<QueryResult[]>("slash_preview", { query });
-        setLiveResults(results);
-        setLiveIdx(-1);
-      } catch {
-        setLiveResults([]);
-      }
-    }, 150);
-
-    return () => {
-      if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
-    };
-  }, [query, isLiveSearch]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
+  // Focus input on mount
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, loading]);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    inputRef.current?.focus()
+  }, [])
 
   // Re-focus input when window becomes visible
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let unlisten: (() => void) | undefined
     getCurrentWebviewWindow()
       .onFocusChanged(({ payload: focused }) => {
         if (focused) {
-          // Use multiple attempts to ensure focus lands on the input
-          inputRef.current?.focus();
+          inputRef.current?.focus()
           setTimeout(() => {
-            inputRef.current?.focus();
-            inputRef.current?.select();
-          }, 50);
-          setTimeout(() => {
-            inputRef.current?.focus();
-          }, 150);
+            inputRef.current?.focus()
+            inputRef.current?.select()
+          }, 50)
+          setTimeout(() => inputRef.current?.focus(), 150)
         }
       })
-      .then((fn) => { unlisten = fn; })
-      .catch(() => {});
-    return () => { unlisten?.(); };
-  }, []);
+      .then(fn => { unlisten = fn })
+      .catch(() => {})
+    return () => { unlisten?.() }
+  }, [])
 
   const doAiQuery = useCallback(async (q: string) => {
     if (!q.trim()) return
 
-    // Append user message immediately
     const userTurn: ConversationTurn = { role: 'user', content: q }
     const pendingAiTurn: ConversationTurn = {
       role: 'assistant',
@@ -350,7 +310,6 @@ export default function App() {
       const res = await invoke<AiResponse>('ai_query', { query: q })
       setConversationHistory(prev => {
         const next = [...prev]
-        // replace the last (streaming) assistant turn
         next[next.length - 1] = {
           role: 'assistant',
           content: res.content,
@@ -370,17 +329,14 @@ export default function App() {
         return next
       })
     } finally {
-      setLoading(false);
-      // Re-focus input after response
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setLoading(false)
+      setTimeout(() => inputRef.current?.focus(), 50)
     }
-  }, []);
+  }, [])
 
   const handleQueryChange = useCallback((value: string) => {
     setQuery(value)
-
     if (debounceRef.current) clearTimeout(debounceRef.current)
-
     debounceRef.current = setTimeout(() => {
       doSearch(value)
     }, 100)
@@ -390,15 +346,15 @@ export default function App() {
     if (forceAi || isAiPrefix(value)) {
       if (debounceRef.current) clearTimeout(debounceRef.current)
       doAiQuery(value)
-      setQuery('') // clear input after sending
+      setQuery('')
     }
   }, [doAiQuery])
 
-  const handleNewChat = useCallback(async () => {
+  const handleNewConversation = useCallback(async () => {
     try {
-      await invoke("clear_conversation");
+      await invoke('clear_conversation')
     } catch (e) {
-      console.error("clear_conversation error:", e);
+      console.error('clear_conversation error:', e)
     }
     setConversationHistory([])
     setResults([])
@@ -434,169 +390,213 @@ export default function App() {
         setQuery('')
         setResults([])
       }
-      if (e.key === "," && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        setShowSettings((s) => !s);
+      if (e.key === ',' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault()
+        setShowSettings(s => !s)
       }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showSettings]);
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
-  // ─── Layout geometry ────────────────────────────────────────────────────────
-  // Launcher mode: compact, grows with results.
-  // AI chat mode: tall, fixed.
+  // ── Layout geometry ────────────────────────────────────────────────────────
   const launcherHasContent = results.length > 0 || showSettings
   const windowHeight = isAiMode ? '560px' : launcherHasContent ? 'auto' : '64px'
   const maxHeight = isAiMode ? '560px' : '520px'
 
+  // Empty launcher state
+  const showEmptyState = !isAiMode && !showSettings && results.length === 0 && query === ''
+
   return (
-    <div
-      style={{
-        width: '680px',
-        height: windowHeight,
-        maxHeight,
-        background: colors.bg,
-        color: colors.text,
-        fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
-        borderRadius: '14px',
-        overflow: 'hidden',
-        boxShadow: '0 24px 64px rgba(0,0,0,0.55)',
-        display: 'flex',
-        flexDirection: 'column',
-        transition: 'height 220ms cubic-bezier(0.4,0,0.2,1), max-height 220ms cubic-bezier(0.4,0,0.2,1)',
-        // accent ring in AI mode
-        outline: isAiMode ? `1.5px solid ${colors.accent}33` : 'none',
-      }}
-    >
-      {/* ── AI MODE: top bar ─────────────────────────────────────────── */}
-      {isAiMode && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '10px 16px 0',
-            flexShrink: 0,
-          }}
-        >
-          <span style={{ fontSize: '13px', color: colors.accent, fontWeight: 600, letterSpacing: '0.03em' }}>
-            ✦ AI Chat
-          </span>
-          <button
-            onClick={handleNewConversation}
+    <>
+      {/* Global keyframe animations injected once */}
+      <style>{`
+        @keyframes omni-fade-in {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes omni-dot-pulse {
+          0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+          40%            { opacity: 1;   transform: scale(1); }
+        }
+        @keyframes omni-blink {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0; }
+        }
+        @keyframes omni-spin {
+          to { transform: rotate(360deg); }
+        }
+        .omni-bubble-enter {
+          animation: omni-fade-in 200ms ease both;
+        }
+        .omni-cursor::after {
+          content: '|';
+          animation: omni-blink 1s step-start infinite;
+          color: inherit;
+          margin-left: 1px;
+        }
+      `}</style>
+
+      <div
+        style={{
+          width: '680px',
+          height: windowHeight,
+          maxHeight,
+          background: colors.bg,
+          color: colors.text,
+          fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
+          borderRadius: '14px',
+          overflow: 'hidden',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.55)',
+          display: 'flex',
+          flexDirection: 'column',
+          transition: 'height 220ms cubic-bezier(0.4,0,0.2,1), max-height 220ms cubic-bezier(0.4,0,0.2,1)',
+          outline: isAiMode ? `1.5px solid ${colors.accent}33` : 'none',
+        }}
+      >
+        {/* ── AI MODE: top bar ─────────────────────────────────────────── */}
+        {isAiMode && (
+          <div
             style={{
-              background: colors.surface,
-              border: 'none',
-              borderRadius: '7px',
-              padding: '4px 11px',
-              color: colors.text,
-              cursor: 'pointer',
-              fontSize: '12px',
               display: 'flex',
               alignItems: 'center',
-              gap: '5px',
+              justifyContent: 'space-between',
+              padding: '10px 16px 0',
+              flexShrink: 0,
             }}
           >
-            <span style={{ fontSize: '10px' }}>✦</span> New conversation
-          </button>
-        </div>
-      )}
-
-      {/* ── AI MODE: scrollable chat history ─────────────────────────── */}
-      {isAiMode && (
-        <div
-          ref={chatScrollRef}
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: '12px 16px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '10px',
-            // Custom scrollbar
-            scrollbarWidth: 'thin',
-            scrollbarColor: `${colors.surface2} transparent`,
-          }}
-        >
-          {conversationHistory.length === 0 && (
-            <div
+            <span style={{ fontSize: '13px', color: colors.accent, fontWeight: 600, letterSpacing: '0.03em' }}>
+              ✦ AI Chat
+            </span>
+            <button
+              onClick={handleNewConversation}
               style={{
-                flex: 1,
+                background: colors.surface,
+                border: 'none',
+                borderRadius: '7px',
+                padding: '4px 11px',
+                color: colors.text,
+                cursor: 'pointer',
+                fontSize: '12px',
                 display: 'flex',
-                flexDirection: 'column',
                 alignItems: 'center',
-                justifyContent: 'center',
-                color: colors.sub,
-                gap: '8px',
-                paddingBottom: '24px',
+                gap: '5px',
               }}
+              onMouseEnter={e => (e.currentTarget.style.background = colors.surface2)}
+              onMouseLeave={e => (e.currentTarget.style.background = colors.surface)}
             >
-              <span style={{ fontSize: '32px', opacity: 0.4 }}>✦</span>
-              <span style={{ fontSize: '13px' }}>Ask me anything — I can search the web, run calculations, and more.</span>
-            </div>
-          )}
+              <span style={{ fontSize: '10px' }}>✦</span> New conversation
+            </button>
+          </div>
+        )}
 
-          {conversationHistory.map((turn, i) => (
-            <ChatBubble key={i} turn={turn} colors={colors} />
-          ))}
-        </div>
-      )}
+        {/* ── AI MODE: scrollable chat history ─────────────────────────── */}
+        {isAiMode && (
+          <div
+            ref={chatScrollRef}
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: '12px 16px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+              scrollbarWidth: 'thin',
+              scrollbarColor: `${colors.surface2} transparent`,
+            }}
+          >
+            {conversationHistory.length === 0 && (
+              <div
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: colors.sub,
+                  gap: '8px',
+                  paddingBottom: '24px',
+                  minHeight: '360px',
+                }}
+              >
+                <span style={{ fontSize: '32px', opacity: 0.35 }}>✦</span>
+                <span style={{ fontSize: '13px', textAlign: 'center', maxWidth: '280px', lineHeight: 1.6 }}>
+                  Ask me anything — I can search the web, run calculations, and more.
+                </span>
+              </div>
+            )}
 
-      {/* ── SETTINGS panel ───────────────────────────────────────────── */}
-      {showSettings && !isAiMode && (
-        <SettingsPanel
-          theme={theme}
-          onThemeChange={setTheme}
-          onClose={() => setShowSettings(false)}
-          initialSettings={settings}
-        />
-      )}
+            {conversationHistory.map((turn, i) => (
+              <ChatBubble key={i} turn={turn} colors={colors} />
+            ))}
+          </div>
+        )}
 
-      {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
-      {!isAiMode && !showSettings && results.length > 0 && (
-        <ResultList
-          results={results}
-          query={query}
-          onExecute={handleExecute}
+        {/* ── SETTINGS panel ───────────────────────────────────────────── */}
+        {showSettings && !isAiMode && (
+          <SettingsPanel
+            theme={theme}
+            onThemeChange={setTheme}
+            onClose={() => setShowSettings(false)}
+            initialSettings={settings}
+          />
+        )}
+
+        {/* ── LAUNCHER MODE: empty state ────────────────────────────────── */}
+        {showEmptyState && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '0 24px 16px',
+              opacity: 0.45,
+            }}
+          >
+            <span style={{ fontSize: '11.5px', color: colors.sub, textAlign: 'center', letterSpacing: '0.01em' }}>
+              OmniLauncher — type to search, ? for AI, /skill for skills
+            </span>
+          </div>
+        )}
+
+        {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
+        {!isAiMode && !showSettings && results.length > 0 && (
+          <ResultList
+            results={results}
+            query={query}
+            onExecute={handleExecute}
+            colors={colors}
+          />
+        )}
+
+        {/* ── Search / input bar (always at bottom) ────────────────────── */}
+        <SearchBar
+          value={query}
+          onChange={handleQueryChange}
+          onSubmit={handleSubmit}
+          isAiMode={isAiMode}
+          loading={loading}
           colors={colors}
+          onSettingsClick={() => setShowSettings(s => !s)}
+          showHintBar={!isAiMode && query === '' && !showSettings}
+          inputRef={inputRef}
         />
-      )}
-
-      {/* ── Search / input bar (always at bottom) ────────────────────── */}
-      <SearchBar
-        value={query}
-        onChange={handleQueryChange}
-        onSubmit={handleSubmit}
-        isAiMode={isAiMode}
-        loading={loading}
-        colors={colors}
-        onSettingsClick={() => setShowSettings(s => !s)}
-        showHintBar={!isAiMode && query === '' && !showSettings}
-      />
-    </div>
-  );
+      </div>
+    </>
+  )
 }
 
 // ─── Chat bubble sub-component ─────────────────────────────────────────────
 
 function toolIcon(tool: string): string {
-  if (tool.startsWith('🎯')) return '' // skill badge already has emoji
+  if (tool.startsWith('🎯')) return ''
   if (tool.includes('file')) return '📁'
-  if (tool.includes('web') || tool.includes('search')) return '🔍'
+  if (tool.includes('web') || tool.includes('search')) return '🌐'
   if (tool.includes('calc')) return '🧮'
-  if (tool.includes('shell')) return '💻'
+  if (tool.includes('shell') || tool.includes('exec')) return '🔧'
   if (tool.includes('app')) return '🚀'
   if (tool.includes('clip')) return '📋'
   return '🔧'
-}
-
-function renderMarkdown(text: string): string {
-  return text
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code style="background:rgba(255,255,255,0.12);padding:2px 6px;border-radius:4px;font-size:0.92em">$1</code>')
-    .replace(/\n/g, '<br/>')
 }
 
 function ChatBubble({ turn, colors }: { turn: ConversationTurn; colors: typeof DARK_COLORS }) {
@@ -604,16 +604,17 @@ function ChatBubble({ turn, colors }: { turn: ConversationTurn; colors: typeof D
 
   return (
     <div
+      className="omni-bubble-enter"
       style={{
         display: 'flex',
         flexDirection: 'column',
         alignItems: isUser ? 'flex-end' : 'flex-start',
-        gap: '4px',
+        gap: '5px',
       }}
     >
-      {/* Tool chips — only for assistant */}
+      {/* Tool chips — only for assistant, shown above the bubble */}
       {!isUser && turn.tools_used && turn.tools_used.length > 0 && (
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', paddingLeft: '4px' }}>
+        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', paddingLeft: '4px' }}>
           {turn.tools_used.map((tool, i) => {
             const isSkill = tool.startsWith('🎯')
             return (
@@ -621,11 +622,13 @@ function ChatBubble({ turn, colors }: { turn: ConversationTurn; colors: typeof D
                 key={i}
                 style={{
                   fontSize: '11px',
-                  background: isSkill ? `${colors.accent}22` : colors.surface2,
-                  border: isSkill ? `1px solid ${colors.accent}55` : 'none',
-                  padding: '2px 7px',
+                  background: isSkill ? `${colors.accent}20` : `${colors.surface2}CC`,
+                  border: isSkill ? `1px solid ${colors.accent}55` : `1px solid ${colors.surface2}`,
+                  padding: '2px 8px',
                   borderRadius: '10px',
                   color: isSkill ? colors.accent : colors.sub,
+                  fontWeight: 500,
+                  letterSpacing: '0.02em',
                 }}
               >
                 {isSkill ? tool : `${toolIcon(tool)} ${tool}`}
@@ -635,16 +638,22 @@ function ChatBubble({ turn, colors }: { turn: ConversationTurn; colors: typeof D
         </div>
       )}
 
+      {/* Bubble */}
       <div
         style={{
           maxWidth: '78%',
-          padding: '9px 13px',
-          borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+          padding: isUser ? '9px 14px' : '10px 14px',
+          borderRadius: isUser ? '16px 16px 4px 16px' : '4px 16px 16px 16px',
           background: isUser ? colors.userBubble : colors.aiBubble,
           color: isUser ? colors.userBubbleText : colors.aiText,
           fontSize: '14px',
           lineHeight: '1.65',
           wordBreak: 'break-word',
+          // Assistant bubble gets a subtle accent left border
+          borderLeft: !isUser ? `3px solid ${colors.accent}55` : 'none',
+          boxShadow: isUser
+            ? `0 2px 8px ${colors.userBubble}44`
+            : '0 1px 4px rgba(0,0,0,0.15)',
         }}
       >
         {turn.isStreaming ? (
@@ -652,37 +661,34 @@ function ChatBubble({ turn, colors }: { turn: ConversationTurn; colors: typeof D
         ) : isUser ? (
           <span>{turn.content}</span>
         ) : (
-          <span dangerouslySetInnerHTML={{ __html: renderMarkdown(turn.content) }} />
+          <span
+            className={turn.isStreaming ? 'omni-cursor' : ''}
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(turn.content) }}
+          />
         )}
       </div>
     </div>
   )
 }
 
+// ─── Loading dots (3-dot pulse) ────────────────────────────────────────────
+
 function LoadingDots({ color }: { color: string }) {
   return (
-    <>
-      <style>{`
-        @keyframes omni-dot-bounce {
-          0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
-          40% { transform: translateY(-5px); opacity: 1; }
-        }
-        .omni-dot {
-          display: inline-block;
-          width: 6px; height: 6px;
-          border-radius: 50%;
-          margin: 0 2px;
-          animation: omni-dot-bounce 1.2s infinite ease-in-out;
-        }
-        .omni-dot:nth-child(1) { animation-delay: 0s; }
-        .omni-dot:nth-child(2) { animation-delay: 0.2s; }
-        .omni-dot:nth-child(3) { animation-delay: 0.4s; }
-      `}</style>
-      <span aria-label="AI is thinking">
-        <span className="omni-dot" style={{ background: color }} />
-        <span className="omni-dot" style={{ background: color }} />
-        <span className="omni-dot" style={{ background: color }} />
-      </span>
-    </>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '2px 0', height: '20px' }}>
+      {[0, 1, 2].map(i => (
+        <span
+          key={i}
+          style={{
+            width: '7px',
+            height: '7px',
+            borderRadius: '50%',
+            background: color,
+            display: 'inline-block',
+            animation: `omni-dot-pulse 1.4s ease-in-out ${i * 0.2}s infinite`,
+          }}
+        />
+      ))}
+    </span>
   )
 }

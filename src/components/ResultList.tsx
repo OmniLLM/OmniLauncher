@@ -14,10 +14,19 @@ interface Props {
   results: QueryResult[];
   query: string;
   onExecute: (r: QueryResult) => void;
+  colors: Record<string, string>;
 }
 
-export default function ResultList({ results, query, onExecute }: Props) {
+const ACTION_BADGE: Record<string, string> = {
+  open: '↵ Open',
+  url: '↵ Open',
+  shell: '↵ Run',
+  copy: '↵ Copy',
+}
+
+export default function ResultList({ results, query, onExecute, colors }: Props) {
   const [selected, setSelected] = useState(0);
+  const [hovered, setHovered] = useState(-1);
 
   useEffect(() => {
     setSelected(0);
@@ -27,10 +36,10 @@ export default function ResultList({ results, query, onExecute }: Props) {
     (e: KeyboardEvent) => {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelected((s) => Math.min(s + 1, results.length - 1));
+        setSelected(s => Math.min(s + 1, results.length - 1));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        setSelected((s) => Math.max(s - 1, 0));
+        setSelected(s => Math.max(s - 1, 0));
       } else if (e.key === "Enter") {
         if (results[selected]) onExecute(results[selected]);
       }
@@ -56,39 +65,133 @@ export default function ResultList({ results, query, onExecute }: Props) {
     );
   }
 
-  function actionBadge(type: string): string {
-    switch (type) {
-      case "open": return "↵ Open";
-      case "url": return "↵ Open";
-      case "shell": return "↵ Run";
-      case "copy": return "↵ Copy";
-      default: return "↵";
-    }
+  // Keyboard shortcut labels for first 9 results
+  function kbdHint(i: number): string {
+    if (i < 9) return `⌘${i + 1}`;
+    return '';
   }
 
   return (
-    <div className="results">
-      {results.map((r, i) => (
-        <div
-          key={r.id}
-          className={`result-item${i === selected ? " result-item--selected" : ""}`}
-          style={{ animationDelay: `${i * 30}ms` }}
-          onClick={() => onExecute(r)}
-          onMouseEnter={() => setSelected(i)}
-        >
-          <span className="result-item__icon">{r.icon || "📄"}</span>
-          <div className="result-item__content">
+    <div
+      style={{
+        overflowY: 'auto',
+        maxHeight: '400px',
+        scrollbarWidth: 'thin',
+        scrollbarColor: `${colors.surface2} transparent`,
+      }}
+    >
+      {results.map((r, i) => {
+        const isSelected = i === selected;
+        const isHovered = i === hovered;
+        const highlighted = isSelected || isHovered;
+
+        return (
+          <div
+            key={r.id}
+            onClick={() => onExecute(r)}
+            onMouseEnter={() => { setHovered(i); setSelected(i); }}
+            onMouseLeave={() => setHovered(-1)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              padding: '8px 14px',
+              cursor: 'pointer',
+              transition: 'background 150ms ease',
+              background: highlighted ? `${colors.surface}CC` : 'transparent',
+              borderLeft: isSelected
+                ? `3px solid ${colors.accent}`
+                : '3px solid transparent',
+              // Staggered fade-in
+              animation: `omni-fade-in 180ms ease both`,
+              animationDelay: `${i * 25}ms`,
+            }}
+          >
+            {/* Icon */}
+            <span
+              style={{
+                fontSize: '18px',
+                width: '22px',
+                textAlign: 'center',
+                flexShrink: 0,
+                lineHeight: 1,
+              }}
+            >
+              {r.icon || '📄'}
+            </span>
+
+            {/* Title + subtitle */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: isSelected ? colors.accent : colors.text,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  transition: 'color 150ms',
+                }}
+                dangerouslySetInnerHTML={{ __html: highlight(r.title, query) }}
+              />
+              {r.subtitle && (
+                <div
+                  style={{
+                    fontSize: '12px',
+                    color: colors.sub,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    fontFamily: r.subtitle.startsWith('/') || r.subtitle.includes('\\')
+                      ? "'JetBrains Mono', 'Fira Code', monospace"
+                      : 'inherit',
+                    marginTop: '1px',
+                  }}
+                >
+                  {r.subtitle}
+                </div>
+              )}
+            </div>
+
+            {/* Right-side: keyboard hint + action badge */}
             <div
-              className="result-item__title"
-              dangerouslySetInnerHTML={{ __html: highlight(r.title, query) }}
-            />
-            {r.subtitle && (
-              <div className="result-item__subtitle">{r.subtitle}</div>
-            )}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                flexShrink: 0,
+              }}
+            >
+              {kbdHint(i) && (
+                <span
+                  style={{
+                    fontSize: '10px',
+                    color: colors.sub,
+                    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                    opacity: 0.55,
+                  }}
+                >
+                  {kbdHint(i)}
+                </span>
+              )}
+              <span
+                style={{
+                  fontSize: '11px',
+                  color: isSelected ? colors.accent : colors.sub,
+                  background: isSelected ? `${colors.accent}18` : 'transparent',
+                  padding: '2px 7px',
+                  borderRadius: '5px',
+                  fontWeight: 500,
+                  transition: 'color 150ms, background 150ms',
+                  border: isSelected ? `1px solid ${colors.accent}33` : '1px solid transparent',
+                }}
+              >
+                {ACTION_BADGE[r.action_type] ?? '↵'}
+              </span>
+            </div>
           </div>
-          <span className="result-item__badge">{actionBadge(r.action_type)}</span>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
