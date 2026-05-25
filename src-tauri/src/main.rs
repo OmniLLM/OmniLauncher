@@ -425,7 +425,10 @@ async fn slash_preview(
 }
 
 #[tauri::command]
-async fn execute_result(result: QueryResult) -> Result<bool, String> {
+async fn execute_result(
+    result: QueryResult,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
     log::debug!(
         "execute_result invoked action_type={} id={} title={}",
         result.action_type,
@@ -472,6 +475,48 @@ async fn execute_result(result: QueryResult) -> Result<bool, String> {
         }
         "copy" => {
             // Just a copy action — frontend handles clipboard
+            true
+        }
+        "todo_add" => {
+            let pm = state.plugin_manager.lock().await;
+            pm.execute_tool(
+                "todo_memory",
+                serde_json::json!({ "action": "add", "text": result.action_data }),
+            )
+            .await;
+            true
+        }
+        "todo_remove" => {
+            let pm = state.plugin_manager.lock().await;
+            pm.execute_tool(
+                "todo_memory",
+                serde_json::json!({ "action": "remove", "text": result.action_data }),
+            )
+            .await;
+            true
+        }
+        "todo_done" => {
+            let pm = state.plugin_manager.lock().await;
+            pm.execute_tool(
+                "todo_memory",
+                serde_json::json!({ "action": "done", "text": result.action_data }),
+            )
+            .await;
+            true
+        }
+        "todo_undone" => {
+            let pm = state.plugin_manager.lock().await;
+            pm.execute_tool(
+                "todo_memory",
+                serde_json::json!({ "action": "undone", "text": result.action_data }),
+            )
+            .await;
+            true
+        }
+        "todo_view" => {
+            let pm = state.plugin_manager.lock().await;
+            pm.execute_tool("todo_memory", serde_json::json!({ "action": "view" }))
+                .await;
             true
         }
         _ => false,
