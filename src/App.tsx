@@ -52,6 +52,32 @@ export function isAiPrefix(input: string): boolean {
   return t.startsWith("?") || t.toLowerCase().startsWith("ai ");
 }
 
+/**
+ * Returns true when the input looks like an in-progress slash command prefix
+ * (starts with "/" but has no space yet — the user is still typing the name).
+ */
+function isSlashPrefix(input: string): boolean {
+  return input.startsWith("/") && !input.includes(" ");
+}
+
+/** Convert matching SlashCommands to QueryResults for display in ResultList. */
+function slashSuggestions(query: string): QueryResult[] {
+  const lower = query.toLowerCase();
+  return SLASH_COMMANDS.filter(
+    (sc) =>
+      sc.cmd.toLowerCase().startsWith(lower) ||
+      (sc.shortcut && sc.shortcut.toLowerCase().startsWith(lower)),
+  ).map((sc) => ({
+    id: `slash-${sc.cmd}`,
+    title: sc.shortcut ? `${sc.cmd}  ${sc.shortcut}` : sc.cmd,
+    subtitle: `${sc.description} · ${sc.usage}`,
+    icon: "⌘",
+    score: 1,
+    action_type: "slash_complete",
+    action_data: sc.cmd + " ",
+  }));
+}
+
 function isConversationResetCommand(input: string): boolean {
   const t = input.trim().toLowerCase();
   return t === "/new" || t === "/clear";
@@ -476,6 +502,13 @@ export default function App() {
       setResults([]);
       return;
     }
+
+    // Slash prefix without a space → show autocomplete suggestions, no backend call
+    if (isSlashPrefix(q)) {
+      setResults(slashSuggestions(q));
+      return;
+    }
+
     try {
       const res = await invoke<QueryResult[]>("search", { query: q });
       setResults(res);
@@ -588,11 +621,19 @@ export default function App() {
 
       setQuery(value);
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        if (!aiModeEnabled) {
+      if (isSlashPrefix(value)) {
+        // Show slash suggestions instantly in both launcher and AI mode
+        setResults(slashSuggestions(value));
+      } else if (!aiModeEnabled) {
+        // Clear any stale slash suggestions when prefix is gone
+        setResults([]);
+        debounceRef.current = setTimeout(() => {
           doSearch(value);
-        }
-      }, 100);
+        }, 100);
+      } else {
+        // In AI mode, clear slash suggestions when user types past the prefix
+        setResults([]);
+      }
     },
     [aiModeEnabled, doSearch],
   );
@@ -643,6 +684,13 @@ export default function App() {
 
   const handleExecute = useCallback(async (result: QueryResult) => {
     if (result.action_type === "help_command") {
+      setQuery(result.action_data);
+      setResults([]);
+      setTimeout(() => focusInput(), 50);
+      return;
+    }
+
+    if (result.action_type === "slash_complete") {
       setQuery(result.action_data);
       setResults([]);
       setTimeout(() => focusInput(), 50);
@@ -855,6 +903,16 @@ export default function App() {
 
         {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
         {!isAiMode && !showSettings && results.length > 0 && (
+          <ResultList
+            results={results}
+            query={query}
+            onExecute={handleExecute}
+            colors={colors}
+          />
+        )}
+
+        {/* ── AI MODE: slash command suggestions overlay ────────────────── */}
+        {isAiMode && results.length > 0 && isSlashPrefix(query) && (
           <ResultList
             results={results}
             query={query}
