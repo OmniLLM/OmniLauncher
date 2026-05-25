@@ -88,6 +88,10 @@ function isHelpQuery(input: string): boolean {
   return t === "/help" || t === "/?";
 }
 
+function isHelpHintQuery(input: string): boolean {
+  return input.trim().toLowerCase() === "help";
+}
+
 const DARK_COLORS = {
   bg: "#1E1E2E",
   surface: "#313244",
@@ -498,7 +502,7 @@ export default function App() {
       return;
     }
 
-    if (!q.trim() || isAiPrefix(q)) {
+    if (!q.trim() || isAiPrefix(q) || isHelpHintQuery(q)) {
       setResults([]);
       return;
     }
@@ -602,6 +606,13 @@ export default function App() {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         setQuery(value);
         setResults(HELP_RESULTS);
+        return;
+      }
+
+      if (isHelpHintQuery(value)) {
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        setQuery(value);
+        setResults([]);
         return;
       }
 
@@ -931,7 +942,7 @@ export default function App() {
           loading={loading}
           colors={colors}
           onSettingsClick={() => setShowSettings((s) => !s)}
-          showHintBar={false}
+          showHintBar={!isAiMode && isHelpHintQuery(query)}
           inputRef={inputRef}
         />
       </div>
