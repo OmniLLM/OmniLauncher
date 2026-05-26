@@ -212,39 +212,64 @@ pub fn load_manifest(dir: &PathBuf) -> Option<PluginManifest> {
 
 /// Scan ext-plugins dir and return all valid ExternalPlugins.
 pub fn load_external_plugins() -> Vec<ExternalPlugin> {
-    let base = ext_plugins_dir();
-    if !base.exists() {
-        return vec![];
+    load_external_plugins_from(&[])
+}
+
+/// Scan `~/.omnilauncher/plugins/` plus any extra dirs from settings.
+/// Duplicate plugin names (same `name` field) are skipped — first-found wins.
+pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> {
+    let mut dirs: Vec<PathBuf> = vec![ext_plugins_dir()];
+    for d in extra_dirs {
+        let p = PathBuf::from(d);
+        if p != dirs[0] {
+            dirs.push(p);
+        }
     }
 
-    let mut plugins = vec![];
-    match std::fs::read_dir(&base) {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Some(manifest) = load_manifest(&path) {
-                        let entry_path = path.join(&manifest.entry);
-                        if entry_path.exists() {
-                            log::info!(
-                                "Loaded external plugin '{}' from {}",
-                                manifest.name,
-                                path.display()
-                            );
-                            plugins.push(ExternalPlugin::new(path, manifest));
-                        } else {
-                            log::warn!(
-                                "External plugin '{}': entry '{}' not found",
-                                manifest.name,
-                                manifest.entry
-                            );
+    let mut plugins: Vec<ExternalPlugin> = vec![];
+    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for base in &dirs {
+        if !base.exists() {
+            continue;
+        }
+        match std::fs::read_dir(base) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Some(manifest) = load_manifest(&path) {
+                            if seen_names.contains(&manifest.name) {
+                                log::info!(
+                                    "Skipping duplicate plugin '{}' from {}",
+                                    manifest.name,
+                                    path.display()
+                                );
+                                continue;
+                            }
+                            let entry_path = path.join(&manifest.entry);
+                            if entry_path.exists() {
+                                log::info!(
+                                    "Loaded external plugin '{}' from {}",
+                                    manifest.name,
+                                    path.display()
+                                );
+                                seen_names.insert(manifest.name.clone());
+                                plugins.push(ExternalPlugin::new(path, manifest));
+                            } else {
+                                log::warn!(
+                                    "External plugin '{}': entry '{}' not found",
+                                    manifest.name,
+                                    manifest.entry
+                                );
+                            }
                         }
                     }
                 }
             }
-        }
-        Err(e) => {
-            log::warn!("Failed to scan ext-plugins dir {}: {e}", base.display());
+            Err(e) => {
+                log::warn!("Failed to scan plugin dir {}: {e}", base.display());
+            }
         }
     }
     plugins

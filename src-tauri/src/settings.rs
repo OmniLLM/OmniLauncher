@@ -8,6 +8,10 @@ pub struct AppSettings {
     pub theme: String,
     pub hotkey: String,
     pub max_results: usize,
+    /// Extra plugin directories to scan in addition to the default
+    /// `~/.omnilauncher/plugins/`.  Each entry is an absolute path string.
+    #[serde(default)]
+    pub plugin_dirs: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -19,6 +23,7 @@ impl Default for AppSettings {
             theme: "dark".to_string(),
             hotkey: "Alt+Space".to_string(),
             max_results: 10,
+            plugin_dirs: vec![],
         }
     }
 }
