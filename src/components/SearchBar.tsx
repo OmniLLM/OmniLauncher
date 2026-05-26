@@ -17,25 +17,37 @@ interface Props {
   inputRef?: RefObject<HTMLInputElement>;
 }
 
-// Core plugin prefixes (always shown)
-const HINT_CORE = [
+// Non-AI launcher prefixes shown in the idle hint bar.
+const HINT_LOCAL = [
+  { key: "* / f / open", label: "files" },
   { key: "=", label: "calc" },
   { key: ">", label: "shell" },
-  { key: "* / f", label: "files" },
-  { key: "b / bm", label: "bookmarks" },
-  { key: "?", label: "AI" },
-  { key: "/", label: "commands" },
+  { key: "cb", label: "clipboard" },
+  { key: "bm / b", label: "bookmarks" },
+  { key: "color", label: "color" },
+  { key: "env", label: "env" },
+  { key: "git", label: "git" },
+  { key: "hosts", label: "hosts" },
+  { key: "net", label: "network" },
+  { key: "plugins / pm", label: "plugins" },
+  { key: "ps", label: "processes" },
+  { key: "settings", label: "windows" },
+  { key: "snip", label: "snippets" },
+  { key: "sys", label: "system" },
+  { key: "timer", label: "timer" },
+  { key: "todo", label: "todo" },
+  { key: "conv", label: "units" },
 ];
 
-// Web search prefixes (shown in a second row)
+// Web search prefixes (shown in a second row).
 const HINT_SEARCH = [
   { key: "g", label: "Google" },
   { key: "yt / youtube", label: "YouTube" },
   { key: "gh / github", label: "GitHub" },
   { key: "wiki", label: "Wikipedia" },
   { key: "maps", label: "Maps" },
-  { key: "so", label: "StackOverflow" },
-  { key: "ddg", label: "DuckDuckGo" },
+  { key: "so / stackoverflow", label: "StackOverflow" },
+  { key: "ddg / duckduckgo", label: "DuckDuckGo" },
   { key: "bing", label: "Bing" },
   { key: "image", label: "Images" },
   { key: "lucky", label: "Feeling Lucky" },
@@ -44,6 +56,10 @@ const HINT_SEARCH = [
   { key: "netflix", label: "Netflix" },
   { key: "gist", label: "Gist" },
   { key: "wolframalpha", label: "Wolfram" },
+  { key: "gmail", label: "Gmail" },
+  { key: "drive", label: "Drive" },
+  { key: "facebook", label: "Facebook" },
+  { key: "twitter", label: "X/Twitter" },
 ];
 
 export default function SearchBar({
