@@ -29,6 +29,7 @@ log = "0.4"
 simplelog = "0.12"
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

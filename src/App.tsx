@@ -770,6 +770,54 @@ export default function App() {
       }
       return;
     }
+
+    if (result.action_type === "vision_analyze") {
+      const prompt = result.action_data;
+      const userLabel = prompt.trim() || "Describe what you see";
+      const userTurn: ConversationTurn = {
+        role: "user",
+        content: `👁 Vision: ${userLabel}`,
+      };
+      const pendingAiTurn: ConversationTurn = {
+        role: "assistant",
+        content: "",
+        tools_used: [],
+        isStreaming: true,
+      };
+      setAiModeEnabled(true);
+      setConversationHistory((prev) => [...prev, userTurn, pendingAiTurn]);
+      setLoading(true);
+      setResults([]);
+      setQuery("");
+      try {
+        const response = await invoke<string>("vision_analyze", { prompt });
+        setConversationHistory((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = {
+            role: "assistant",
+            content: response,
+            tools_used: ["vision"],
+            isStreaming: false,
+          };
+          return next;
+        });
+      } catch (e) {
+        setConversationHistory((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = {
+            role: "assistant",
+            content: `Vision analysis failed: ${e}`,
+            isStreaming: false,
+          };
+          return next;
+        });
+      } finally {
+        setLoading(false);
+        setTimeout(() => focusInput(), 150);
+      }
+      return;
+    }
+
     try {
       await invoke("execute_result", { result });
     } catch (e) {

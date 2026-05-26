@@ -129,3 +129,4 @@ pub mod cron_explainer;
 pub mod scheduler;
 pub mod external;
 pub mod plugin_manager_cmd;
+pub mod vision_analyze;

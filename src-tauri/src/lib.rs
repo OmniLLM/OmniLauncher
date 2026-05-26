@@ -54,6 +54,7 @@ pub fn create_plugin_manager() -> PluginManager {
     pm.register(Box::new(plugins::window_resize::WindowResizePlugin));
     pm.register(Box::new(plugins::cron_explainer::CronExplainerPlugin));
     pm.register(Box::new(plugins::scheduler::SchedulerPlugin));
+    pm.register(Box::new(plugins::vision_analyze::VisionAnalyzePlugin));
 
     // Load external plugins: ~/.omnilauncher/plugins/ + any extra dirs from settings.plugin_dirs
     let settings = load_settings();
