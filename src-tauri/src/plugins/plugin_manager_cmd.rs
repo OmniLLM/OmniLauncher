@@ -26,9 +26,18 @@ fn dir_name_from_source(source: &str) -> String {
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
 /// Install a plugin from a git URL or local path.
+/// `target_dir`: optional install base directory. Defaults to `~/.omnilauncher/plugins/`.
 /// Returns the plugin name on success.
-pub async fn install_plugin(source: String) -> Result<String, String> {
-    let base_dir = ensure_ext_plugins_dir()?;
+pub async fn install_plugin(source: String, target_dir: Option<String>) -> Result<String, String> {
+    let base_dir = match target_dir {
+        Some(ref d) if !d.is_empty() => {
+            let p = PathBuf::from(d);
+            std::fs::create_dir_all(&p)
+                .map_err(|e| format!("Failed to create target directory '{}': {e}", p.display()))?;
+            p
+        }
+        _ => ensure_ext_plugins_dir()?,
+    };
     let dir_name = dir_name_from_source(&source);
     let dest = base_dir.join(&dir_name);
 

@@ -709,9 +709,9 @@ async fn install_skill(
 // ─── External plugin management commands ──────────────────────────────────────
 
 #[tauri::command]
-async fn install_plugin(source: String) -> Result<String, String> {
-    log::debug!("install_plugin invoked with source={source}");
-    omnilauncher_lib::plugins::plugin_manager_cmd::install_plugin(source).await
+async fn install_plugin(source: String, target_dir: Option<String>) -> Result<String, String> {
+    log::debug!("install_plugin invoked with source={source} target_dir={target_dir:?}");
+    omnilauncher_lib::plugins::plugin_manager_cmd::install_plugin(source, target_dir).await
 }
 
 #[tauri::command]

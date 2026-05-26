@@ -11,6 +11,11 @@ interface PluginInfo {
   dir_name: string;
 }
 
+interface AppSettings {
+  plugin_dirs: string[];
+  [key: string]: unknown;
+}
+
 interface PluginManagerProps {
   colors: {
     bg: string;
@@ -24,9 +29,13 @@ interface PluginManagerProps {
   onClose: () => void;
 }
 
+const DEFAULT_DIR = "~/.omnilauncher/plugins (default)";
+
 export default function PluginManager({ colors, onClose }: PluginManagerProps) {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [source, setSource] = useState("");
+  const [targetDir, setTargetDir] = useState<string>("");  // "" = default
+  const [extraDirs, setExtraDirs] = useState<string[]>([]);
   const [status, setStatus] = useState<{
     type: "idle" | "loading" | "success" | "error";
     message: string;
@@ -40,6 +49,10 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
 
   useEffect(() => {
     refresh();
+    // Load extra plugin_dirs from settings
+    invoke<AppSettings>("get_settings")
+      .then((s) => setExtraDirs(s.plugin_dirs ?? []))
+      .catch(() => {});
   }, [refresh]);
 
   const handleInstall = async () => {
@@ -47,7 +60,10 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
     if (!trimmed) return;
     setStatus({ type: "loading", message: "Installing…" });
     try {
-      const name = await invoke<string>("install_plugin", { source: trimmed });
+      const name = await invoke<string>("install_plugin", {
+        source: trimmed,
+        targetDir: targetDir || null,
+      });
       setStatus({ type: "success", message: `✓ Installed "${name}"` });
       setSource("");
       refresh();
@@ -73,6 +89,19 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
       : status.type === "error"
         ? "#f38ba8"
         : colors.sub;
+
+  const selectStyle: React.CSSProperties = {
+    background: colors.surface,
+    border: `1px solid ${colors.surface2}`,
+    borderRadius: "8px",
+    padding: "7px 10px",
+    color: extraDirs.length === 0 ? colors.sub : colors.text,
+    fontSize: "12px",
+    outline: "none",
+    cursor: "pointer",
+    flexShrink: 0,
+    maxWidth: "180px",
+  };
 
   return (
     <div
@@ -126,7 +155,7 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
       </div>
 
       {/* Install row */}
-      <div style={{ display: "flex", gap: "8px" }}>
+      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
         <input
           type="text"
           value={source}
@@ -135,6 +164,7 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
           placeholder="Git URL or local path…"
           style={{
             flex: 1,
+            minWidth: "180px",
             background: colors.surface,
             border: `1px solid ${colors.surface2}`,
             borderRadius: "8px",
@@ -144,6 +174,22 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
             outline: "none",
           }}
         />
+        {/* Install-to selector — only shown when there are extra dirs */}
+        {extraDirs.length > 0 && (
+          <select
+            value={targetDir}
+            onChange={(e) => setTargetDir(e.target.value)}
+            style={selectStyle}
+            title="Install into…"
+          >
+            <option value="">{DEFAULT_DIR}</option>
+            {extraDirs.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           onClick={handleInstall}
           disabled={status.type === "loading" || !source.trim()}
@@ -302,3 +348,5 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
     </div>
   );
 }
+
+interface PluginInfo {
