@@ -126,5 +126,6 @@ pub mod emoji_picker;
 pub mod pomodoro;
 pub mod window_resize;
 pub mod cron_explainer;
+pub mod scheduler;
 pub mod external;
 pub mod plugin_manager_cmd;

@@ -108,6 +108,10 @@ pub fn run() {
     let live_server_port = 1421;
     let live_server = LiveServer::new();
     let live_server_task = live_server.clone();
+
+    // Start background scheduler
+    omnilauncher_lib::plugins::scheduler::start_scheduler();
+
     tauri::async_runtime::spawn(async move {
         log::info!(
             "registering live server routes on port {}",
@@ -601,6 +605,45 @@ async fn execute_result(
             )
             .await;
             true
+        }
+        "sched_add" => {
+            // action_data format: "label|||schedule|||command"
+            let parts: Vec<&str> = result.action_data.splitn(3, "|||").collect();
+            if parts.len() == 3 {
+                let label = parts[0];
+                let sched_str = parts[1];
+                let cmd = parts[2];
+                if let Some(sched) = omnilauncher_lib::plugins::scheduler::Schedule::from_stored(sched_str) {
+                    omnilauncher_lib::plugins::scheduler::add_job(label, &sched, cmd)
+                        .map(|_| true)
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+        "sched_del" => {
+            if let Ok(id) = result.action_data.parse::<i64>() {
+                omnilauncher_lib::plugins::scheduler::delete_job(id)
+            } else {
+                false
+            }
+        }
+        "sched_on" => {
+            if let Ok(id) = result.action_data.parse::<i64>() {
+                omnilauncher_lib::plugins::scheduler::toggle_job(id, true)
+            } else {
+                false
+            }
+        }
+        "sched_off" => {
+            if let Ok(id) = result.action_data.parse::<i64>() {
+                omnilauncher_lib::plugins::scheduler::toggle_job(id, false)
+            } else {
+                false
+            }
         }
         _ => false,
     };
