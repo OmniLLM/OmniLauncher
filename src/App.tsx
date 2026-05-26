@@ -38,6 +38,7 @@ interface AppSettings {
   theme: string;
   hotkey: string;
   max_results: number;
+  background_url: string;
 }
 
 type ThemeMode = "dark" | "light" | "system";
@@ -134,17 +135,17 @@ function isHelpHintQuery(input: string): boolean {
 }
 
 const DARK_COLORS = {
-  bg: "#111214",
-  surface: "#1F2227",
-  surface2: "#2C3037",
-  text: "#EEF1F5",
-  accent: "#AEB5C2",
-  accentDim: "#D1D6DE",
-  sub: "#9AA1AD",
-  userBubble: "#6F7786",
+  bg: "#0B1220",
+  surface: "#16233B",
+  surface2: "#203355",
+  text: "#EAF3FF",
+  accent: "#00AEFF",
+  accentDim: "#5ED0FF",
+  sub: "#8AA0C2",
+  userBubble: "#008FDD",
   userBubbleText: "#FFFFFF",
-  aiBubble: "#1F2227",
-  aiText: "#EEF1F5",
+  aiBubble: "#16233B",
+  aiText: "#EAF3FF",
 };
 
 const LIGHT_COLORS = {
@@ -518,6 +519,9 @@ export default function App() {
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(
     getSystemTheme(),
   );
+  const [backgroundUrl, setBackgroundUrl] = useState<string>(
+    "https://blz-contentstack-images.akamaized.net/v3/assets/bltf408a0557f4e4998/blt27903959c912debc/69fba009d002ee6d7deb5875/shop_carousel_ow_26_s2_mythicskin_desktop.webp?imwidth=1568&imdensity=1",
+  );
   const [conversationHistory, setConversationHistory] = useState<
     ConversationTurn[]
   >([]);
@@ -543,6 +547,7 @@ export default function App() {
       .then((s) => {
         setSettings(s);
         setTheme(parseThemeMode(s.theme));
+        if (s.background_url) setBackgroundUrl(s.background_url);
       })
       .catch(() => {});
   }, []);
@@ -970,7 +975,16 @@ export default function App() {
           width: "100%",
           height: windowHeight,
           maxHeight,
-          background: colors.bg,
+          background:
+            resolvedTheme === "dark"
+              ? backgroundUrl
+                ? `
+                  linear-gradient(180deg, rgba(6, 12, 24, 0.74) 0%, rgba(8, 14, 28, 0.86) 100%),
+                  radial-gradient(circle at 18% -6%, ${colors.accent}1F 0, transparent 40%),
+                  url("${backgroundUrl}") center top / cover no-repeat
+                `
+                : `linear-gradient(160deg, #0b1220 0%, #0e1930 52%, #0a1426 100%)`
+              : colors.bg,
           color: colors.text,
           fontFamily: shellFont,
           borderRadius: "0",
@@ -1088,6 +1102,7 @@ export default function App() {
           <SettingsPanel
             theme={theme}
             onThemeChange={setTheme}
+            onBackgroundChange={setBackgroundUrl}
             onClose={() => setShowSettings(false)}
             initialSettings={settings}
           />

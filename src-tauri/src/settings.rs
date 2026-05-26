@@ -8,6 +8,9 @@ pub struct AppSettings {
     pub theme: String,
     pub hotkey: String,
     pub max_results: usize,
+    /// Custom background image URL shown in dark mode.
+    #[serde(default)]
+    pub background_url: String,
     /// Extra plugin directories to scan in addition to the default
     /// `~/.omnilauncher/plugins/`.  Each entry is an absolute path string.
     #[serde(default)]
@@ -23,6 +26,7 @@ impl Default for AppSettings {
             theme: "system".to_string(),
             hotkey: "Alt+Space".to_string(),
             max_results: 10,
+            background_url: String::new(),
             plugin_dirs: vec![],
         }
     }

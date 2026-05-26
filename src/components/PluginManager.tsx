@@ -198,7 +198,7 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
             border: "none",
             borderRadius: "8px",
             padding: "7px 14px",
-            color: "#111214",
+            color: "#FFFFFF",
             fontSize: "13px",
             fontWeight: 600,
             cursor: source.trim() ? "pointer" : "default",

@@ -3,23 +3,23 @@
 /* === Theme Variables === */
 :root,
 [data-theme="dark"] {
-  --bg: #111214;
-  --bg-elevated: #17191c;
-  --surface: #1f2227;
-  --surface-2: #2c3037;
-  --surface-hover: #363b44;
-  --text: #eef1f5;
-  --text-secondary: #c5c9d1;
-  --sub: #9aa1ad;
-  --accent: #aeb5c2;
-  --accent-dim: rgba(174, 181, 194, 0.2);
-  --accent-hover: rgba(174, 181, 194, 0.12);
-  --border: rgba(255, 255, 255, 0.14);
+  --bg: #0b1220;
+  --bg-elevated: #101a2d;
+  --surface: #16233b;
+  --surface-2: #203355;
+  --surface-hover: #27406b;
+  --text: #eaf3ff;
+  --text-secondary: #b8c7de;
+  --sub: #8aa0c2;
+  --accent: #00aeff;
+  --accent-dim: rgba(0, 174, 255, 0.2);
+  --accent-hover: rgba(0, 174, 255, 0.12);
+  --border: rgba(117, 154, 206, 0.25);
   --shadow: 0 20px 56px rgba(0, 0, 0, 0.5), 0 4px 14px rgba(0, 0, 0, 0.28);
-  --user-bubble: #6f7786;
+  --user-bubble: #008fdd;
   --user-bubble-text: #ffffff;
-  --success: #7fcf9a;
-  --error: #ff6b6b;
+  --success: #2dcc70;
+  --error: #ff5c7a;
   --radius: 14px;
 }
 
@@ -291,7 +291,7 @@ body {
 
 .chat-msg__tool-badge--skill {
   background: var(--accent-dim);
-  border-color: rgba(174, 181, 194, 0.35);
+  border-color: rgba(0, 174, 255, 0.35);
   color: var(--accent);
 }
 
@@ -305,7 +305,7 @@ body {
   font-size: 14px;
   line-height: 1.65;
   word-break: break-word;
-  box-shadow: 0 2px 8px rgba(174, 181, 194, 0.25);
+  box-shadow: 0 2px 8px rgba(0, 174, 255, 0.25);
 }
 
 .chat-msg__ai-bubble {
@@ -317,7 +317,7 @@ body {
   font-size: 14px;
   line-height: 1.65;
   word-break: break-word;
-  border-left: 3px solid rgba(174, 181, 194, 0.35);
+  border-left: 3px solid rgba(0, 174, 255, 0.35);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
 }
 
@@ -371,7 +371,7 @@ body {
 .omni-input-wrap:focus-within {
   box-shadow:
     0 0 0 2px var(--accent-dim),
-    inset 0 0 0 1px rgba(174, 181, 194, 0.35);
+    inset 0 0 0 1px rgba(0, 174, 255, 0.35);
   border-radius: var(--radius);
 }
 
@@ -395,11 +395,11 @@ body {
 }
 
 .result-item:hover {
-  background: rgba(174, 181, 194, 0.08);
+  background: rgba(0, 174, 255, 0.08);
 }
 
 .result-item--selected {
-  background: rgba(174, 181, 194, 0.14);
+  background: rgba(0, 174, 255, 0.14);
   border-left-color: var(--accent);
 }
 
@@ -455,7 +455,7 @@ body {
 .result-item--selected .result-item__badge {
   color: var(--accent);
   background: var(--accent-dim);
-  border-color: rgba(174, 181, 194, 0.2);
+  border-color: rgba(0, 174, 255, 0.2);
 }
 
 /* === Skeleton Loading === */
@@ -660,7 +660,7 @@ body {
 }
 
 .md-inline-code {
-  background: rgba(174, 181, 194, 0.12);
+  background: rgba(0, 174, 255, 0.12);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
