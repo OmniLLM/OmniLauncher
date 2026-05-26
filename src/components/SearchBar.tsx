@@ -1,4 +1,4 @@
-import { useRef, useEffect, RefObject } from "react";
+import { useRef, useEffect, useState, RefObject } from "react";
 import { isAiPrefix } from "../App";
 
 interface Props {
@@ -15,6 +15,7 @@ interface Props {
   compact?: boolean;
   /** External ref forwarded from App so App can imperatively focus */
   inputRef?: RefObject<HTMLInputElement>;
+  onHintBarExpandedChange?: (expanded: boolean) => void;
 }
 
 // Non-AI launcher prefixes shown in the idle hint bar.
@@ -62,6 +63,34 @@ const HINT_SEARCH = [
   { key: "twitter", label: "X/Twitter" },
 ];
 
+const PRIMARY_HINT_LOCAL_KEYS = new Set([
+  "* / f / open",
+  "=",
+  ">",
+  "cb",
+  "bm / b",
+  "git",
+  "plugins / pm",
+  "ps",
+]);
+
+const PRIMARY_HINT_SEARCH_KEYS = new Set([
+  "g",
+  "yt / youtube",
+  "gh / github",
+  "wiki",
+  "maps",
+  "translate",
+]);
+
+const PRIMARY_HINT_LOCAL = HINT_LOCAL.filter(({ key }) =>
+  PRIMARY_HINT_LOCAL_KEYS.has(key),
+);
+
+const PRIMARY_HINT_SEARCH = HINT_SEARCH.filter(({ key }) =>
+  PRIMARY_HINT_SEARCH_KEYS.has(key),
+);
+
 export default function SearchBar({
   value,
   onChange,
@@ -73,9 +102,11 @@ export default function SearchBar({
   showHintBar = false,
   compact = false,
   inputRef: externalRef,
+  onHintBarExpandedChange,
 }: Props) {
   const internalRef = useRef<HTMLInputElement>(null);
   const inputRef = externalRef ?? internalRef;
+  const [showAllHints, setShowAllHints] = useState(false);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -86,10 +117,26 @@ export default function SearchBar({
     inputRef.current?.focus();
   }, [isAiMode]);
 
+  useEffect(() => {
+    if (!showHintBar) {
+      setShowAllHints(false);
+    }
+  }, [showHintBar]);
+
+  useEffect(() => {
+    onHintBarExpandedChange?.(showHintBar && showAllHints);
+  }, [showAllHints, showHintBar, onHintBarExpandedChange]);
+
   const isAI = isAiPrefix(value);
   const placeholder = isAiMode
     ? "Ask AI anything…"
     : "Type to launch, search, calculate…";
+  const localHints = showAllHints ? HINT_LOCAL : PRIMARY_HINT_LOCAL;
+  const searchHints = showAllHints ? HINT_SEARCH : PRIMARY_HINT_SEARCH;
+  const hasCollapsedHints =
+    PRIMARY_HINT_LOCAL.length < HINT_LOCAL.length ||
+    PRIMARY_HINT_SEARCH.length < HINT_SEARCH.length;
+  const wrapHints = !compact || showAllHints;
 
   return (
     <>
@@ -107,6 +154,13 @@ export default function SearchBar({
         @keyframes omni-hint-fadein {
           from { opacity: 0; transform: translateY(3px); }
           to   { opacity: 1; transform: translateY(0); }
+        }
+        .omni-hint-row::-webkit-scrollbar {
+          height: 4px;
+        }
+        .omni-hint-row::-webkit-scrollbar-thumb {
+          background: ${colors.surface2};
+          border-radius: 999px;
         }
       `}</style>
 
@@ -284,15 +338,23 @@ export default function SearchBar({
           >
             {/* Core prefixes row */}
             <div
+              className="omni-hint-row"
               style={{
                 display: "flex",
-                justifyContent: compact ? "center" : "flex-start",
+                justifyContent: compact ? "flex-start" : "flex-start",
                 gap: compact ? "6px" : "4px",
-                flexWrap: "wrap",
-                marginBottom: compact ? "0" : "4px",
+                flexWrap: wrapHints ? "wrap" : "nowrap",
+                overflowX: wrapHints ? "visible" : "auto",
+                overflowY: "hidden",
+                paddingBottom: compact && !wrapHints ? "4px" : 0,
+                scrollbarWidth: compact && !wrapHints ? "thin" : undefined,
+                scrollbarColor: compact && !wrapHints
+                  ? `${colors.surface2} transparent`
+                  : undefined,
+                marginBottom: compact ? "6px" : "4px",
               }}
             >
-              {HINT_CORE.map(({ key, label }) => (
+              {localHints.map(({ key, label }) => (
                 <HintChip
                   key={key}
                   prefix={key}
@@ -303,14 +365,22 @@ export default function SearchBar({
               ))}
             </div>
             <div
+              className="omni-hint-row"
               style={{
                 display: "flex",
-                justifyContent: compact ? "center" : "flex-start",
+                justifyContent: compact ? "flex-start" : "flex-start",
                 gap: compact ? "6px" : "4px",
-                flexWrap: "wrap",
+                flexWrap: wrapHints ? "wrap" : "nowrap",
+                overflowX: wrapHints ? "visible" : "auto",
+                overflowY: "hidden",
+                paddingBottom: compact && !wrapHints ? "4px" : 0,
+                scrollbarWidth: compact && !wrapHints ? "thin" : undefined,
+                scrollbarColor: compact && !wrapHints
+                  ? `${colors.surface2} transparent`
+                  : undefined,
               }}
             >
-              {HINT_SEARCH.map(({ key, label }) => (
+              {searchHints.map(({ key, label }) => (
                 <HintChip
                   key={key}
                   prefix={key}
@@ -320,6 +390,35 @@ export default function SearchBar({
                 />
               ))}
             </div>
+            {hasCollapsedHints && (
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: compact ? "center" : "flex-start",
+                  paddingTop: compact ? "6px" : "8px",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowAllHints((current) => !current)}
+                  style={{
+                    background: `${colors.surface}CC`,
+                    border: `1px solid ${colors.surface2}`,
+                    color: colors.text,
+                    borderRadius: compact ? "999px" : "8px",
+                    padding: compact ? "4px 10px" : "4px 9px",
+                    fontSize: compact ? "10.5px" : "11px",
+                    lineHeight: 1.2,
+                    cursor: "pointer",
+                    opacity: 0.82,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.82")}
+                >
+                  {showAllHints ? "Show fewer hints" : "Show all hints"}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -345,6 +444,7 @@ function HintChip({
       style={{
         display: "inline-flex",
         alignItems: "center",
+        flexShrink: 0,
         gap: compact ? "5px" : "3px",
         fontSize: compact ? "10.5px" : "11px",
         color: compact ? `${colors.text}D0` : colors.sub,

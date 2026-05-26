@@ -1,7 +1,41 @@
+use async_trait::async_trait;
 use omnilauncher_lib::create_plugin_manager;
+use omnilauncher_lib::plugins::{Plugin, PluginManager, Query, QueryResult};
 use std::sync::Mutex;
 
 static TODO_LOCK: Mutex<()> = Mutex::new(());
+
+struct KeywordOnlyPlugin {
+    keyword: &'static str,
+    title: &'static str,
+}
+
+#[async_trait]
+impl Plugin for KeywordOnlyPlugin {
+    fn name(&self) -> &str {
+        self.title
+    }
+
+    fn description(&self) -> &str {
+        self.title
+    }
+
+    fn keyword(&self) -> Option<&str> {
+        Some(self.keyword)
+    }
+
+    async fn query(&self, _q: &Query) -> Vec<QueryResult> {
+        vec![QueryResult {
+            id: self.title.to_string(),
+            title: self.title.to_string(),
+            subtitle: None,
+            icon: None,
+            score: 100,
+            action_type: "none".to_string(),
+            action_data: String::new(),
+        }]
+    }
+}
 
 // ============================================================
 // Plugin Manager
@@ -38,6 +72,33 @@ async fn test_plugin_manager_query_calculator() {
     let results = pm.query_all("= 2+2").await;
     assert!(!results.is_empty());
     assert!(results[0].title.contains('4'));
+}
+
+#[tokio::test]
+async fn test_plugin_manager_keyword_requires_boundary() {
+    let mut pm = PluginManager::new();
+    pm.register(Box::new(KeywordOnlyPlugin {
+        keyword: "pomo",
+        title: "pomo plugin",
+    }));
+
+    let results = pm.query_all("pomodoroapp").await;
+    assert!(results.is_empty(), "Unexpected keyword match: {results:?}");
+}
+
+#[tokio::test]
+async fn test_plugin_manager_keyword_still_matches_exact_token() {
+    let mut pm = PluginManager::new();
+    pm.register(Box::new(KeywordOnlyPlugin {
+        keyword: "sched",
+        title: "scheduler plugin",
+    }));
+
+    let exact = pm.query_all("sched").await;
+    assert_eq!(exact.len(), 1);
+
+    let with_args = pm.query_all("sched list").await;
+    assert_eq!(with_args.len(), 1);
 }
 
 // ============================================================

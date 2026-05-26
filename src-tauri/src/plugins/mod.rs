@@ -35,6 +35,19 @@ pub struct PluginManager {
     pub plugins: Vec<Box<dyn Plugin>>,
 }
 
+fn keyword_matches(raw: &str, keyword: &str) -> bool {
+    let trimmed = raw.trim_start();
+    let Some(rest) = trimmed.strip_prefix(keyword) else {
+        return false;
+    };
+
+    match keyword.chars().last() {
+        Some(last) if last.is_whitespace() || !last.is_alphanumeric() => true,
+        Some(_) => rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace),
+        None => false,
+    }
+}
+
 impl Default for PluginManager {
     fn default() -> Self {
         Self::new()
@@ -58,7 +71,7 @@ impl PluginManager {
         let mut results = vec![];
         for plugin in &self.plugins {
             if let Some(kw) = plugin.keyword() {
-                if !raw.starts_with(kw) {
+                if !keyword_matches(raw, kw) {
                     continue;
                 }
             }

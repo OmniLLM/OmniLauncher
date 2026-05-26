@@ -378,19 +378,42 @@ async fn slash_preview(
         None => (lower.clone(), String::new()),
     };
 
-    if arg.is_empty() {
-        return Ok(vec![]);
-    }
-
     match cmd.as_str() {
-        "/app" | "/a" => Ok(pm.query_all(&arg).await),
-        "/find" | "/f" => Ok(pm.query_all(&format!("f {}", arg)).await),
-        "/open" | "/o" => Ok(pm.query_all(&arg).await),
+        "/app" | "/a" => {
+            if arg.is_empty() {
+                Ok(vec![])
+            } else {
+                Ok(pm.query_all(&arg).await)
+            }
+        }
+        "/find" | "/f" => {
+            if arg.is_empty() {
+                Ok(vec![])
+            } else {
+                Ok(pm.query_all(&format!("f {}", arg)).await)
+            }
+        }
+        "/open" | "/o" => {
+            if arg.is_empty() {
+                Ok(vec![])
+            } else {
+                Ok(pm.query_all(&arg).await)
+            }
+        }
+        "/run" | "/r" => {
+            if arg.is_empty() {
+                Ok(vec![])
+            } else {
+                Ok(pm.query_all(&format!("> {}", arg)).await)
+            }
+        }
         "/grep" | "/g" => {
-            let results = pm.query_all(&format!("grep {}", arg)).await;
-            Ok(results)
+            Ok(vec![])
         }
         "/web" | "/w" => {
+            if arg.is_empty() {
+                return Ok(vec![]);
+            }
             // Show web search targets as previews
             let encoded = arg.replace(' ', "+");
             Ok(vec![
@@ -427,6 +450,9 @@ async fn slash_preview(
             ])
         }
         "/kill" => {
+            if arg.is_empty() {
+                return Ok(vec![]);
+            }
             // Show matching processes as previews
             let output = if cfg!(target_os = "windows") {
                 std::process::Command::new("powershell")
@@ -482,6 +508,39 @@ async fn slash_preview(
             let results = pm.query_all(&format!("= {}", arg)).await;
             Ok(results)
         }
+        "/todo" | "/t" => Ok(pm.query_all(&query).await),
+        "/env" => Ok(pm.query_all(&format!("env {}", arg)).await),
+        "/color" => Ok(pm.query_all(&format!("color {}", arg)).await),
+        "/sys" => Ok(pm.query_all(&format!("sys {}", arg)).await),
+        "/ps" => Ok(pm.query_all("ps ").await),
+        "/ip" => Ok(pm.query_all("net ip").await),
+        "/ports" => Ok(pm.query_all("net ports").await),
+        "/net" => Ok(pm.query_all(&format!("net {}", arg)).await),
+        "/bm" | "/bookmarks" => Ok(pm.query_all(&format!("bm {}", arg)).await),
+        "/git" => Ok(pm.query_all(&format!("git {}", arg)).await),
+        "/hosts" => Ok(pm.query_all(&format!("hosts {}", arg)).await),
+        "/timer" => Ok(pm.query_all(&format!("timer {}", arg)).await),
+        "/emoji" => Ok(pm.query_all(&format!("emoji {}", arg)).await),
+        "/cron" => Ok(pm.query_all(&format!("cron {}", arg)).await),
+        "/pomo" => Ok(pm.query_all(&format!("pomo {}", arg)).await),
+        "/sched" => {
+            let sched_query = if arg.is_empty() {
+                "sched".to_string()
+            } else {
+                format!("sched {}", arg)
+            };
+            Ok(pm.query_all(&sched_query).await)
+        }
+        "/resize" => Ok(pm.query_all(&format!("resize {}", arg)).await),
+        "/plugins" | "/pm" => Ok(vec![QueryResult {
+            id: "builtin:plugin-manager".to_string(),
+            title: "Manage Plugins".to_string(),
+            subtitle: Some("Install, list, and remove external plugins".to_string()),
+            icon: Some("🔌".to_string()),
+            score: 100,
+            action_type: "open_plugin_manager".to_string(),
+            action_data: String::new(),
+        }]),
         _ => Ok(vec![]),
     }
 }

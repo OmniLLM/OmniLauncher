@@ -326,154 +326,11 @@ interface SlashCommand {
 
 const SLASH_COMMANDS: SlashCommand[] = [
   {
-    cmd: "/run",
-    shortcut: "/r",
-    description: "Execute a shell command",
-    usage: "/run <command>",
-    examples: ["/run dir", "/run git status", "/r npm test"],
-  },
-  {
-    cmd: "/open",
-    shortcut: "/o",
-    description: "Open app, file, or URL",
-    usage: "/open <target>",
-    examples: ["/open notepad", "/o https://google.com", "/open C:\\Users"],
-  },
-  {
-    cmd: "/app",
-    shortcut: "/a",
-    description: "Search & launch applications",
-    usage: "/app <query>",
-    examples: ["/app chrome", "/a code", "/app firefox"],
-  },
-  {
-    cmd: "/find",
-    shortcut: "/f",
-    description: "Search files by name",
-    usage: "* <filename>",
-    examples: ["* readme", "* .gitignore", "/find *.rs"],
-  },
-  {
-    cmd: "*",
-    shortcut: "/find",
-    description: "Flow-style file search",
-    usage: "* <filename>",
-    examples: ["* readme", "* invoice.pdf", "* .gitignore"],
-  },
-  {
-    cmd: "b",
-    shortcut: "bm",
-    description: "Flow-style bookmark search",
-    usage: "b <query>",
-    examples: ["b github", "bm docs"],
-  },
-  {
-    cmd: "/grep",
-    shortcut: "/g",
-    description: "Search file contents with regex",
-    usage: "/grep <pattern> [path]",
-    examples: ["/grep TODO src", '/g "fn main" .', "/grep error logs/"],
-  },
-  {
-    cmd: "/cat",
-    description: "Read and display a file",
-    usage: "/cat <filepath>",
-    examples: ["/cat package.json", "/cat ~/.ssh/config", "/cat Cargo.toml"],
-  },
-  {
-    cmd: "/ls",
-    description: "List directory contents",
-    usage: "/ls [path]",
-    examples: ["/ls", "/ls src", "/ls C:\\Users\\jzhu\\repos"],
-  },
-  {
-    cmd: "/git",
-    description: "Run git commands",
-    usage: "/git [subcommand]",
-    examples: ["/git", "/git log --oneline -5", "/git branch -a", "/git diff"],
-  },
-  {
-    cmd: "/calc",
-    shortcut: "/c",
-    description: "Quick calculator",
-    usage: "/calc <expression>",
-    examples: ["/calc 2^10", "/c 15% of 200", "/calc sqrt(144)"],
-  },
-  {
-    cmd: "/todo",
-    shortcut: "/t",
-    description: "Manage todo list",
-    usage: "/todo [text]",
-    examples: ["/todo", "/t buy groceries", "/todo review PR #42"],
-  },
-  {
-    cmd: "/web",
-    shortcut: "/w",
-    description: "Search the web (Google)",
-    usage: "/web <query>",
-    examples: ["/web rust async tutorial", "/w tauri v2 docs"],
-  },
-  {
-    cmd: "/ip",
-    description: "Show your public IP address",
-    usage: "/ip",
-    examples: ["/ip"],
-  },
-  {
-    cmd: "/ports",
-    description: "Show listening network ports",
-    usage: "/ports",
-    examples: ["/ports"],
-  },
-  {
-    cmd: "/ps",
-    description: "Top processes by CPU usage",
-    usage: "/ps",
-    examples: ["/ps"],
-  },
-  {
-    cmd: "/kill",
-    description: "Kill a process by name or PID",
-    usage: "/kill <name or PID>",
-    examples: ["/kill node", "/kill 1234", "/kill chrome"],
-  },
-  {
-    cmd: "/env",
-    description: "Get an environment variable",
-    usage: "/env <variable>",
-    examples: ["/env PATH", "/env HOME", "/env JAVA_HOME"],
-  },
-  {
-    cmd: "/color",
-    description: "Convert color formats (hex/rgb/name)",
-    usage: "/color <value>",
-    examples: ["/color #ff6600", "/color rgb(0,128,255)", "/color teal"],
-  },
-  {
-    cmd: "/sys",
-    description: "System commands: lock, sleep, shutdown, restart",
-    usage: "/sys <action>",
-    examples: ["/sys lock", "/sys sleep", "/sys shutdown"],
-  },
-  {
-    cmd: "/clip",
-    shortcut: "/cb",
-    description: "Search clipboard history",
-    usage: "/clip [term]",
-    examples: ["/clip", "/cb password", "/clip url"],
-  },
-  {
-    cmd: "/skill",
-    description: "Manage skills (list, view, install, reload)",
-    usage: "/skill [list|view|install|reload|help]",
-    examples: ["/skill list", "/skill view web-summarizer", "/skill help"],
-  },
-  {
-    cmd: "plugins",
-    shortcut: "pm",
-    description: "Manage external plugins (install / remove)",
-    usage: "plugins",
-    examples: ["plugins", "pm"],
+    cmd: "/plugins",
+    shortcut: "/pm",
+    description: "Open external plugin manager",
+    usage: "/plugins",
+    examples: ["/plugins", "/pm"],
   },
   {
     cmd: "/new",
@@ -515,6 +372,7 @@ export default function App() {
   const [aiModeEnabled, setAiModeEnabled] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showPluginManager, setShowPluginManager] = useState(false);
+  const [isHintBarExpanded, setIsHintBarExpanded] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("system");
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(
     getSystemTheme(),
@@ -800,6 +658,18 @@ export default function App() {
         return;
       }
 
+      if (isSlashPrefix(value)) {
+        setResults(slashSuggestions(value));
+        return;
+      }
+
+      if (value.trimStart().toLowerCase() === "/plugins" || value.trimStart().toLowerCase() === "/pm") {
+        setShowPluginManager(true);
+        setResults([]);
+        setQuery("");
+        return;
+      }
+
       if (forceAi || isAiPrefix(value)) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         setAiModeEnabled(true);
@@ -909,11 +779,35 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const active = document.activeElement as HTMLElement | null;
+      const isEditableTarget =
+        !!active &&
+        (active.isContentEditable ||
+          active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.tagName === "SELECT");
+
       if (e.key === "Escape") {
         setQuery("");
         setResults([]);
         setShowPluginManager(false);
       }
+
+      if (
+        e.key === "?" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.repeat &&
+        !isEditableTarget
+      ) {
+        e.preventDefault();
+        setAiModeEnabled((prev) => !prev);
+        setQuery("");
+        setResults([]);
+        setTimeout(() => focusInput(), 50);
+      }
+
       if (e.key === "," && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setShowSettings((s) => !s);
@@ -921,13 +815,19 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [focusInput]);
 
   // ── Layout geometry ────────────────────────────────────────────────────────
   const launcherHasContent =
     results.length > 0 || showSettings || showPluginManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
-  const panelHeight = isAiMode ? 560 : launcherHasContent ? 520 : 210;
+  const panelHeight = isAiMode
+    ? 560
+    : launcherHasContent
+      ? 520
+      : isHintBarExpanded
+        ? 320
+        : 210;
   const windowHeight = `${panelHeight}px`;
   const maxHeight = `${panelHeight}px`;
   const shellFont =
@@ -1019,7 +919,7 @@ export default function App() {
                 letterSpacing: "0.03em",
               }}
             >
-              Omnilauncher AI Mode
+              OMNILAUNCHER AI MODE
             </span>
             <button
               onClick={handleNewConversation}
@@ -1153,6 +1053,7 @@ export default function App() {
           }
           compact={isCompactMode}
           inputRef={inputRef}
+          onHintBarExpandedChange={setIsHintBarExpanded}
         />
       </div>
     </>

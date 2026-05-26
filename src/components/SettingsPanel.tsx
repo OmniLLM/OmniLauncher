@@ -95,6 +95,7 @@ export default function SettingsPanel({
             theme: theme,
             hotkey: "Alt+Space",
             max_results: 10,
+            background_url: "",
           },
         );
         setModelFilter(initialSettings?.ai_model || "auto");
