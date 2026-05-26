@@ -17,7 +17,12 @@ pub struct PluginManifest {
     pub version: String,
     pub keyword: Option<String>,
     pub icon: Option<String>,
+    /// Entry script for Linux / macOS (e.g. `run.py`, `run.sh`).
     pub entry: String,
+    /// Entry script for Windows (e.g. `run.ps1`).
+    /// Falls back to `entry` when absent.
+    #[serde(default)]
+    pub entry_windows: Option<String>,
 }
 
 // ─── ExternalPlugin ───────────────────────────────────────────────────────────
@@ -33,7 +38,7 @@ impl ExternalPlugin {
     }
 
     fn entry_path(&self) -> PathBuf {
-        self.dir.join(&self.manifest.entry)
+        self.dir.join(platform_entry(&self.manifest))
     }
 
     /// Spawn the entry executable, send `input` on stdin, and collect stdout.
@@ -203,7 +208,8 @@ pub fn load_manifest(dir: &Path) -> Option<PluginManifest> {
 /// or a collection repo whose immediate subdirectories each contain a plugin.
 pub fn discover_plugins_in_repo(repo_dir: &Path) -> Vec<(PathBuf, PluginManifest)> {
     if let Some(manifest) = load_manifest(repo_dir) {
-        if repo_dir.join(&manifest.entry).exists() {
+        let entry_file = platform_entry(&manifest);
+        if repo_dir.join(entry_file).exists() {
             return vec![(repo_dir.to_path_buf(), manifest)];
         }
 
@@ -211,7 +217,7 @@ pub fn discover_plugins_in_repo(repo_dir: &Path) -> Vec<(PathBuf, PluginManifest
             "External plugin '{}' in {}: entry '{}' not found",
             manifest.name,
             repo_dir.display(),
-            manifest.entry
+            entry_file
         );
         return vec![];
     }
@@ -231,7 +237,7 @@ pub fn discover_plugins_in_repo(repo_dir: &Path) -> Vec<(PathBuf, PluginManifest
             continue;
         };
 
-        let entry_path = path.join(&manifest.entry);
+        let entry_path = path.join(platform_entry(&manifest));
         if entry_path.exists() {
             plugins.push((path, manifest));
         } else {
@@ -245,6 +251,21 @@ pub fn discover_plugins_in_repo(repo_dir: &Path) -> Vec<(PathBuf, PluginManifest
     }
 
     plugins
+}
+
+// ─── Platform helpers ─────────────────────────────────────────────────────────
+
+/// Return the entry filename for the current platform.
+/// On Windows: uses `entry_windows` if set, falls back to `entry`.
+/// On Linux / macOS: always uses `entry`.
+fn platform_entry(manifest: &PluginManifest) -> &str {
+    #[cfg(target_os = "windows")]
+    return manifest
+        .entry_windows
+        .as_deref()
+        .unwrap_or(&manifest.entry);
+    #[cfg(not(target_os = "windows"))]
+    &manifest.entry
 }
 
 /// Scan ext-plugins dir and return all valid ExternalPlugins.
