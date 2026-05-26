@@ -25,12 +25,61 @@ fn build_prompt(prompt: &str, context: Option<&str>) -> String {
     }
 }
 
+/// Resolve the binary path for an AI agent, handling platform differences.
+/// - Windows: npm-installed CLIs live as `.cmd` wrappers in `%APPDATA%\npm\`
+/// - Linux: common install prefix `~/.npm-global/bin/`
+/// - macOS: common Homebrew / npm prefix `~/.npm-global/bin/` or `/usr/local/bin/`
+/// Falls back to bare name if the known path doesn't exist (PATH lookup).
+fn resolve_agent_bin(agent_name: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        // npm global .cmd wrapper path on Windows
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let candidate = format!("{}\\npm\\{}.cmd", appdata, agent_name);
+            if std::path::Path::new(&candidate).exists() {
+                return candidate;
+            }
+        }
+        // opencode may ship as a standalone exe in LOCALAPPDATA
+        if agent_name == "opencode" {
+            if let Ok(local) = std::env::var("LOCALAPPDATA") {
+                let candidate = format!("{}\\opencode\\opencode.exe", local);
+                if std::path::Path::new(&candidate).exists() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // opencode is not in PATH by default on Linux/macOS
+        if agent_name == "opencode" {
+            let known = "/data/tools/opencode/packages/opencode/bin/opencode";
+            if std::path::Path::new(known).exists() {
+                return known.to_string();
+            }
+        }
+        // npm-global bin (Linux / macOS)
+        if let Ok(home) = std::env::var("HOME") {
+            let candidate = format!("{}/.npm-global/bin/{}", home, agent_name);
+            if std::path::Path::new(&candidate).exists() {
+                return candidate;
+            }
+        }
+    }
+    // Fallback: rely on PATH
+    agent_name.to_string()
+}
+
 // Helper to run agent and return (elapsed_secs, output)
 async fn run_agent_timed(agent_name: String, prompt: String, timeout_secs: u64) -> (u64, String) {
     let start = Instant::now();
+    // On Windows, claude/codex/opencode are installed as .cmd wrappers via npm.
+    // Look them up by known Windows paths; fall back to bare name for PATH resolution.
+    let resolved_bin = resolve_agent_bin(&agent_name);
     match tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
-        tokio::process::Command::new(&agent_name)
+        tokio::process::Command::new(&resolved_bin)
             .args(["-p", &prompt])
             .output(),
     )
@@ -93,7 +142,12 @@ impl Plugin for AgentDelegatePlugin {
                 return vec![];
             }
 
-            let shell_cmd = format!("{} -p \"{}\"", agent_name, prompt.replace('"', "\\\""));
+            let resolved = resolve_agent_bin(&agent_name);
+            let shell_cmd = if cfg!(target_os = "windows") {
+                format!("\"{}\" -p \"{}\"", resolved, prompt.replace('"', "\\\""))
+            } else {
+                format!("{} -p \"{}\"", resolved, prompt.replace('"', "\\\""))
+            };
 
             return vec![QueryResult {
                 id: format!("agent:{}:{}", agent_name, prompt),

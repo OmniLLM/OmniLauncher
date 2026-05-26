@@ -62,7 +62,17 @@ impl Plugin for ProcessManagerPlugin {
         }
 
         if let Some(name) = raw.strip_prefix("kill ") {
-            let name = name.trim();
+            // On Windows, process names include the .exe suffix; append it if missing.
+            let name_owned;
+            let name = {
+                let n = name.trim();
+                if cfg!(target_os = "windows") && !n.ends_with(".exe") {
+                    name_owned = format!("{}.exe", n);
+                    name_owned.as_str()
+                } else {
+                    n
+                }
+            };
             let mut system = System::new_all();
             system.refresh_all();
             let killed: Vec<String> = system
@@ -169,10 +179,18 @@ impl Plugin for ProcessManagerPlugin {
                     .join("\n")
             }
             "kill" => {
-                let name = args["name"].as_str().unwrap_or("");
-                if name.is_empty() {
+                let raw_name = args["name"].as_str().unwrap_or("");
+                if raw_name.is_empty() {
                     return "No process name provided".to_string();
                 }
+                // On Windows, process names include .exe suffix
+                let name_owned;
+                let name = if cfg!(target_os = "windows") && !raw_name.ends_with(".exe") {
+                    name_owned = format!("{}.exe", raw_name);
+                    name_owned.as_str()
+                } else {
+                    raw_name
+                };
                 let mut system = System::new_all();
                 system.refresh_all();
                 let killed: Vec<String> = system

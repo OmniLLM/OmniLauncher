@@ -31,6 +31,41 @@ fn scripts_dir() -> PathBuf {
     path_config::data_dir().join("scripts")
 }
 
+/// Build the shell command string to run `path` with the right interpreter.
+/// - .ps1          → powershell -NoProfile -File <path>  (Windows)
+///                   pwsh -NoProfile -File <path>        (Linux/macOS — PowerShell Core)
+/// - .bat / .cmd   → cmd /C <path>                       (Windows only; skipped on others)
+/// - .py           → python3 <path>  (Linux/macOS) | python <path> (Windows)
+/// - .sh / .bash   → bash <path>
+fn shell_run_cmd(path: &PathBuf) -> String {
+    let p = path.display().to_string();
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "ps1" => {
+            if cfg!(target_os = "windows") {
+                format!("powershell -NoProfile -File \"{}\"", p)
+            } else {
+                format!("pwsh -NoProfile -File \"{}\"", p)
+            }
+        }
+        "bat" | "cmd" => {
+            if cfg!(target_os = "windows") {
+                format!("cmd /C \"{}\"", p)
+            } else {
+                // batch files are Windows-only; best effort
+                format!("echo 'batch script not supported on this platform: {}'", p)
+            }
+        }
+        "py" => {
+            if cfg!(target_os = "windows") {
+                format!("python \"{}\"", p)
+            } else {
+                format!("python3 \"{}\"", p)
+            }
+        }
+        _ => format!("bash \"{}\"", p), // .sh / .bash
+    }
+}
+
 fn parse_meta(path: &PathBuf) -> Option<ScriptMeta> {
     let content = std::fs::read_to_string(path).ok()?;
     let stem = path
@@ -45,10 +80,20 @@ fn parse_meta(path: &PathBuf) -> Option<ScriptMeta> {
 
     for line in content.lines().take(10) {
         let line = line.trim();
-        if !line.starts_with('#') {
+        // Allow # comments (sh/bash/py) and REM / :: comments (bat/cmd)
+        let is_comment = line.starts_with('#')
+            || line.to_uppercase().starts_with("REM ")
+            || line.starts_with("::");
+        if !is_comment {
             break;
         }
-        let comment = line.trim_start_matches('#').trim();
+        let comment = if line.starts_with('#') {
+            line.trim_start_matches('#').trim()
+        } else if line.to_uppercase().starts_with("REM ") {
+            line[4..].trim()
+        } else {
+            line.trim_start_matches(':').trim()
+        };
         if let Some(v) = comment.strip_prefix("name:") {
             name = v.trim().to_string();
         } else if let Some(v) = comment.strip_prefix("icon:") {
@@ -81,7 +126,14 @@ fn load_scripts() -> Vec<ScriptMeta> {
             e.file_type().is_file()
                 && e.path()
                     .extension()
-                    .map(|ext| ext == "sh" || ext == "bash")
+                    .map(|ext| {
+                        ext == "sh"
+                            || ext == "bash"
+                            || ext == "ps1"
+                            || ext == "bat"
+                            || ext == "cmd"
+                            || ext == "py"
+                    })
                     .unwrap_or(false)
         })
         .filter_map(|e| parse_meta(&e.path().to_path_buf()))
@@ -163,7 +215,7 @@ impl Plugin for ScriptRunnerPlugin {
                     icon: None,
                     score,
                     action_type: "shell".to_string(),
-                    action_data: format!("bash {}", s.path.display()),
+                    action_data: shell_run_cmd(&s.path),
                 }
             })
             .collect()
@@ -200,24 +252,29 @@ impl Plugin for ScriptRunnerPlugin {
                     .map(|n| n.to_lowercase().contains(&name))
                     .unwrap_or(false)
         });
-
         match found {
-            Some(s) => match std::process::Command::new("bash").arg(&s.path).output() {
-                Ok(out) => {
-                    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                    if out.status.success() {
-                        if stdout.is_empty() {
-                            format!("Script '{}' ran successfully", s.name)
+            Some(s) => {
+                let cmd_str = shell_run_cmd(&s.path);
+                let mut iter = cmd_str.split_whitespace();
+                let prog = iter.next().unwrap_or("bash");
+                let rest: Vec<&str> = iter.collect();
+                match std::process::Command::new(prog).args(&rest).output() {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                        if out.status.success() {
+                            if stdout.is_empty() {
+                                format!("Script '{}' ran successfully", s.name)
+                            } else {
+                                stdout
+                            }
                         } else {
-                            stdout
+                            format!("Script failed: {}", stderr)
                         }
-                    } else {
-                        format!("Script failed: {}", stderr)
                     }
+                    Err(e) => format!("Failed to run script: {}", e),
                 }
-                Err(e) => format!("Failed to run script: {}", e),
-            },
+            }
             None => format!("No script found matching '{}'", name),
         }
     }
