@@ -5,6 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SearchBar from "./components/SearchBar";
 import ResultList from "./components/ResultList";
 import SettingsPanel from "./components/SettingsPanel";
+import PluginManager from "./components/PluginManager";
 
 interface QueryResult {
   id: string;
@@ -47,6 +48,25 @@ interface AppSettings {
  *
  * Everything else → local plugins (instant, no AI latency).
  */
+/** Returns true when the query should trigger the Plugin Manager shortcut. */
+function isPluginManagerQuery(input: string): boolean {
+  const t = input.trim().toLowerCase();
+  return t === "plugins" || t === "pm" || t.startsWith("pm ");
+}
+
+/** Synthetic result that opens the Plugin Manager panel. */
+function pluginManagerResult(): QueryResult {
+  return {
+    id: "builtin:plugin-manager",
+    title: "Manage Plugins",
+    subtitle: "Install, list, and remove external plugins",
+    icon: "🔌",
+    score: 100,
+    action_type: "open_plugin_manager",
+    action_data: "",
+  };
+}
+
 export function isAiPrefix(input: string): boolean {
   const t = input.trim();
   return t.startsWith("?") || t.toLowerCase().startsWith("ai ");
@@ -427,6 +447,13 @@ const SLASH_COMMANDS: SlashCommand[] = [
     examples: ["/skill list", "/skill view web-summarizer", "/skill help"],
   },
   {
+    cmd: "plugins",
+    shortcut: "pm",
+    description: "Manage external plugins (install / remove)",
+    usage: "plugins",
+    examples: ["plugins", "pm"],
+  },
+  {
     cmd: "/new",
     description: "Start a new AI conversation",
     usage: "/new",
@@ -465,6 +492,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [aiModeEnabled, setAiModeEnabled] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showPluginManager, setShowPluginManager] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [conversationHistory, setConversationHistory] = useState<
     ConversationTurn[]
@@ -506,6 +534,12 @@ export default function App() {
 
     if (!q.trim() || isAiPrefix(q) || isHelpHintQuery(q)) {
       setResults([]);
+      return;
+    }
+
+    // Plugin Manager shortcut
+    if (isPluginManagerQuery(q)) {
+      setResults([pluginManagerResult()]);
       return;
     }
 
@@ -707,6 +741,13 @@ export default function App() {
   );
 
   const handleExecute = useCallback(async (result: QueryResult) => {
+    if (result.action_type === "open_plugin_manager") {
+      setShowPluginManager(true);
+      setResults([]);
+      setQuery("");
+      return;
+    }
+
     if (result.action_type === "help_command") {
       setQuery(result.action_data);
       setResults([]);
@@ -746,6 +787,7 @@ export default function App() {
       if (e.key === "Escape") {
         setQuery("");
         setResults([]);
+        setShowPluginManager(false);
       }
       if (e.key === "," && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
@@ -757,7 +799,7 @@ export default function App() {
   }, []);
 
   // ── Layout geometry ────────────────────────────────────────────────────────
-  const launcherHasContent = results.length > 0 || showSettings;
+  const launcherHasContent = results.length > 0 || showSettings || showPluginManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
   const panelHeight = isAiMode ? 560 : launcherHasContent ? 520 : 56;
   const windowHeight = `${panelHeight}px`;
@@ -925,8 +967,16 @@ export default function App() {
           />
         )}
 
+        {/* ── PLUGIN MANAGER panel ─────────────────────────────────────── */}
+        {showPluginManager && !isAiMode && !showSettings && (
+          <PluginManager
+            colors={colors}
+            onClose={() => setShowPluginManager(false)}
+          />
+        )}
+
         {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
-        {!isAiMode && !showSettings && results.length > 0 && (
+        {!isAiMode && !showSettings && !showPluginManager && results.length > 0 && (
           <ResultList
             results={results}
             query={query}

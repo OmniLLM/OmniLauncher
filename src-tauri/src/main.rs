@@ -233,6 +233,9 @@ pub fn run() {
             reload_skills,
             install_skill,
             set_window_geometry,
+            install_plugin,
+            list_plugins,
+            remove_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -701,6 +704,26 @@ async fn install_skill(
     } else {
         mgr.install_from_path(&source)
     }
+}
+
+// ─── External plugin management commands ──────────────────────────────────────
+
+#[tauri::command]
+async fn install_plugin(source: String) -> Result<String, String> {
+    log::debug!("install_plugin invoked with source={source}");
+    omnilauncher_lib::plugins::plugin_manager_cmd::install_plugin(source).await
+}
+
+#[tauri::command]
+fn list_plugins() -> Vec<serde_json::Value> {
+    log::trace!("list_plugins invoked");
+    omnilauncher_lib::plugins::plugin_manager_cmd::list_plugins()
+}
+
+#[tauri::command]
+async fn remove_plugin(name: String) -> Result<(), String> {
+    log::debug!("remove_plugin invoked with name={name}");
+    omnilauncher_lib::plugins::plugin_manager_cmd::remove_plugin(name).await
 }
 
 #[cfg(test)]

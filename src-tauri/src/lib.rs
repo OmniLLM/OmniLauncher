@@ -53,5 +53,11 @@ pub fn create_plugin_manager() -> PluginManager {
     pm.register(Box::new(plugins::pomodoro::PomodoroPlugin));
     pm.register(Box::new(plugins::window_resize::WindowResizePlugin));
     pm.register(Box::new(plugins::cron_explainer::CronExplainerPlugin));
+
+    // Load external plugins from ~/.config/omnilauncher/ext-plugins/
+    for plugin in plugins::external::load_external_plugins() {
+        pm.register(Box::new(plugin));
+    }
+
     pm
 }
