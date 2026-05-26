@@ -186,12 +186,12 @@ impl Plugin for ExternalPlugin {
 // ─── Discovery ────────────────────────────────────────────────────────────────
 
 /// Return the base directory for external plugins:
-/// `~/.config/omnilauncher/ext-plugins/`
+/// `~/.omnilauncher/plugins/`
 pub fn ext_plugins_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("omnilauncher")
-        .join("ext-plugins")
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("~"))
+        .join(".omnilauncher")
+        .join("plugins")
 }
 
 /// Read and validate a `plugin.json` from the given directory.

@@ -26,7 +26,7 @@ You can also manage plugins programmatically:
 ## Where plugins live
 
 ```
-~/.config/omnilauncher/ext-plugins/
+~/.omnilauncher/plugins/
   my-plugin/
     plugin.json    ← required manifest
     run.sh         ← executable entry point (any language)
