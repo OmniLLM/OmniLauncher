@@ -201,9 +201,15 @@ pub fn run() {
                         if window.is_visible().unwrap_or(false) {
                             let _ = window.hide();
                         } else {
+                            // Read X11 PRIMARY selection before showing the window.
+                            // This captures whatever text the user had highlighted in
+                            // another app at the moment they triggered the hotkey.
+                            let selection =
+                                omnilauncher_lib::plugins::selection::read_x11_selection()
+                                    .unwrap_or_default();
                             let _ = window.show();
                             let _ = window.set_focus();
-                            let _ = window.emit("omnilauncher://shown", ());
+                            let _ = window.emit("omnilauncher://shown", selection);
                         }
                     }
                 })

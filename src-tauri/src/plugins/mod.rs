@@ -121,3 +121,4 @@ pub mod web_search;
 pub mod windows_settings;
 pub mod script_runner;
 pub mod screenshot;
+pub mod selection;

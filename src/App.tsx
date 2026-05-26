@@ -539,7 +539,17 @@ export default function App() {
     let unlistenFocus: (() => void) | undefined;
     let unlistenShown: (() => void) | undefined;
 
-    listen("omnilauncher://shown", focusVisibleInput)
+    listen<string>("omnilauncher://shown", (event) => {
+      const selection = event.payload ?? "";
+      if (selection.trim()) {
+        // Auto-populate with selected text from the previously focused app.
+        // The selection plugin will detect the "__sel__:" prefix and show actions.
+        setQuery("__sel__:" + selection.trim());
+        setTimeout(() => focusInput(true), 50);
+      } else {
+        focusVisibleInput();
+      }
+    })
       .then((fn) => {
         unlistenShown = fn;
       })
