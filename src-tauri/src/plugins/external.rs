@@ -197,6 +197,56 @@ pub fn load_manifest(dir: &Path) -> Option<PluginManifest> {
     }
 }
 
+/// Discover plugin manifests inside a repo container.
+///
+/// A container can either be a single plugin directory with a root `plugin.json`
+/// or a collection repo whose immediate subdirectories each contain a plugin.
+pub fn discover_plugins_in_repo(repo_dir: &Path) -> Vec<(PathBuf, PluginManifest)> {
+    if let Some(manifest) = load_manifest(repo_dir) {
+        if repo_dir.join(&manifest.entry).exists() {
+            return vec![(repo_dir.to_path_buf(), manifest)];
+        }
+
+        log::warn!(
+            "External plugin '{}' in {}: entry '{}' not found",
+            manifest.name,
+            repo_dir.display(),
+            manifest.entry
+        );
+        return vec![];
+    }
+
+    let mut plugins = Vec::new();
+    let Ok(entries) = std::fs::read_dir(repo_dir) else {
+        return plugins;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let Some(manifest) = load_manifest(&path) else {
+            continue;
+        };
+
+        let entry_path = path.join(&manifest.entry);
+        if entry_path.exists() {
+            plugins.push((path, manifest));
+        } else {
+            log::warn!(
+                "External plugin '{}' in {}: entry '{}' not found",
+                manifest.name,
+                path.display(),
+                manifest.entry
+            );
+        }
+    }
+
+    plugins
+}
+
 /// Scan ext-plugins dir and return all valid ExternalPlugins.
 pub fn load_external_plugins() -> Vec<ExternalPlugin> {
     load_external_plugins_from(&[])
@@ -225,31 +275,22 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.is_dir() {
-                        if let Some(manifest) = load_manifest(&path) {
+                        for (plugin_dir, manifest) in discover_plugins_in_repo(&path) {
                             if seen_names.contains(&manifest.name) {
                                 log::info!(
                                     "Skipping duplicate plugin '{}' from {}",
                                     manifest.name,
-                                    path.display()
+                                    plugin_dir.display()
                                 );
                                 continue;
                             }
-                            let entry_path = path.join(&manifest.entry);
-                            if entry_path.exists() {
-                                log::info!(
-                                    "Loaded external plugin '{}' from {}",
-                                    manifest.name,
-                                    path.display()
-                                );
-                                seen_names.insert(manifest.name.clone());
-                                plugins.push(ExternalPlugin::new(path, manifest));
-                            } else {
-                                log::warn!(
-                                    "External plugin '{}': entry '{}' not found",
-                                    manifest.name,
-                                    manifest.entry
-                                );
-                            }
+                            log::info!(
+                                "Loaded external plugin '{}' from {}",
+                                manifest.name,
+                                plugin_dir.display()
+                            );
+                            seen_names.insert(manifest.name.clone());
+                            plugins.push(ExternalPlugin::new(plugin_dir, manifest));
                         }
                     }
                 }

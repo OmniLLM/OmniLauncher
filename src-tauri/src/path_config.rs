@@ -23,7 +23,5 @@ pub fn data_dir() -> PathBuf {
     if let Ok(base) = std::env::var("OMNILAUNCHER_CONFIG_DIR") {
         return PathBuf::from(base);
     }
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".omnilauncher")
+    dirs::home_dir().unwrap_or_default().join(".omnilauncher")
 }

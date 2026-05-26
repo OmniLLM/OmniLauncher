@@ -1079,7 +1079,9 @@ impl Plugin for TodoPlugin {
                 if text.is_empty() {
                     return "Error: need note key".to_string();
                 }
-                let path = path_config::data_dir().join("notes").join(format!("{}.md", text));
+                let path = path_config::data_dir()
+                    .join("notes")
+                    .join(format!("{}.md", text));
                 match std::fs::read_to_string(&path) {
                     Ok(c) => c,
                     Err(_) => format!("Note '{}' not found.", text),

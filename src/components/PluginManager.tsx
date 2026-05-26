@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface PluginInfo {
@@ -9,6 +9,81 @@ interface PluginInfo {
   icon?: string;
   entry: string;
   dir_name: string;
+  is_git_repo?: boolean;
+  git_remote?: string;
+  git_branch?: string;
+  git_clean?: boolean;
+  git_ahead?: number;
+  git_behind?: number;
+}
+
+interface PluginRepo {
+  dir_name: string;
+  collection_name?: string;
+  collection_key?: string;
+  collection_source?: string;
+  plugins: PluginInfo[];
+  is_git_repo?: boolean;
+  git_remote?: string;
+  git_branch?: string;
+  git_clean?: boolean;
+  git_ahead?: number;
+  git_behind?: number;
+}
+
+interface GroupedPlugin extends PluginInfo {
+  repo_dir_name: string;
+  repo_is_git_repo?: boolean;
+  repo_git_remote?: string;
+}
+
+interface PluginCollection {
+  key: string;
+  name: string;
+  repos: PluginRepo[];
+  plugins: GroupedPlugin[];
+  hasGitRepo: boolean;
+  collectionSource?: string;
+}
+
+function normalizeGitRemote(remote?: string): string | undefined {
+  if (!remote) return undefined;
+
+  const trimmed = remote.trim().replace(/\.git$/i, "");
+  const sshMatch = trimmed.match(/^[^@]+@[^:]+:(.+)$/);
+  if (sshMatch) {
+    const segments = sshMatch[1].split("/").filter(Boolean);
+    if (segments.length >= 2) {
+      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
+    }
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const segments = url.pathname.split("/").filter(Boolean);
+    if (segments.length >= 2) {
+      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
+    }
+  } catch {
+    const segments = trimmed.split(/[\\/]/).filter(Boolean);
+    if (segments.length >= 2) {
+      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
+    }
+  }
+
+  return undefined;
+}
+
+function collectionDisplayName(repo: PluginRepo): string {
+  return normalizeGitRemote(repo.git_remote) || repo.collection_name || repo.dir_name;
+}
+
+function collectionGroupKey(repo: PluginRepo): string {
+  const remoteName = normalizeGitRemote(repo.git_remote);
+  if (remoteName) {
+    return `remote:${remoteName}`;
+  }
+  return repo.collection_key || repo.collection_name || repo.dir_name;
 }
 
 interface AppSettings {
@@ -32,7 +107,8 @@ interface PluginManagerProps {
 const DEFAULT_DIR = "~/.omnilauncher/plugins (default)";
 
 export default function PluginManager({ colors, onClose }: PluginManagerProps) {
-  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
+  const [repos, setRepos] = useState<PluginRepo[]>([]);
+  const [expandedCollections, setExpandedCollections] = useState<Record<string, boolean>>({});
   const [source, setSource] = useState("");
   const [targetDir, setTargetDir] = useState<string>(""); // "" = default
   const [extraDirs, setExtraDirs] = useState<string[]>([]);
@@ -42,10 +118,58 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
   }>({ type: "idle", message: "" });
 
   const refresh = useCallback(() => {
-    invoke<PluginInfo[]>("list_plugins")
-      .then((list) => setPlugins(list))
-      .catch(() => setPlugins([]));
+    invoke<PluginRepo[]>("list_plugins")
+      .then((list) => setRepos(list))
+      .catch(() => setRepos([]));
   }, []);
+
+  const collections = useMemo<PluginCollection[]>(() => {
+    const grouped = new Map<string, PluginCollection>();
+
+    for (const repo of repos) {
+      const key = collectionGroupKey(repo);
+      const name = collectionDisplayName(repo);
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          key,
+          name,
+          repos: [],
+          plugins: [],
+          hasGitRepo: false,
+          collectionSource: repo.collection_source,
+        });
+      }
+
+      const collection = grouped.get(key)!;
+      collection.collectionSource = collection.collectionSource || repo.collection_source;
+      collection.repos.push(repo);
+      collection.hasGitRepo = collection.hasGitRepo || !!repo.is_git_repo;
+
+      for (const plugin of repo.plugins) {
+        collection.plugins.push({
+          ...plugin,
+          repo_dir_name: repo.dir_name,
+          repo_is_git_repo: repo.is_git_repo,
+          repo_git_remote: repo.git_remote,
+        });
+      }
+    }
+
+    return Array.from(grouped.values());
+  }, [repos]);
+
+  useEffect(() => {
+    setExpandedCollections((current) => {
+      const next = { ...current };
+      for (const collection of collections) {
+        if (next[collection.key] === undefined) {
+          next[collection.key] = false;
+        }
+      }
+      return next;
+    });
+  }, [collections]);
 
   useEffect(() => {
     refresh();
@@ -72,15 +196,120 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
     }
   };
 
-  const handleRemove = async (dirName: string) => {
-    setStatus({ type: "loading", message: `Removing "${dirName}"…` });
+  const handleUpdateRepo = async (dirName: string) => {
+    setStatus({ type: "loading", message: `Updating repo "${dirName}"…` });
     try {
-      await invoke("remove_plugin", { name: dirName });
-      setStatus({ type: "success", message: `✓ Removed "${dirName}"` });
+      const message = await invoke<string>("update_plugin", { name: dirName });
+      setStatus({ type: "success", message: `✓ ${message}` });
       refresh();
     } catch (e) {
       setStatus({ type: "error", message: `✗ ${e}` });
     }
+  };
+
+  const handleUpdateCollection = async (collection: PluginCollection) => {
+    const updatableRepos = collection.repos.filter((repo) => repo.is_git_repo);
+    if (updatableRepos.length === 0 && !collection.collectionSource) {
+      setStatus({
+        type: "error",
+        message: `✗ Collection "${collection.name}" has no git repositories to update.`,
+      });
+      return;
+    }
+
+    if (updatableRepos.length === 0 && collection.collectionSource) {
+      const pluginDirs = collection.plugins.map((plugin) => plugin.repo_dir_name);
+      setStatus({
+        type: "loading",
+        message: `Updating collection "${collection.name}"…`,
+      });
+      try {
+        const message = await invoke<string>("update_plugin_collection", {
+          source: collection.collectionSource,
+          pluginDirs,
+        });
+        setStatus({ type: "success", message: `✓ ${message}` });
+        refresh();
+      } catch (e) {
+        setStatus({ type: "error", message: `✗ ${e}` });
+      }
+      return;
+    }
+
+    if (updatableRepos.length === 1) {
+      await handleUpdateRepo(updatableRepos[0].dir_name);
+      return;
+    }
+
+    setStatus({
+      type: "loading",
+      message: `Updating collection "${collection.name}" (${updatableRepos.length} repos)…`,
+    });
+
+    const updated: string[] = [];
+    const failed: string[] = [];
+
+    for (const repo of updatableRepos) {
+      try {
+        await invoke<string>("update_plugin", { name: repo.dir_name });
+        updated.push(repo.dir_name);
+      } catch {
+        failed.push(repo.dir_name);
+      }
+    }
+
+    if (failed.length > 0) {
+      setStatus({
+        type: "error",
+        message: `✗ Collection "${collection.name}": updated ${updated.length}, failed ${failed.length} (${failed.join(", ")})`,
+      });
+    } else {
+      setStatus({
+        type: "success",
+        message: `✓ Collection "${collection.name}" updated (${updated.length} repos).`,
+      });
+    }
+
+    refresh();
+  };
+
+  const handleRemoveCollection = async (collection: PluginCollection) => {
+    setStatus({
+      type: "loading",
+      message: `Removing collection "${collection.name}"…`,
+    });
+
+    const removed: string[] = [];
+    const failed: string[] = [];
+    for (const repo of collection.repos) {
+      try {
+        await invoke("remove_plugin", { name: repo.dir_name });
+        removed.push(repo.dir_name);
+      } catch {
+        failed.push(repo.dir_name);
+      }
+    }
+
+    if (failed.length > 0) {
+      setStatus({
+        type: "error",
+        message: `✗ Collection "${collection.name}": removed ${removed.length}, failed ${failed.length} (${failed.join(", ")})`,
+      });
+    } else {
+      setStatus({
+        type: "success",
+        message: `✓ Removed collection "${collection.name}"`,
+      });
+    }
+
+    refresh();
+  };
+
+  const toggleCollection = (collectionKey: string) => {
+    setExpandedCollections((current) => ({
+      ...current,
+      [collectionKey]: !current[collectionKey],
+    }));
   };
 
   const statusColor =
@@ -223,7 +452,7 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
         </div>
       )}
 
-      {/* Plugin list */}
+      {/* Repo list */}
       <div
         style={{
           display: "flex",
@@ -231,7 +460,7 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
           gap: "6px",
         }}
       >
-        {plugins.length === 0 ? (
+        {collections.length === 0 ? (
           <div
             style={{
               fontSize: "13px",
@@ -240,109 +469,331 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
               padding: "18px 0",
             }}
           >
-            No external plugins installed yet.
+            No external plugin repos installed yet.
             <br />
             <span style={{ fontSize: "12px", opacity: 0.7 }}>
               Paste a Git URL or local path above to install one.
             </span>
           </div>
         ) : (
-          plugins.map((p) => (
-            <div
-              key={p.dir_name}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "10px",
-                background: colors.surface,
-                borderRadius: "9px",
-                padding: "9px 12px",
-              }}
-            >
-              {/* Icon */}
-              <span style={{ fontSize: "20px", flexShrink: 0 }}>
-                {p.icon ?? "🔌"}
-              </span>
-
-              {/* Info */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: "13px",
-                    fontWeight: 600,
-                    color: colors.text,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                  }}
-                >
-                  {p.name}
-                  <span
-                    style={{
-                      fontSize: "11px",
-                      color: colors.sub,
-                      fontWeight: 400,
-                    }}
-                  >
-                    v{p.version}
-                  </span>
-                  {p.keyword && (
-                    <span
-                      style={{
-                        fontSize: "11px",
-                        background: `${colors.accent}22`,
-                        border: `1px solid ${colors.accent}44`,
-                        borderRadius: "5px",
-                        padding: "1px 6px",
-                        color: colors.accent,
-                      }}
-                    >
-                      {p.keyword}
-                    </span>
-                  )}
-                </div>
-                <div
-                  style={{
-                    fontSize: "12px",
-                    color: colors.sub,
-                    marginTop: "2px",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {p.description}
-                </div>
-              </div>
-
-              {/* Remove button */}
-              <button
-                onClick={() => handleRemove(p.dir_name)}
-                title="Remove plugin"
+          collections.map((collection) => {
+            const expanded = expandedCollections[collection.key] ?? false;
+            const pluginCount = collection.plugins.length;
+            const repoCount = collection.repos.length;
+            return (
+              <div
+                key={collection.key}
                 style={{
-                  background: "none",
+                  background: colors.surface,
+                  borderRadius: "10px",
                   border: `1px solid ${colors.surface2}`,
-                  borderRadius: "6px",
-                  padding: "4px 10px",
-                  color: colors.sub,
-                  fontSize: "12px",
-                  cursor: "pointer",
-                  flexShrink: 0,
-                  transition: "color 150ms, border-color 150ms",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = "#f38ba8";
-                  e.currentTarget.style.borderColor = "#f38ba8";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = colors.sub;
-                  e.currentTarget.style.borderColor = colors.surface2;
+                  overflow: "hidden",
                 }}
               >
-                Remove
-              </button>
-            </div>
-          ))
+                <div
+                  onClick={() => toggleCollection(collection.key)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    padding: "10px 12px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCollection(collection.key);
+                    }}
+                    aria-label={expanded ? "Collapse collection" : "Expand collection"}
+                    style={{
+                      width: "26px",
+                      height: "26px",
+                      borderRadius: "6px",
+                      border: `1px solid ${colors.surface2}`,
+                      background: colors.bg,
+                      color: colors.text,
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                    title={expanded ? "Collapse collection plugins" : "Expand collection plugins"}
+                  >
+                    {expanded ? "▾" : "▸"}
+                  </button>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        color: colors.text,
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          letterSpacing: "0.04em",
+                          color: colors.accent,
+                          border: `1px solid ${colors.accent}55`,
+                          borderRadius: "999px",
+                          padding: "1px 6px",
+                        }}
+                      >
+                        COLLECTION
+                      </span>
+                      <span>{collection.name}</span>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          color: colors.sub,
+                          fontWeight: 500,
+                          border: `1px solid ${colors.surface2}`,
+                          borderRadius: "999px",
+                          padding: "1px 7px",
+                        }}
+                      >
+                        {pluginCount} plugin{pluginCount === 1 ? "" : "s"}
+                      </span>
+                      {repoCount > 1 && (
+                        <span
+                          style={{
+                            fontSize: "11px",
+                            color: colors.sub,
+                            fontWeight: 500,
+                            border: `1px solid ${colors.surface2}`,
+                            borderRadius: "999px",
+                            padding: "1px 7px",
+                          }}
+                        >
+                          {repoCount} repos
+                        </span>
+                      )}
+                      {collection.hasGitRepo && (
+                        <span
+                          style={{
+                            fontSize: "11px",
+                            background: `${colors.accent}22`,
+                            border: `1px solid ${colors.accent}44`,
+                            borderRadius: "999px",
+                            padding: "1px 7px",
+                            color: colors.accent,
+                          }}
+                        >
+                          git
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: colors.sub,
+                        marginTop: "2px",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {normalizeGitRemote(collection.repos[0]?.git_remote)
+                        ? collection.repos[0]!.git_remote
+                        : collection.repos.length === 1
+                          ? "Local plugin collection"
+                          : `Contains ${collection.repos.length} plugin repositories`}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleUpdateCollection(collection);
+                    }}
+                    disabled={status.type === "loading" || (!collection.hasGitRepo && !collection.collectionSource)}
+                    style={{
+                      background: "none",
+                      border: `1px solid ${colors.surface2}`,
+                      borderRadius: "8px",
+                      padding: "6px 12px",
+                      color: collection.hasGitRepo || collection.collectionSource ? colors.text : colors.sub,
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      cursor: collection.hasGitRepo || collection.collectionSource ? "pointer" : "default",
+                      opacity: collection.hasGitRepo || collection.collectionSource ? 1 : 0.5,
+                      transition: "opacity 150ms, border-color 150ms, color 150ms",
+                    }}
+                    title={
+                      collection.hasGitRepo || collection.collectionSource
+                        ? "Update this collection and all of its plugins"
+                        : "This collection has no git repositories"
+                    }
+                  >
+                    Update
+                  </button>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveCollection(collection);
+                    }}
+                    title="Remove collection"
+                    style={{
+                      background: "none",
+                      border: `1px solid ${colors.surface2}`,
+                      borderRadius: "6px",
+                      padding: "4px 10px",
+                      color: colors.sub,
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                      transition: "color 150ms, border-color 150ms",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = "#f38ba8";
+                      e.currentTarget.style.borderColor = "#f38ba8";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = colors.sub;
+                      e.currentTarget.style.borderColor = colors.surface2;
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+
+                {expanded && (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: "6px",
+                      padding: "0 12px 12px 48px",
+                      borderLeft: `1px solid ${colors.surface2}`,
+                      marginLeft: "24px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: "11px",
+                        color: colors.sub,
+                        fontWeight: 600,
+                        letterSpacing: "0.03em",
+                        textTransform: "uppercase",
+                        padding: "2px 0",
+                      }}
+                    >
+                      Plugins in this collection
+                    </div>
+                    {collection.plugins.map((plugin) => (
+                      <div
+                        key={`${plugin.repo_dir_name}:${plugin.name}`}
+                        style={{
+                          background: colors.bg,
+                          border: `1px solid ${colors.surface2}`,
+                          borderRadius: "8px",
+                          padding: "8px 10px",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "10px",
+                          }}
+                        >
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontSize: "12px",
+                                fontWeight: 600,
+                                color: colors.text,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "6px",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: "10px",
+                                  fontWeight: 700,
+                                  letterSpacing: "0.04em",
+                                  color: colors.sub,
+                                  border: `1px solid ${colors.surface2}`,
+                                  borderRadius: "999px",
+                                  padding: "1px 6px",
+                                }}
+                              >
+                                PLUGIN
+                              </span>
+                              <span>{plugin.icon ?? "🔌"}</span>
+                              <span>{plugin.name}</span>
+                              <span style={{ color: colors.sub, fontWeight: 400 }}>
+                                v{plugin.version}
+                              </span>
+                              {plugin.keyword && (
+                                <span
+                                  style={{
+                                    fontSize: "10px",
+                                    background: `${colors.accent}22`,
+                                    border: `1px solid ${colors.accent}44`,
+                                    borderRadius: "999px",
+                                    padding: "1px 6px",
+                                    color: colors.accent,
+                                  }}
+                                >
+                                  {plugin.keyword}
+                                </span>
+                              )}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: "12px",
+                                color: colors.sub,
+                                marginTop: "2px",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {plugin.description}
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => handleUpdateRepo(plugin.repo_dir_name)}
+                            disabled={status.type === "loading" || !plugin.repo_is_git_repo}
+                            style={{
+                              background: "none",
+                              border: `1px solid ${colors.surface2}`,
+                              borderRadius: "8px",
+                              padding: "5px 10px",
+                              color: plugin.repo_is_git_repo ? colors.text : colors.sub,
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              cursor: plugin.repo_is_git_repo ? "pointer" : "default",
+                              opacity: plugin.repo_is_git_repo ? 1 : 0.5,
+                              transition: "opacity 150ms, border-color 150ms, color 150ms",
+                              flexShrink: 0,
+                            }}
+                            title={
+                              plugin.repo_is_git_repo
+                                ? "Update this plugin"
+                                : "This plugin repo is not a git repository"
+                            }
+                          >
+                            Update
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>

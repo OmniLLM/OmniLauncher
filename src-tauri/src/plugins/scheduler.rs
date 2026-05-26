@@ -40,7 +40,8 @@ impl Schedule {
         if let Some(rest) = s.strip_prefix("every:") {
             rest.parse::<u64>().ok().map(Schedule::Interval)
         } else {
-            s.strip_prefix("cron:").map(|rest| Schedule::Cron(rest.to_string()))
+            s.strip_prefix("cron:")
+                .map(|rest| Schedule::Cron(rest.to_string()))
         }
     }
 

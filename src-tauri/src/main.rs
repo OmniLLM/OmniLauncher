@@ -237,6 +237,8 @@ pub fn run() {
             install_skill,
             set_window_geometry,
             install_plugin,
+            update_plugin,
+            update_plugin_collection,
             list_plugins,
             remove_plugin,
             vision_analyze,
@@ -317,7 +319,9 @@ async fn search(
     Ok(pm.query_all(&query).await)
 }
 
-async fn try_start_ai_request(state: &AppState) -> Result<tokio::sync::SemaphorePermit<'_>, String> {
+async fn try_start_ai_request(
+    state: &AppState,
+) -> Result<tokio::sync::SemaphorePermit<'_>, String> {
     state
         .ai_in_flight
         .try_acquire()
@@ -407,9 +411,7 @@ async fn slash_preview(
                 Ok(pm.query_all(&format!("> {}", arg)).await)
             }
         }
-        "/grep" | "/g" => {
-            Ok(vec![])
-        }
+        "/grep" | "/g" => Ok(vec![]),
         "/web" | "/w" => {
             if arg.is_empty() {
                 return Ok(vec![]);
@@ -827,6 +829,24 @@ async fn install_plugin(source: String, target_dir: Option<String>) -> Result<St
 }
 
 #[tauri::command]
+async fn update_plugin(name: String) -> Result<String, String> {
+    log::debug!("update_plugin invoked with name={name}");
+    omnilauncher_lib::plugins::plugin_manager_cmd::update_plugin(name).await
+}
+
+#[tauri::command]
+async fn update_plugin_collection(
+    source: String,
+    plugin_dirs: Vec<String>,
+) -> Result<String, String> {
+    log::debug!(
+        "update_plugin_collection invoked with source={source} plugin_dirs={plugin_dirs:?}"
+    );
+    omnilauncher_lib::plugins::plugin_manager_cmd::update_plugin_collection(source, plugin_dirs)
+        .await
+}
+
+#[tauri::command]
 fn list_plugins() -> Vec<serde_json::Value> {
     log::trace!("list_plugins invoked");
     omnilauncher_lib::plugins::plugin_manager_cmd::list_plugins()
@@ -987,7 +1007,9 @@ mod tests {
             live_server_port: 0,
         };
 
-        let first = try_start_ai_request(&state).await.expect("first request starts");
+        let first = try_start_ai_request(&state)
+            .await
+            .expect("first request starts");
         let second = try_start_ai_request(&state).await;
 
         assert_eq!(second.unwrap_err(), "AI response is still in progress");

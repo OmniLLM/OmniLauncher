@@ -1,3 +1,4 @@
+use crate::path_config;
 /// Script Runner Plugin
 ///
 /// Inspired by Sol (MIT) — watches a user scripts folder and surfaces any
@@ -14,7 +15,6 @@
 /// Usage:  type "scripts" or just "sc " to filter
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
-use crate::path_config;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
