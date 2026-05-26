@@ -130,6 +130,7 @@ pub mod screenshot;
 pub mod script_runner;
 pub mod selection;
 pub mod shell_plugin;
+pub mod show_desktop;
 pub mod snippets;
 pub mod sys_info;
 pub mod system_commands;
