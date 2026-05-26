@@ -1,13 +1,20 @@
 /// Screenshot Plugin
 ///
-/// Inspired by Wox (GPL-3.0) — take screenshots and search screenshot history.
-/// Uses system tools: `scrot` / `gnome-screenshot` / `import` on Linux,
-/// `screencapture` on macOS.  OCR via `tesseract` if installed.
+/// Cross-platform screenshot support:
+///
+/// **Windows** (PowerToys-style):
+///   - Area selection: triggers `ms-screenclip:` (Snip & Sketch overlay, same as Win+Shift+S)
+///   - Full screen: PowerShell + System.Drawing BitBlt capture
+///   - Lists recent screenshots from %USERPROFILE%\Pictures\Screenshots
+///
+/// **Linux**: scrot / gnome-screenshot / import (ImageMagick)
+/// **macOS**: screencapture
 ///
 /// Commands:
 ///   `ss`          — list recent screenshots
-///   `ss new`      — take a new screenshot (saves to ~/Pictures/Screenshots/)
-///   `ss <query>`  — search screenshots by OCR text
+///   `ss new`      — take a new screenshot (area selection)
+///   `ss full`     — take a full-screen screenshot
+///   `ss <query>`  — search screenshots by filename (or OCR text if tesseract installed)
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use chrono::Local;
@@ -23,45 +30,58 @@ fn screenshots_dir() -> PathBuf {
         .join("Screenshots")
 }
 
-fn take_screenshot() -> Result<PathBuf, String> {
-    let dir = screenshots_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+// ─── Platform-specific capture ────────────────────────────────────────────────
 
-    let filename = format!("screenshot_{}.png", Local::now().format("%Y%m%d_%H%M%S"));
-    let path = dir.join(&filename);
-
-    // Try tools in order of preference
-    let tools: &[(&str, Vec<&str>)] = &[
-        ("scrot", vec!["-s", path.to_str().unwrap_or("")]),
-        (
-            "gnome-screenshot",
-            vec!["-a", "-f", path.to_str().unwrap_or("")],
-        ),
-        (
-            "import",
-            vec!["-window", "root", path.to_str().unwrap_or("")],
-        ),
-        (
-            "screencapture",
-            vec!["-i", path.to_str().unwrap_or("")],
-        ), // macOS
-    ];
-
-    for (tool, args) in tools {
-        if which_tool(tool) {
-            let status = std::process::Command::new(tool)
-                .args(args)
-                .status()
-                .map_err(|e| e.to_string())?;
-            if status.success() && path.exists() {
-                return Ok(path);
-            }
-        }
+#[cfg(target_os = "windows")]
+fn take_screenshot_fullscreen(path: &PathBuf) -> Result<(), String> {
+    // PowerShell: capture primary screen via System.Drawing BitBlt
+    let ps = format!(
+        r#"Add-Type -AssemblyName System.Windows.Forms,System.Drawing;
+$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;
+$bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height);
+$g = [System.Drawing.Graphics]::FromImage($bmp);
+$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size);
+$bmp.Save('{path}');
+$g.Dispose(); $bmp.Dispose()"#,
+        path = path.to_str().unwrap_or("").replace('\'', "''")
+    );
+    let status = std::process::Command::new("powershell")
+        .args(["-WindowStyle", "Hidden", "-NoProfile", "-Command", &ps])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() && path.exists() {
+        Ok(())
+    } else {
+        Err("PowerShell screenshot failed".to_string())
     }
-
-    Err("No screenshot tool found. Install scrot: sudo apt install scrot".to_string())
 }
 
+#[cfg(target_os = "windows")]
+fn area_select_action(dir: &PathBuf) -> String {
+    // Open Windows Snip & Sketch overlay (same as Win+Shift+S).
+    // The user draws the snip; Windows saves it to clipboard + the Screenshots folder.
+    // We also pass the dir so the label is informative.
+    let _ = dir; // used for display only
+    "powershell -WindowStyle Hidden -NoProfile -Command \"Start-Process 'ms-screenclip:'\"".to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn fullscreen_action(path: &PathBuf) -> String {
+    let ps = format!(
+        r#"Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height); $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); $bmp.Save('{}'); $g.Dispose(); $bmp.Dispose()"#,
+        path.to_str().unwrap_or("").replace('\'', "''")
+    );
+    format!("powershell -WindowStyle Hidden -NoProfile -Command \"{}\"", ps)
+}
+
+#[cfg(target_os = "windows")]
+fn open_file_action(path: &PathBuf) -> String {
+    format!("explorer \"{}\"", path.display())
+}
+
+// ─── Linux ────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
 fn which_tool(tool: &str) -> bool {
     std::process::Command::new("which")
         .arg(tool)
@@ -70,15 +90,72 @@ fn which_tool(tool: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "linux")]
+fn area_select_action(dir: &PathBuf) -> String {
+    let d = dir.display();
+    if which_tool("scrot") {
+        format!("mkdir -p {d} && scrot -s {d}/screenshot_$(date +%Y%m%d_%H%M%S).png")
+    } else if which_tool("gnome-screenshot") {
+        format!("mkdir -p {d} && gnome-screenshot -a -f {d}/screenshot_$(date +%Y%m%d_%H%M%S).png")
+    } else {
+        format!("mkdir -p {d} && import {d}/screenshot_$(date +%Y%m%d_%H%M%S).png")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn fullscreen_action(path: &PathBuf) -> String {
+    let p = path.display();
+    if which_tool("scrot") {
+        format!("scrot {p}")
+    } else if which_tool("gnome-screenshot") {
+        format!("gnome-screenshot -f {p}")
+    } else {
+        format!("import -window root {p}")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_file_action(path: &PathBuf) -> String {
+    format!("xdg-open \"{}\"", path.display())
+}
+
+// ─── macOS ────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn area_select_action(dir: &PathBuf) -> String {
+    format!(
+        "mkdir -p {d} && screencapture -i {d}/screenshot_$(date +%Y%m%d_%H%M%S).png",
+        d = dir.display()
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn fullscreen_action(path: &PathBuf) -> String {
+    format!("screencapture {}", path.display())
+}
+
+#[cfg(target_os = "macos")]
+fn open_file_action(path: &PathBuf) -> String {
+    format!("open \"{}\"", path.display())
+}
+
+// ─── Shared helpers ───────────────────────────────────────────────────────────
+
 fn ocr_text(path: &PathBuf) -> Option<String> {
-    if !which_tool("tesseract") {
+    // Only attempt if tesseract is available
+    let ok = std::process::Command::new("tesseract")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !ok {
         return None;
     }
     let out = std::process::Command::new("tesseract")
         .arg(path)
         .arg("stdout")
         .arg("-l")
-        .arg("eng+chi_sim") // English + Simplified Chinese
+        .arg("eng+chi_sim")
         .output()
         .ok()?;
     if out.status.success() {
@@ -146,6 +223,15 @@ fn file_age_label(path: &PathBuf) -> String {
     String::new()
 }
 
+fn new_screenshot_path() -> PathBuf {
+    screenshots_dir().join(format!(
+        "screenshot_{}.png",
+        Local::now().format("%Y%m%d_%H%M%S")
+    ))
+}
+
+// ─── Plugin impl ──────────────────────────────────────────────────────────────
+
 #[async_trait]
 impl Plugin for ScreenshotPlugin {
     fn name(&self) -> &str {
@@ -178,38 +264,59 @@ impl Plugin for ScreenshotPlugin {
             return vec![];
         }
 
-        // "ss new" → take a screenshot
-        if filter == "new" || filter == "新建" {
+        let dir = screenshots_dir();
+        let _ = std::fs::create_dir_all(&dir);
+
+        // "ss new" → area selection
+        if filter == "new" || filter == "新建" || filter == "area" {
             return vec![QueryResult {
                 id: "screenshot:new".to_string(),
-                title: "📸 Take New Screenshot".to_string(),
+                title: "📸 Take Screenshot (Area)".to_string(),
                 subtitle: Some("Select area to capture".to_string()),
                 icon: Some("📸".to_string()),
                 score: 100,
                 action_type: "shell".to_string(),
-                action_data: format!(
-                    "mkdir -p {} && scrot -s {}/screenshot_$(date +%Y%m%d_%H%M%S).png",
-                    screenshots_dir().display(),
-                    screenshots_dir().display()
-                ),
+                action_data: area_select_action(&dir),
+            }];
+        }
+
+        // "ss full" → full-screen capture
+        if filter == "full" || filter == "全屏" {
+            let path = new_screenshot_path();
+            return vec![QueryResult {
+                id: "screenshot:full".to_string(),
+                title: "🖥 Take Full-Screen Screenshot".to_string(),
+                subtitle: Some(format!("Saves to {}", path.display())),
+                icon: Some("🖥".to_string()),
+                score: 100,
+                action_type: "shell".to_string(),
+                action_data: fullscreen_action(&path),
             }];
         }
 
         let mut results = vec![];
 
-        // Always offer "take new screenshot" as first item when no filter
+        // Top item: area selection
         if filter.is_empty() {
             results.push(QueryResult {
                 id: "screenshot:new".to_string(),
-                title: "📸 Take New Screenshot".to_string(),
-                subtitle: Some(format!("Saves to {}", screenshots_dir().display())),
+                title: "📸 Take Screenshot (Area)".to_string(),
+                subtitle: Some("Select area to capture → clipboard + file".to_string()),
                 icon: Some("📸".to_string()),
+                score: 95,
+                action_type: "shell".to_string(),
+                action_data: area_select_action(&dir),
+            });
+            // Second item: full-screen
+            let path = new_screenshot_path();
+            results.push(QueryResult {
+                id: "screenshot:full".to_string(),
+                title: "🖥 Take Full-Screen Screenshot".to_string(),
+                subtitle: Some(format!("Saves to {}", dir.display())),
+                icon: Some("🖥".to_string()),
                 score: 90,
                 action_type: "shell".to_string(),
-                action_data: format!(
-                    "mkdir -p {d} && scrot -s {d}/screenshot_$(date +%Y%m%d_%H%M%S).png",
-                    d = screenshots_dir().display()
-                ),
+                action_data: fullscreen_action(&path),
             });
         }
 
@@ -222,10 +329,8 @@ impl Plugin for ScreenshotPlugin {
                 .to_string();
             let age = file_age_label(&path);
 
-            // Filter by filename or OCR text
             if !filter.is_empty() {
                 let matches_name = filename.to_lowercase().contains(&filter);
-                // For OCR search, only run if filename doesn't already match
                 if !matches_name {
                     let ocr = ocr_text(&path).unwrap_or_default();
                     if !ocr.to_lowercase().contains(&filter) {
@@ -247,7 +352,7 @@ impl Plugin for ScreenshotPlugin {
                 icon: Some("🖼".to_string()),
                 score: if filter.is_empty() { 70 } else { 80 },
                 action_type: "shell".to_string(),
-                action_data: format!("xdg-open {}", path.display()),
+                action_data: open_file_action(&path),
             });
         }
 
@@ -259,14 +364,14 @@ impl Plugin for ScreenshotPlugin {
             "type": "function",
             "function": {
                 "name": "take_screenshot",
-                "description": "Take a screenshot of the screen or a selected area",
+                "description": "Take a screenshot. On Windows uses Snip & Sketch (area) or PowerShell (fullscreen). On Linux uses scrot/gnome-screenshot.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "mode": {
                             "type": "string",
                             "enum": ["fullscreen", "selection"],
-                            "description": "Capture mode: fullscreen or interactive selection"
+                            "description": "fullscreen = capture entire screen; selection = interactive area picker"
                         }
                     },
                     "required": []
@@ -279,26 +384,60 @@ impl Plugin for ScreenshotPlugin {
         let mode = args["mode"].as_str().unwrap_or("selection");
         let dir = screenshots_dir();
         let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join(format!(
-            "screenshot_{}.png",
-            Local::now().format("%Y%m%d_%H%M%S")
-        ));
 
-        let result = if mode == "fullscreen" {
-            std::process::Command::new("scrot")
-                .arg(path.to_str().unwrap_or(""))
-                .status()
-        } else {
-            std::process::Command::new("scrot")
-                .arg("-s")
-                .arg(path.to_str().unwrap_or(""))
-                .status()
-        };
+        if mode == "selection" {
+            // For selection mode, fire off the OS snip tool and return immediately
+            let action = area_select_action(&dir);
+            let result = if cfg!(target_os = "windows") {
+                std::process::Command::new("powershell")
+                    .args(["-WindowStyle", "Hidden", "-NoProfile", "-Command",
+                        "Start-Process 'ms-screenclip:'"])
+                    .status()
+            } else {
+                std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&action)
+                    .status()
+            };
+            return match result {
+                Ok(_) => "Snip overlay opened — draw your selection".to_string(),
+                Err(e) => format!("Error: {}", e),
+            };
+        }
 
-        match result {
-            Ok(s) if s.success() => format!("Screenshot saved to {}", path.display()),
-            Ok(_) => "Screenshot failed or was cancelled".to_string(),
-            Err(e) => format!("Error: {} — install scrot: sudo apt install scrot", e),
+        // Fullscreen capture
+        let path = new_screenshot_path();
+
+        #[cfg(target_os = "windows")]
+        {
+            let ps = format!(
+                r#"Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height); $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); $bmp.Save('{}'); $g.Dispose(); $bmp.Dispose()"#,
+                path.to_str().unwrap_or("").replace('\'', "''")
+            );
+            let result = std::process::Command::new("powershell")
+                .args(["-WindowStyle", "Hidden", "-NoProfile", "-Command", &ps])
+                .status();
+            return match result {
+                Ok(s) if s.success() => format!("Screenshot saved to {}", path.display()),
+                Ok(_) => "Screenshot failed".to_string(),
+                Err(e) => format!("Error: {}", e),
+            };
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let action = fullscreen_action(&path);
+            let result = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&action)
+                .status();
+            match result {
+                Ok(s) if s.success() && path.exists() => {
+                    format!("Screenshot saved to {}", path.display())
+                }
+                Ok(_) => "Screenshot failed or was cancelled".to_string(),
+                Err(e) => format!("Error: {}", e),
+            }
         }
     }
 }
