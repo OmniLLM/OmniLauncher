@@ -16,11 +16,12 @@ fn ensure_ext_plugins_dir() -> Result<PathBuf, String> {
 /// https://github.com/user/my-plugin  →  "my-plugin"
 /// /home/user/projects/my-plugin      →  "my-plugin"
 fn dir_name_from_source(source: &str) -> String {
-    let base = source
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
+    let base = source.trim_end_matches('/').trim_end_matches(".git");
 
-    base.rsplit(['/', ':']).next().unwrap_or("plugin").to_string()
+    base.rsplit(['/', ':'])
+        .next()
+        .unwrap_or("plugin")
+        .to_string()
 }
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
@@ -55,7 +56,12 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
     if is_remote {
         // Clone the repo
         let output = tokio::process::Command::new("git")
-            .args(["clone", "--depth=1", &source, dest.to_str().unwrap_or(&dir_name)])
+            .args([
+                "clone",
+                "--depth=1",
+                &source,
+                dest.to_str().unwrap_or(&dir_name),
+            ])
             .output()
             .await
             .map_err(|e| format!("Failed to spawn git: {e}"))?;
@@ -84,9 +90,13 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
         {
             // On Windows, try junction (no admin required), then copy
             let output = std::process::Command::new("cmd")
-                .args(["/C", "mklink", "/J",
+                .args([
+                    "/C",
+                    "mklink",
+                    "/J",
                     dest.to_str().unwrap_or(""),
-                    src_path.to_str().unwrap_or("")])
+                    src_path.to_str().unwrap_or(""),
+                ])
                 .output()
                 .map_err(|e| format!("Failed to create junction: {e}"))?;
 
@@ -138,7 +148,8 @@ pub fn list_plugins() -> Vec<serde_json::Value> {
             let path = entry.path();
             if path.is_dir() {
                 if let Some(manifest) = load_manifest(&path) {
-                    let mut val = serde_json::to_value(&manifest).unwrap_or(serde_json::Value::Null);
+                    let mut val =
+                        serde_json::to_value(&manifest).unwrap_or(serde_json::Value::Null);
                     // Attach the directory name so the UI can reference it
                     if let serde_json::Value::Object(ref mut map) = val {
                         map.insert(
@@ -170,7 +181,11 @@ pub async fn remove_plugin(name: String) -> Result<(), String> {
 
     // If the path is a symlink (Unix), just remove the symlink
     #[cfg(unix)]
-    if target.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    if target
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
         std::fs::remove_file(&target)
             .map_err(|e| format!("Failed to remove plugin symlink: {e}"))?;
         log::info!("Removed external plugin symlink '{}'", name);

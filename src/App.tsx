@@ -604,47 +604,50 @@ export default function App() {
     };
   }, [focusInput]);
 
-  const doAiQuery = useCallback(async (q: string) => {
-    if (!q.trim()) return;
+  const doAiQuery = useCallback(
+    async (q: string) => {
+      if (!q.trim()) return;
 
-    const userTurn: ConversationTurn = { role: "user", content: q };
-    const pendingAiTurn: ConversationTurn = {
-      role: "assistant",
-      content: "",
-      tools_used: [],
-      isStreaming: true,
-    };
-    setConversationHistory((prev) => [...prev, userTurn, pendingAiTurn]);
-    setLoading(true);
-    setResults([]);
+      const userTurn: ConversationTurn = { role: "user", content: q };
+      const pendingAiTurn: ConversationTurn = {
+        role: "assistant",
+        content: "",
+        tools_used: [],
+        isStreaming: true,
+      };
+      setConversationHistory((prev) => [...prev, userTurn, pendingAiTurn]);
+      setLoading(true);
+      setResults([]);
 
-    try {
-      const res = await invoke<AiResponse>("ai_query", { query: q });
-      setConversationHistory((prev) => {
-        const next = [...prev];
-        next[next.length - 1] = {
-          role: "assistant",
-          content: res.content,
-          tools_used: res.tools_used,
-          isStreaming: false,
-        };
-        return next;
-      });
-    } catch (e) {
-      setConversationHistory((prev) => {
-        const next = [...prev];
-        next[next.length - 1] = {
-          role: "assistant",
-          content: `Error: ${e}`,
-          isStreaming: false,
-        };
-        return next;
-      });
-    } finally {
-      setLoading(false);
-      setTimeout(() => focusInput(), 50);
-    }
-  }, [focusInput]);
+      try {
+        const res = await invoke<AiResponse>("ai_query", { query: q });
+        setConversationHistory((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = {
+            role: "assistant",
+            content: res.content,
+            tools_used: res.tools_used,
+            isStreaming: false,
+          };
+          return next;
+        });
+      } catch (e) {
+        setConversationHistory((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = {
+            role: "assistant",
+            content: `Error: ${e}`,
+            isStreaming: false,
+          };
+          return next;
+        });
+      } finally {
+        setLoading(false);
+        setTimeout(() => focusInput(), 50);
+      }
+    },
+    [focusInput],
+  );
 
   const handleQueryChange = useCallback(
     (value: string) => {
@@ -740,90 +743,93 @@ export default function App() {
     [aiModeEnabled, doAiQuery, handleNewConversation],
   );
 
-  const handleExecute = useCallback(async (result: QueryResult) => {
-    if (result.action_type === "open_plugin_manager") {
-      setShowPluginManager(true);
-      setResults([]);
-      setQuery("");
-      return;
-    }
-
-    if (result.action_type === "help_command") {
-      setQuery(result.action_data);
-      setResults([]);
-      setTimeout(() => focusInput(), 50);
-      return;
-    }
-
-    if (result.action_type === "slash_complete") {
-      setQuery(result.action_data);
-      setResults([]);
-      setTimeout(() => focusInput(), 50);
-      return;
-    }
-
-    if (result.action_type === "copy") {
-      try {
-        await navigator.clipboard.writeText(result.action_data);
-      } catch {
-        console.log("Copy:", result.action_data);
+  const handleExecute = useCallback(
+    async (result: QueryResult) => {
+      if (result.action_type === "open_plugin_manager") {
+        setShowPluginManager(true);
+        setResults([]);
+        setQuery("");
+        return;
       }
-      return;
-    }
 
-    if (result.action_type === "vision_analyze") {
-      const prompt = result.action_data;
-      const userLabel = prompt.trim() || "Describe what you see";
-      const userTurn: ConversationTurn = {
-        role: "user",
-        content: `👁 Vision: ${userLabel}`,
-      };
-      const pendingAiTurn: ConversationTurn = {
-        role: "assistant",
-        content: "",
-        tools_used: [],
-        isStreaming: true,
-      };
-      setAiModeEnabled(true);
-      setConversationHistory((prev) => [...prev, userTurn, pendingAiTurn]);
-      setLoading(true);
-      setResults([]);
-      setQuery("");
+      if (result.action_type === "help_command") {
+        setQuery(result.action_data);
+        setResults([]);
+        setTimeout(() => focusInput(), 50);
+        return;
+      }
+
+      if (result.action_type === "slash_complete") {
+        setQuery(result.action_data);
+        setResults([]);
+        setTimeout(() => focusInput(), 50);
+        return;
+      }
+
+      if (result.action_type === "copy") {
+        try {
+          await navigator.clipboard.writeText(result.action_data);
+        } catch {
+          console.log("Copy:", result.action_data);
+        }
+        return;
+      }
+
+      if (result.action_type === "vision_analyze") {
+        const prompt = result.action_data;
+        const userLabel = prompt.trim() || "Describe what you see";
+        const userTurn: ConversationTurn = {
+          role: "user",
+          content: `👁 Vision: ${userLabel}`,
+        };
+        const pendingAiTurn: ConversationTurn = {
+          role: "assistant",
+          content: "",
+          tools_used: [],
+          isStreaming: true,
+        };
+        setAiModeEnabled(true);
+        setConversationHistory((prev) => [...prev, userTurn, pendingAiTurn]);
+        setLoading(true);
+        setResults([]);
+        setQuery("");
+        try {
+          const response = await invoke<string>("vision_analyze", { prompt });
+          setConversationHistory((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = {
+              role: "assistant",
+              content: response,
+              tools_used: ["vision"],
+              isStreaming: false,
+            };
+            return next;
+          });
+        } catch (e) {
+          setConversationHistory((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = {
+              role: "assistant",
+              content: `Vision analysis failed: ${e}`,
+              isStreaming: false,
+            };
+            return next;
+          });
+        } finally {
+          setLoading(false);
+          setTimeout(() => focusInput(), 150);
+        }
+        return;
+      }
+
       try {
-        const response = await invoke<string>("vision_analyze", { prompt });
-        setConversationHistory((prev) => {
-          const next = [...prev];
-          next[next.length - 1] = {
-            role: "assistant",
-            content: response,
-            tools_used: ["vision"],
-            isStreaming: false,
-          };
-          return next;
-        });
+        await invoke("execute_result", { result });
       } catch (e) {
-        setConversationHistory((prev) => {
-          const next = [...prev];
-          next[next.length - 1] = {
-            role: "assistant",
-            content: `Vision analysis failed: ${e}`,
-            isStreaming: false,
-          };
-          return next;
-        });
-      } finally {
-        setLoading(false);
-        setTimeout(() => focusInput(), 150);
+        console.error("Execute error:", e);
       }
-      return;
-    }
-
-    try {
-      await invoke("execute_result", { result });
-    } catch (e) {
-      console.error("Execute error:", e);
-    }
-  }, [focusInput]);
+    },
+    [focusInput],
+  );
   useEffect(() => {
     if (isAiMode && chatScrollRef.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
@@ -847,7 +853,8 @@ export default function App() {
   }, []);
 
   // ── Layout geometry ────────────────────────────────────────────────────────
-  const launcherHasContent = results.length > 0 || showSettings || showPluginManager;
+  const launcherHasContent =
+    results.length > 0 || showSettings || showPluginManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
   const panelHeight = isAiMode ? 560 : launcherHasContent ? 520 : 56;
   const windowHeight = `${panelHeight}px`;
@@ -1024,14 +1031,17 @@ export default function App() {
         )}
 
         {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
-        {!isAiMode && !showSettings && !showPluginManager && results.length > 0 && (
-          <ResultList
-            results={results}
-            query={query}
-            onExecute={handleExecute}
-            colors={colors}
-          />
-        )}
+        {!isAiMode &&
+          !showSettings &&
+          !showPluginManager &&
+          results.length > 0 && (
+            <ResultList
+              results={results}
+              query={query}
+              onExecute={handleExecute}
+              colors={colors}
+            />
+          )}
 
         {/* ── AI MODE: slash command suggestions overlay ────────────────── */}
         {isAiMode && results.length > 0 && isSlashPrefix(query) && (
@@ -1052,7 +1062,9 @@ export default function App() {
           loading={loading}
           colors={colors}
           onSettingsClick={() => setShowSettings((s) => !s)}
-          showHintBar={!isAiMode && (isHelpHintQuery(query) || query.trim() === "")}
+          showHintBar={
+            !isAiMode && (isHelpHintQuery(query) || query.trim() === "")
+          }
           inputRef={inputRef}
         />
       </div>

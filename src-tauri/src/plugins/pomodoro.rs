@@ -22,8 +22,8 @@ fn state_path() -> PathBuf {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct PomodoroState {
-    mode: String,        // "work" | "short_break" | "long_break" | "idle"
-    started_at: i64,     // unix seconds
+    mode: String,    // "work" | "short_break" | "long_break" | "idle"
+    started_at: i64, // unix seconds
     duration_secs: u64,
     session_count: u32,
 }
@@ -92,7 +92,10 @@ fn notify_script(title: &str, msg: &str) -> String {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        format!("notify-send '{}' '{}' 2>/dev/null || echo '{}: {}'", title, msg, title, msg)
+        format!(
+            "notify-send '{}' '{}' 2>/dev/null || echo '{}: {}'",
+            title, msg, title, msg
+        )
     }
 }
 
@@ -108,9 +111,7 @@ fn timer_shell(secs: u64, done_title: &str, done_msg: &str, state_path: &str) ->
     }
     #[cfg(not(target_os = "windows"))]
     {
-        format!(
-            "sh -c 'sleep {secs}; {notify}; rm -f \"{state_path}\"'"
-        )
+        format!("sh -c 'sleep {secs}; {notify}; rm -f \"{state_path}\"'")
     }
 }
 
@@ -143,9 +144,20 @@ impl Plugin for PomodoroPlugin {
                 _ => "⏸️ Idle",
             };
             let (icon, subtitle) = if done {
-                ("✅", format!("{} — DONE! (session #{})", mode_label, s.session_count))
+                (
+                    "✅",
+                    format!("{} — DONE! (session #{})", mode_label, s.session_count),
+                )
             } else {
-                ("⏱️", format!("{} — {} remaining (session #{})", mode_label, format_remaining(s.duration_secs, s.started_at), s.session_count))
+                (
+                    "⏱️",
+                    format!(
+                        "{} — {} remaining (session #{})",
+                        mode_label,
+                        format_remaining(s.duration_secs, s.started_at),
+                        s.session_count
+                    ),
+                )
             };
             Some(QueryResult {
                 id: "pomo:status".to_string(),
@@ -242,7 +254,10 @@ impl Plugin for PomodoroPlugin {
             "status" => {
                 if let Some(s) = load_state() {
                     let remaining = format_remaining(s.duration_secs, s.started_at);
-                    format!("Mode: {}, Remaining: {}, Session: #{}", s.mode, remaining, s.session_count)
+                    format!(
+                        "Mode: {}, Remaining: {}, Session: #{}",
+                        s.mode, remaining, s.session_count
+                    )
                 } else {
                     "No active pomodoro".to_string()
                 }

@@ -34,7 +34,7 @@ const DEFAULT_DIR = "~/.omnilauncher/plugins (default)";
 export default function PluginManager({ colors, onClose }: PluginManagerProps) {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [source, setSource] = useState("");
-  const [targetDir, setTargetDir] = useState<string>("");  // "" = default
+  const [targetDir, setTargetDir] = useState<string>(""); // "" = default
   const [extraDirs, setExtraDirs] = useState<string[]>([]);
   const [status, setStatus] = useState<{
     type: "idle" | "loading" | "success" | "error";
@@ -348,5 +348,3 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
     </div>
   );
 }
-
-interface PluginInfo {

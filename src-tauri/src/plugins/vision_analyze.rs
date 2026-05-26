@@ -43,7 +43,8 @@ impl Plugin for VisionAnalyzePlugin {
             .or_else(|| lower.strip_prefix("vq "))
         {
             rest.trim().to_string()
-        } else if lower == "vq" || lower == "vision" || lower == "视觉" || lower == "截图分析" {
+        } else if lower == "vq" || lower == "vision" || lower == "视觉" || lower == "截图分析"
+        {
             String::new()
         } else {
             return vec![];
@@ -58,7 +59,11 @@ impl Plugin for VisionAnalyzePlugin {
             } else {
                 3 // "vq "
             };
-            raw.chars().skip(prefix_len).collect::<String>().trim().to_string()
+            raw.chars()
+                .skip(prefix_len)
+                .collect::<String>()
+                .trim()
+                .to_string()
         };
 
         let display_prompt = if original_prompt.is_empty() {

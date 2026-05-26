@@ -33,22 +33,102 @@ struct Layout {
 }
 
 static LAYOUTS: &[Layout] = &[
-    Layout { keyword: "fullscreen", label: "Fullscreen",      icon: "⛶",  rect: (0.0,  0.0,  1.0,  1.0) },
-    Layout { keyword: "maximize",   label: "Maximize",        icon: "🔲",  rect: (0.0,  0.0,  1.0,  1.0) },
-    Layout { keyword: "left half",  label: "Left Half",       icon: "◧",  rect: (0.0,  0.0,  0.5,  1.0) },
-    Layout { keyword: "right half", label: "Right Half",      icon: "◨",  rect: (0.5,  0.0,  0.5,  1.0) },
-    Layout { keyword: "top half",   label: "Top Half",        icon: "⬒",  rect: (0.0,  0.0,  1.0,  0.5) },
-    Layout { keyword: "bottom half",label: "Bottom Half",     icon: "⬓",  rect: (0.0,  0.5,  1.0,  0.5) },
-    Layout { keyword: "top left",   label: "Top Left Quarter",icon: "◸",  rect: (0.0,  0.0,  0.5,  0.5) },
-    Layout { keyword: "top right",  label: "Top Right Quarter",icon: "◹", rect: (0.5,  0.0,  0.5,  0.5) },
-    Layout { keyword: "bottom left",label: "Bottom Left Quarter",icon: "◺",rect:(0.0,  0.5,  0.5,  0.5) },
-    Layout { keyword: "bottom right",label:"Bottom Right Quarter",icon:"◻",rect:(0.5, 0.5,  0.5,  0.5) },
-    Layout { keyword: "center",     label: "Center (80%)",    icon: "⊡",  rect: (0.1,  0.05, 0.8,  0.9) },
-    Layout { keyword: "wide center",label: "Wide Center",     icon: "▬",  rect: (0.0,  0.1,  1.0,  0.8) },
-    Layout { keyword: "left 70",    label: "Left 70%",        icon: "▏",  rect: (0.0,  0.0,  0.7,  1.0) },
-    Layout { keyword: "right 70",   label: "Right 70%",       icon: "▕",  rect: (0.3,  0.0,  0.7,  1.0) },
-    Layout { keyword: "left 30",    label: "Left 30%",        icon: "▎",  rect: (0.0,  0.0,  0.3,  1.0) },
-    Layout { keyword: "right 30",   label: "Right 30%",       icon: "▊",  rect: (0.7,  0.0,  0.3,  1.0) },
+    Layout {
+        keyword: "fullscreen",
+        label: "Fullscreen",
+        icon: "⛶",
+        rect: (0.0, 0.0, 1.0, 1.0),
+    },
+    Layout {
+        keyword: "maximize",
+        label: "Maximize",
+        icon: "🔲",
+        rect: (0.0, 0.0, 1.0, 1.0),
+    },
+    Layout {
+        keyword: "left half",
+        label: "Left Half",
+        icon: "◧",
+        rect: (0.0, 0.0, 0.5, 1.0),
+    },
+    Layout {
+        keyword: "right half",
+        label: "Right Half",
+        icon: "◨",
+        rect: (0.5, 0.0, 0.5, 1.0),
+    },
+    Layout {
+        keyword: "top half",
+        label: "Top Half",
+        icon: "⬒",
+        rect: (0.0, 0.0, 1.0, 0.5),
+    },
+    Layout {
+        keyword: "bottom half",
+        label: "Bottom Half",
+        icon: "⬓",
+        rect: (0.0, 0.5, 1.0, 0.5),
+    },
+    Layout {
+        keyword: "top left",
+        label: "Top Left Quarter",
+        icon: "◸",
+        rect: (0.0, 0.0, 0.5, 0.5),
+    },
+    Layout {
+        keyword: "top right",
+        label: "Top Right Quarter",
+        icon: "◹",
+        rect: (0.5, 0.0, 0.5, 0.5),
+    },
+    Layout {
+        keyword: "bottom left",
+        label: "Bottom Left Quarter",
+        icon: "◺",
+        rect: (0.0, 0.5, 0.5, 0.5),
+    },
+    Layout {
+        keyword: "bottom right",
+        label: "Bottom Right Quarter",
+        icon: "◻",
+        rect: (0.5, 0.5, 0.5, 0.5),
+    },
+    Layout {
+        keyword: "center",
+        label: "Center (80%)",
+        icon: "⊡",
+        rect: (0.1, 0.05, 0.8, 0.9),
+    },
+    Layout {
+        keyword: "wide center",
+        label: "Wide Center",
+        icon: "▬",
+        rect: (0.0, 0.1, 1.0, 0.8),
+    },
+    Layout {
+        keyword: "left 70",
+        label: "Left 70%",
+        icon: "▏",
+        rect: (0.0, 0.0, 0.7, 1.0),
+    },
+    Layout {
+        keyword: "right 70",
+        label: "Right 70%",
+        icon: "▕",
+        rect: (0.3, 0.0, 0.7, 1.0),
+    },
+    Layout {
+        keyword: "left 30",
+        label: "Left 30%",
+        icon: "▎",
+        rect: (0.0, 0.0, 0.3, 1.0),
+    },
+    Layout {
+        keyword: "right 30",
+        label: "Right 30%",
+        icon: "▊",
+        rect: (0.7, 0.0, 0.3, 1.0),
+    },
 ];
 
 /// Build the shell command to move the active window to the given rect on the screen.
@@ -149,7 +229,12 @@ impl Plugin for WindowResizePlugin {
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        let search = q.raw.strip_prefix("resize ").unwrap_or("").trim().to_lowercase();
+        let search = q
+            .raw
+            .strip_prefix("resize ")
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
 
         let mut results: Vec<QueryResult> = LAYOUTS
             .iter()
@@ -160,7 +245,11 @@ impl Plugin for WindowResizePlugin {
                     || l.label.to_lowercase().contains(search.as_str())
             })
             .map(|l| {
-                let score = if l.keyword.starts_with(search.as_str()) { 90 } else { 70 };
+                let score = if l.keyword.starts_with(search.as_str()) {
+                    90
+                } else {
+                    70
+                };
                 QueryResult {
                     id: format!("resize:{}", l.keyword),
                     title: format!("{} {}", l.icon, l.label),
@@ -179,7 +268,7 @@ impl Plugin for WindowResizePlugin {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.cmp(&a.score));
+        results.sort_by_key(|r| std::cmp::Reverse(r.score));
         results.truncate(10);
         results
     }

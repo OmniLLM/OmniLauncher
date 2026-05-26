@@ -25,9 +25,7 @@ fn db_path() -> PathBuf {
 fn open_db() -> rusqlite::Result<Connection> {
     let dir = config_dir();
     std::fs::create_dir_all(&dir).map_err(|e| {
-        rusqlite::Error::InvalidPath(
-            format!("Failed to create config dir {:?}: {}", dir, e).into(),
-        )
+        rusqlite::Error::InvalidPath(format!("Failed to create config dir {:?}: {}", dir, e).into())
     })?;
     let conn = Connection::open(db_path())?;
     db::run_migrations(&conn)?;
@@ -50,10 +48,8 @@ impl Schedule {
     pub fn from_stored(s: &str) -> Option<Self> {
         if let Some(rest) = s.strip_prefix("every:") {
             rest.parse::<u64>().ok().map(Schedule::Interval)
-        } else if let Some(rest) = s.strip_prefix("cron:") {
-            Some(Schedule::Cron(rest.to_string()))
         } else {
-            None
+            s.strip_prefix("cron:").map(|rest| Schedule::Cron(rest.to_string()))
         }
     }
 
@@ -105,7 +101,8 @@ fn next_cron_time(expr: &str, from_secs: i64) -> Option<i64> {
     if fields.len() != 5 {
         return None;
     }
-    let (min_f, hour_f, _dom_f, _mon_f, _dow_f) = (fields[0], fields[1], fields[2], fields[3], fields[4]);
+    let (min_f, hour_f, _dom_f, _mon_f, _dow_f) =
+        (fields[0], fields[1], fields[2], fields[3], fields[4]);
 
     // Very simple: we only support */N and * for now.
     // Advance by 1 minute each step up to 366*24*60 minutes.
@@ -129,7 +126,7 @@ fn field_matches(field: &str, val: u32) -> bool {
     }
     if let Some(step) = field.strip_prefix("*/") {
         if let Ok(n) = step.parse::<u32>() {
-            return n > 0 && val % n == 0;
+            return n > 0 && val.is_multiple_of(n);
         }
     }
     if let Ok(n) = field.parse::<u32>() {
@@ -252,10 +249,13 @@ fn tick_scheduler() {
         if !job.enabled {
             continue;
         }
-        let Some(sched) = Schedule::from_stored(&job.schedule) else { continue };
+        let Some(sched) = Schedule::from_stored(&job.schedule) else {
+            continue;
+        };
 
         // Parse next_run as unix seconds
-        let next: i64 = job.next_run
+        let next: i64 = job
+            .next_run
             .as_deref()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
@@ -377,7 +377,10 @@ impl Plugin for SchedulerPlugin {
         }
 
         // sched del <id>
-        if let Some(rest) = raw.strip_prefix("sched del ").or_else(|| raw.strip_prefix("sched delete ")) {
+        if let Some(rest) = raw
+            .strip_prefix("sched del ")
+            .or_else(|| raw.strip_prefix("sched delete "))
+        {
             let rest = rest.trim();
             if let Ok(id) = rest.parse::<i64>() {
                 return vec![QueryResult {
@@ -393,7 +396,10 @@ impl Plugin for SchedulerPlugin {
         }
 
         // sched off/on <id>
-        if let Some(rest) = raw.strip_prefix("sched off ").or_else(|| raw.strip_prefix("sched disable ")) {
+        if let Some(rest) = raw
+            .strip_prefix("sched off ")
+            .or_else(|| raw.strip_prefix("sched disable "))
+        {
             if let Ok(id) = rest.trim().parse::<i64>() {
                 return vec![QueryResult {
                     id: format!("sched:off:{}", id),
@@ -407,7 +413,10 @@ impl Plugin for SchedulerPlugin {
             }
         }
 
-        if let Some(rest) = raw.strip_prefix("sched on ").or_else(|| raw.strip_prefix("sched enable ")) {
+        if let Some(rest) = raw
+            .strip_prefix("sched on ")
+            .or_else(|| raw.strip_prefix("sched enable "))
+        {
             if let Ok(id) = rest.trim().parse::<i64>() {
                 return vec![QueryResult {
                     id: format!("sched:on:{}", id),
@@ -522,15 +531,15 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
     let rest = rest.trim();
 
     // Extract quoted label
-    let (label, after_label) = if rest.starts_with('"') {
-        if let Some(end) = rest[1..].find('"') {
-            (&rest[1..end + 1], rest[end + 2..].trim())
+    let (label, after_label) = if let Some(stripped) = rest.strip_prefix('"') {
+        if let Some(end) = stripped.find('"') {
+            (&stripped[..end], stripped[end + 1..].trim())
         } else {
             return vec![];
         }
-    } else if rest.starts_with('\'') {
-        if let Some(end) = rest[1..].find('\'') {
-            (&rest[1..end + 1], rest[end + 2..].trim())
+    } else if let Some(stripped) = rest.strip_prefix('\'') {
+        if let Some(end) = stripped.find('\'') {
+            (&stripped[..end], stripped[end + 1..].trim())
         } else {
             return vec![];
         }
@@ -557,7 +566,7 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
                 let sched = Schedule::Interval(secs);
                 let stored = sched.to_stored();
                 return vec![QueryResult {
-                    id: format!("sched:add:preview"),
+                    id: "sched:add:preview".to_string(),
                     title: format!("📅 Add job \"{}\" — {}", label, sched.display()),
                     subtitle: Some(format!("cmd: {}", cmd)),
                     icon: Some("➕".to_string()),
@@ -572,7 +581,10 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
     // Try cron "M H dom mon dow <command>" (5 fields then command)
     let words: Vec<&str> = after_label.splitn(6, ' ').collect();
     if words.len() == 6 {
-        let cron_expr = format!("{} {} {} {} {}", words[0], words[1], words[2], words[3], words[4]);
+        let cron_expr = format!(
+            "{} {} {} {} {}",
+            words[0], words[1], words[2], words[3], words[4]
+        );
         let cmd = words[5];
         // Validate: each of first 5 must look cron-ish
         let looks_cron = words[..5].iter().all(|w| {
@@ -618,10 +630,16 @@ mod tests {
     #[test]
     fn test_schedule_stored_roundtrip() {
         let s = Schedule::Interval(300);
-        assert_eq!(Schedule::from_stored(&s.to_stored()).unwrap().to_stored(), s.to_stored());
+        assert_eq!(
+            Schedule::from_stored(&s.to_stored()).unwrap().to_stored(),
+            s.to_stored()
+        );
 
         let c = Schedule::Cron("0 9 * * *".to_string());
-        assert_eq!(Schedule::from_stored(&c.to_stored()).unwrap().to_stored(), c.to_stored());
+        assert_eq!(
+            Schedule::from_stored(&c.to_stored()).unwrap().to_stored(),
+            c.to_stored()
+        );
     }
 
     #[test]
@@ -670,7 +688,10 @@ mod tests {
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", dir.path().to_str().unwrap());
 
         let plugin = SchedulerPlugin;
-        let q = crate::plugins::Query { raw: "sched".to_string(), terms: vec![] };
+        let q = crate::plugins::Query {
+            raw: "sched".to_string(),
+            terms: vec![],
+        };
         let results = plugin.query(&q).await;
         assert_eq!(results.len(), 1);
         assert!(results[0].title.contains("No scheduled"));

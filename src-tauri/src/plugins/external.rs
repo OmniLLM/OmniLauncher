@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -89,37 +89,33 @@ impl Plugin for ExternalPlugin {
             Ok(Some(output)) => {
                 // Parse {"results": [...]}
                 match serde_json::from_str::<serde_json::Value>(&output) {
-                    Ok(val) => {
-                        val["results"]
-                            .as_array()
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|item| {
-                                        Some(QueryResult {
-                                            id: item["id"].as_str()?.to_string(),
-                                            title: item["title"].as_str()?.to_string(),
-                                            subtitle: item["subtitle"]
-                                                .as_str()
-                                                .map(|s| s.to_string()),
-                                            icon: item["icon"]
-                                                .as_str()
-                                                .map(|s| s.to_string())
-                                                .or_else(|| self.manifest.icon.clone()),
-                                            score: item["score"].as_i64().unwrap_or(50) as i32,
-                                            action_type: item["action_type"]
-                                                .as_str()
-                                                .unwrap_or("shell")
-                                                .to_string(),
-                                            action_data: item["action_data"]
-                                                .as_str()
-                                                .unwrap_or("")
-                                                .to_string(),
-                                        })
+                    Ok(val) => val["results"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|item| {
+                                    Some(QueryResult {
+                                        id: item["id"].as_str()?.to_string(),
+                                        title: item["title"].as_str()?.to_string(),
+                                        subtitle: item["subtitle"].as_str().map(|s| s.to_string()),
+                                        icon: item["icon"]
+                                            .as_str()
+                                            .map(|s| s.to_string())
+                                            .or_else(|| self.manifest.icon.clone()),
+                                        score: item["score"].as_i64().unwrap_or(50) as i32,
+                                        action_type: item["action_type"]
+                                            .as_str()
+                                            .unwrap_or("shell")
+                                            .to_string(),
+                                        action_data: item["action_data"]
+                                            .as_str()
+                                            .unwrap_or("")
+                                            .to_string(),
                                     })
-                                    .collect()
-                            })
-                            .unwrap_or_default()
-                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                     Err(e) => {
                         log::warn!(
                             "External plugin '{}' returned invalid JSON: {e}",
@@ -158,18 +154,12 @@ impl Plugin for ExternalPlugin {
             Ok(Some(output)) => {
                 // Parse {"output": "..."}
                 match serde_json::from_str::<serde_json::Value>(&output) {
-                    Ok(val) => val["output"]
-                        .as_str()
-                        .unwrap_or(&output)
-                        .to_string(),
+                    Ok(val) => val["output"].as_str().unwrap_or(&output).to_string(),
                     Err(_) => output,
                 }
             }
             Ok(None) => {
-                log::warn!(
-                    "External plugin '{}' execute failed",
-                    self.manifest.name
-                );
+                log::warn!("External plugin '{}' execute failed", self.manifest.name);
                 String::new()
             }
             Err(_) => {
@@ -195,16 +185,13 @@ pub fn ext_plugins_dir() -> PathBuf {
 }
 
 /// Read and validate a `plugin.json` from the given directory.
-pub fn load_manifest(dir: &PathBuf) -> Option<PluginManifest> {
+pub fn load_manifest(dir: &Path) -> Option<PluginManifest> {
     let manifest_path = dir.join("plugin.json");
     let content = std::fs::read_to_string(&manifest_path).ok()?;
     match serde_json::from_str::<PluginManifest>(&content) {
         Ok(m) => Some(m),
         Err(e) => {
-            log::warn!(
-                "Invalid plugin.json in {}: {e}",
-                dir.display()
-            );
+            log::warn!("Invalid plugin.json in {}: {e}", dir.display());
             None
         }
     }

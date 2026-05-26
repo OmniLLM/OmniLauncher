@@ -691,7 +691,11 @@ async fn test_todo_view_tool_returns_live_page_url() {
         .execute_tool("todo_memory", serde_json::json!({"action": "view"}))
         .await;
 
-    assert!(result.contains("http://127.0.0.1:1421/todo"), "Got: {}", result);
+    assert!(
+        result.contains("http://127.0.0.1:1421/todo"),
+        "Got: {}",
+        result
+    );
 }
 
 #[tokio::test]

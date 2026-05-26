@@ -74,12 +74,34 @@ fn hour_names() -> Vec<String> {
     (0..24).map(|i: u32| format!("{:02}:00", i)).collect()
 }
 fn month_names() -> Vec<String> {
-    ["January","February","March","April","May","June",
-     "July","August","September","October","November","December"]
-        .iter().map(|s| s.to_string()).collect()
+    [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 fn dow_names_full() -> Vec<&'static str> {
-    vec!["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
+    vec![
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ]
 }
 
 fn explain_field(field: &str, unit: &str, names: &[String]) -> String {
@@ -111,8 +133,12 @@ fn resolve_name(val: &str, names: &[String]) -> String {
 }
 
 fn explain_dom(dom: &str) -> String {
-    if dom == "*" { return String::new(); }
-    if dom == "L" { return "on the last day of the month".to_string(); }
+    if dom == "*" {
+        return String::new();
+    }
+    if dom == "L" {
+        return "on the last day of the month".to_string();
+    }
     if let Some(w) = dom.strip_suffix('W') {
         return format!("on the nearest weekday to day {}", w);
     }
@@ -120,36 +146,59 @@ fn explain_dom(dom: &str) -> String {
 }
 
 fn explain_dow(dow: &str) -> String {
-    if dow == "*" { return String::new(); }
+    if dow == "*" {
+        return String::new();
+    }
     let full = dow_names_full();
     if dow.contains('-') {
         let parts: Vec<&str> = dow.splitn(2, '-').collect();
-        let from = parts[0].parse::<usize>().ok().and_then(|i| full.get(i)).copied().unwrap_or(parts[0]);
-        let to = parts.get(1).and_then(|s| s.parse::<usize>().ok()).and_then(|i| full.get(i)).copied().unwrap_or(parts.get(1).copied().unwrap_or(""));
+        let from = parts[0]
+            .parse::<usize>()
+            .ok()
+            .and_then(|i| full.get(i))
+            .copied()
+            .unwrap_or(parts[0]);
+        let to = parts
+            .get(1)
+            .and_then(|s| s.parse::<usize>().ok())
+            .and_then(|i| full.get(i))
+            .copied()
+            .unwrap_or(parts.get(1).copied().unwrap_or(""));
         return format!("{} through {}", from, to);
     }
     if dow.contains(',') {
-        let names: Vec<&str> = dow.split(',')
-            .map(|p| p.parse::<usize>().ok().and_then(|i| full.get(i)).copied().unwrap_or(p))
+        let names: Vec<&str> = dow
+            .split(',')
+            .map(|p| {
+                p.parse::<usize>()
+                    .ok()
+                    .and_then(|i| full.get(i))
+                    .copied()
+                    .unwrap_or(p)
+            })
             .collect();
         return format!("on {}", names.join(", "));
     }
-    let name = dow.parse::<usize>().ok().and_then(|i| full.get(i)).copied().unwrap_or(dow);
+    let name = dow
+        .parse::<usize>()
+        .ok()
+        .and_then(|i| full.get(i))
+        .copied()
+        .unwrap_or(dow);
     format!("on {}", name)
 }
 
 fn next_description(expr: &str) -> Option<String> {
     // Very basic next-run hint
     let parts: Vec<&str> = expr.split_whitespace().collect();
-    if parts.len() < 5 { return None; }
+    if parts.len() < 5 {
+        return None;
+    }
     let (m, h) = (parts[0], parts[1]);
-    match (m, h) {
-        ("0", h_val) => {
-            if let Ok(hour) = h_val.parse::<u32>() {
-                return Some(format!("Next run: today or tomorrow at {:02}:00", hour));
-            }
+    if let ("0", h_val) = (m, h) {
+        if let Ok(hour) = h_val.parse::<u32>() {
+            return Some(format!("Next run: today or tomorrow at {:02}:00", hour));
         }
-        _ => {}
     }
     Some("Next run: depends on current time".to_string())
 }
@@ -173,11 +222,11 @@ impl Plugin for CronExplainerPlugin {
         if expr.is_empty() {
             // Show examples
             return vec![
-                mk_example("*/5 * * * *",   "Every 5 minutes"),
-                mk_example("0 9 * * 1-5",   "Mon-Fri at 09:00"),
-                mk_example("0 0 * * *",     "Daily at midnight"),
-                mk_example("0 0 1 * *",     "Monthly on 1st"),
-                mk_example("0 0 * * 0",     "Every Sunday midnight"),
+                mk_example("*/5 * * * *", "Every 5 minutes"),
+                mk_example("0 9 * * 1-5", "Mon-Fri at 09:00"),
+                mk_example("0 0 * * *", "Daily at midnight"),
+                mk_example("0 0 1 * *", "Monthly on 1st"),
+                mk_example("0 0 * * 0", "Every Sunday midnight"),
                 mk_example("*/15 9-17 * * 1-5", "Every 15 min, 9am-5pm weekdays"),
             ];
         }

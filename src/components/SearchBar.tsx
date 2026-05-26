@@ -223,15 +223,32 @@ export default function SearchBar({
             }}
           >
             {/* Core prefixes row */}
-            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginBottom: "4px" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: "4px",
+                flexWrap: "wrap",
+                marginBottom: "4px",
+              }}
+            >
               {HINT_CORE.map(({ key, label }) => (
-                <HintChip key={key} prefix={key} label={label} colors={colors} />
+                <HintChip
+                  key={key}
+                  prefix={key}
+                  label={label}
+                  colors={colors}
+                />
               ))}
             </div>
             {/* Web search prefixes row */}
             <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
               {HINT_SEARCH.map(({ key, label }) => (
-                <HintChip key={key} prefix={key} label={label} colors={colors} />
+                <HintChip
+                  key={key}
+                  prefix={key}
+                  label={label}
+                  colors={colors}
+                />
               ))}
             </div>
           </div>
@@ -243,7 +260,15 @@ export default function SearchBar({
 
 // ─── Hint chip ────────────────────────────────────────────────────────────────
 
-function HintChip({ prefix, label, colors }: { prefix: string; label: string; colors: Record<string, string> }) {
+function HintChip({
+  prefix,
+  label,
+  colors,
+}: {
+  prefix: string;
+  label: string;
+  colors: Record<string, string>;
+}) {
   return (
     <span
       style={{

@@ -19,7 +19,7 @@ use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use chrono::Local;
 use dirs::picture_dir;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 pub struct ScreenshotPlugin;
@@ -33,7 +33,8 @@ fn screenshots_dir() -> PathBuf {
 // ─── Platform-specific capture ────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
-fn take_screenshot_fullscreen(path: &PathBuf) -> Result<(), String> {
+#[allow(dead_code)]
+fn take_screenshot_fullscreen(path: &Path) -> Result<(), String> {
     // PowerShell: capture primary screen via System.Drawing BitBlt
     let ps = format!(
         r#"Add-Type -AssemblyName System.Windows.Forms,System.Drawing;
@@ -62,20 +63,24 @@ fn area_select_action(dir: &PathBuf) -> String {
     // The user draws the snip; Windows saves it to clipboard + the Screenshots folder.
     // We also pass the dir so the label is informative.
     let _ = dir; // used for display only
-    "powershell -WindowStyle Hidden -NoProfile -Command \"Start-Process 'ms-screenclip:'\"".to_string()
+    "powershell -WindowStyle Hidden -NoProfile -Command \"Start-Process 'ms-screenclip:'\""
+        .to_string()
 }
 
 #[cfg(target_os = "windows")]
-fn fullscreen_action(path: &PathBuf) -> String {
+fn fullscreen_action(path: &Path) -> String {
     let ps = format!(
         r#"Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height); $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); $bmp.Save('{}'); $g.Dispose(); $bmp.Dispose()"#,
         path.to_str().unwrap_or("").replace('\'', "''")
     );
-    format!("powershell -WindowStyle Hidden -NoProfile -Command \"{}\"", ps)
+    format!(
+        "powershell -WindowStyle Hidden -NoProfile -Command \"{}\"",
+        ps
+    )
 }
 
 #[cfg(target_os = "windows")]
-fn open_file_action(path: &PathBuf) -> String {
+fn open_file_action(path: &Path) -> String {
     format!("explorer \"{}\"", path.display())
 }
 
@@ -91,7 +96,7 @@ fn which_tool(tool: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn area_select_action(dir: &PathBuf) -> String {
+fn area_select_action(dir: &Path) -> String {
     let d = dir.display();
     if which_tool("scrot") {
         format!("mkdir -p {d} && scrot -s {d}/screenshot_$(date +%Y%m%d_%H%M%S).png")
@@ -103,7 +108,7 @@ fn area_select_action(dir: &PathBuf) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn fullscreen_action(path: &PathBuf) -> String {
+fn fullscreen_action(path: &Path) -> String {
     let p = path.display();
     if which_tool("scrot") {
         format!("scrot {p}")
@@ -115,14 +120,14 @@ fn fullscreen_action(path: &PathBuf) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn open_file_action(path: &PathBuf) -> String {
+fn open_file_action(path: &Path) -> String {
     format!("xdg-open \"{}\"", path.display())
 }
 
 // ─── macOS ────────────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
-fn area_select_action(dir: &PathBuf) -> String {
+fn area_select_action(dir: &Path) -> String {
     format!(
         "mkdir -p {d} && screencapture -i {d}/screenshot_$(date +%Y%m%d_%H%M%S).png",
         d = dir.display()
@@ -130,18 +135,18 @@ fn area_select_action(dir: &PathBuf) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn fullscreen_action(path: &PathBuf) -> String {
+fn fullscreen_action(path: &Path) -> String {
     format!("screencapture {}", path.display())
 }
 
 #[cfg(target_os = "macos")]
-fn open_file_action(path: &PathBuf) -> String {
+fn open_file_action(path: &Path) -> String {
     format!("open \"{}\"", path.display())
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
-fn ocr_text(path: &PathBuf) -> Option<String> {
+fn ocr_text(path: &Path) -> Option<String> {
     // Only attempt if tesseract is available
     let ok = std::process::Command::new("tesseract")
         .arg("--version")
@@ -189,11 +194,8 @@ fn list_screenshots(limit: usize) -> Vec<PathBuf> {
         })
         .collect();
     files.sort_by(|a, b| {
-        let mt = |e: &walkdir::DirEntry| {
-            std::fs::metadata(e.path())
-                .and_then(|m| m.modified())
-                .ok()
-        };
+        let mt =
+            |e: &walkdir::DirEntry| std::fs::metadata(e.path()).and_then(|m| m.modified()).ok();
         mt(b).cmp(&mt(a))
     });
     files
@@ -203,7 +205,7 @@ fn list_screenshots(limit: usize) -> Vec<PathBuf> {
         .collect()
 }
 
-fn file_age_label(path: &PathBuf) -> String {
+fn file_age_label(path: &Path) -> String {
     if let Ok(meta) = std::fs::metadata(path) {
         if let Ok(modified) = meta.modified() {
             if let Ok(elapsed) = modified.elapsed() {
@@ -390,8 +392,13 @@ impl Plugin for ScreenshotPlugin {
             let action = area_select_action(&dir);
             let result = if cfg!(target_os = "windows") {
                 std::process::Command::new("powershell")
-                    .args(["-WindowStyle", "Hidden", "-NoProfile", "-Command",
-                        "Start-Process 'ms-screenclip:'"])
+                    .args([
+                        "-WindowStyle",
+                        "Hidden",
+                        "-NoProfile",
+                        "-Command",
+                        "Start-Process 'ms-screenclip:'",
+                    ])
                     .status()
             } else {
                 std::process::Command::new("sh")

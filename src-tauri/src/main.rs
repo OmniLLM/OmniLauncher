@@ -109,9 +109,6 @@ pub fn run() {
     let live_server = LiveServer::new();
     let live_server_task = live_server.clone();
 
-    // Start background scheduler
-    omnilauncher_lib::plugins::scheduler::start_scheduler();
-
     tauri::async_runtime::spawn(async move {
         log::info!(
             "registering live server routes on port {}",
@@ -151,6 +148,10 @@ pub fn run() {
         .manage(state)
         .setup(move |app| {
             log::debug!("Running Tauri setup");
+
+            // Start background scheduler (must be inside setup — tokio runtime is live here)
+            omnilauncher_lib::plugins::scheduler::start_scheduler();
+
             let window = app.get_webview_window("main").unwrap();
 
             // Center the initial window before the frontend performs its first resize.
@@ -614,7 +615,9 @@ async fn execute_result(
                 let label = parts[0];
                 let sched_str = parts[1];
                 let cmd = parts[2];
-                if let Some(sched) = omnilauncher_lib::plugins::scheduler::Schedule::from_stored(sched_str) {
+                if let Some(sched) =
+                    omnilauncher_lib::plugins::scheduler::Schedule::from_stored(sched_str)
+                {
                     omnilauncher_lib::plugins::scheduler::add_job(label, &sched, cmd)
                         .map(|_| true)
                         .unwrap_or(false)
@@ -807,16 +810,15 @@ async fn vision_analyze(
     }
 
     // Read and base64-encode the screenshot
-    let mut file = std::fs::File::open(&tmp_path)
-        .map_err(|e| format!("Failed to open screenshot: {e}"))?;
+    let mut file =
+        std::fs::File::open(&tmp_path).map_err(|e| format!("Failed to open screenshot: {e}"))?;
     let mut img_bytes = Vec::new();
     file.read_to_end(&mut img_bytes)
         .map_err(|e| format!("Failed to read screenshot: {e}"))?;
 
     use std::io::Write;
-    let mut enc = base64::write::EncoderStringWriter::new(
-        &base64::engine::general_purpose::STANDARD,
-    );
+    let mut enc =
+        base64::write::EncoderStringWriter::new(&base64::engine::general_purpose::STANDARD);
     enc.write_all(&img_bytes)
         .map_err(|e| format!("Base64 encode error: {e}"))?;
     let b64 = enc.into_inner();
@@ -871,7 +873,10 @@ async fn vision_analyze(
         req = req.bearer_auth(&api_key);
     }
 
-    let resp = req.send().await.map_err(|e| format!("API request failed: {e}"))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("API request failed: {e}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();

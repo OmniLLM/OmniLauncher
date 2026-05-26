@@ -780,8 +780,11 @@ impl Router {
                         .output()
                         .map(|o| {
                             let code = o.status.code().unwrap_or(-1);
-                            if code == 0 { format!("Killed processes matching '{}'", arg) }
-                            else { format!("No processes found matching '{}'", arg) }
+                            if code == 0 {
+                                format!("Killed processes matching '{}'", arg)
+                            } else {
+                                format!("No processes found matching '{}'", arg)
+                            }
                         })
                         .unwrap_or_else(|e| format!("Error: {}", e))
                 };

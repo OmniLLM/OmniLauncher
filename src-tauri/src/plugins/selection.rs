@@ -197,7 +197,10 @@ pub fn read_x11_selection() -> Option<String> {
 pub fn read_x11_selection() -> Option<String> {
     // Simulate Cmd+C to copy current selection into clipboard
     let _ = std::process::Command::new("osascript")
-        .args(["-e", "tell application \"System Events\" to keystroke \"c\" using command down"])
+        .args([
+            "-e",
+            "tell application \"System Events\" to keystroke \"c\" using command down",
+        ])
         .output();
     // Small delay for clipboard to update
     std::thread::sleep(std::time::Duration::from_millis(80));
@@ -342,10 +345,7 @@ impl Plugin for SelectionPlugin {
         match action {
             "search" => format!("https://www.google.com/search?q={}", encoded),
             "translate" => format!("https://translate.google.com/?text={}", encoded),
-            "dict" => format!(
-                "https://dict.youdao.com/result?word={}&lang=en",
-                encoded
-            ),
+            "dict" => format!("https://dict.youdao.com/result?word={}&lang=en", encoded),
             "github" => format!("https://github.com/search?q={}", encoded),
             "copy" => format!("Copied: {}", text),
             "ai" => format!("AI query: {}", text),

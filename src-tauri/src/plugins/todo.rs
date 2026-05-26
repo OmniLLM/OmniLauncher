@@ -263,11 +263,7 @@ fn set_field(id: i64, field: &str, value: &str) -> String {
 fn generate_html(items: &[TodoItem]) -> String {
     let total = items.len();
     let done_count = items.iter().filter(|t| t.status == "done").count();
-    let pct = if total > 0 {
-        done_count * 100 / total
-    } else {
-        0
-    };
+    let pct = (done_count * 100).checked_div(total).unwrap_or(0);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 

@@ -142,7 +142,7 @@ fn encode_response(response: LiveResponse) -> Vec<u8> {
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         response.status,
         response.content_type,
-        response.body.as_bytes().len()
+        response.body.len()
     );
     [header.into_bytes(), response.body.into_bytes()].concat()
 }

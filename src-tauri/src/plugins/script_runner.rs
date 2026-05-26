@@ -126,10 +126,7 @@ impl Plugin for ScriptRunnerPlugin {
                 return vec![QueryResult {
                     id: "script_runner:empty".to_string(),
                     title: "No scripts yet".to_string(),
-                    subtitle: Some(format!(
-                        "Add .sh files to {}",
-                        scripts_dir().display()
-                    )),
+                    subtitle: Some(format!("Add .sh files to {}", scripts_dir().display())),
                     icon: Some("📂".to_string()),
                     score: 50,
                     action_type: "shell".to_string(),
@@ -208,10 +205,7 @@ impl Plugin for ScriptRunnerPlugin {
         });
 
         match found {
-            Some(s) => match std::process::Command::new("bash")
-                .arg(&s.path)
-                .output()
-            {
+            Some(s) => match std::process::Command::new("bash").arg(&s.path).output() {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
