@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import FormattedSubtitle from "./FormattedSubtitle";
 
 interface QueryResult {
   id: string;
@@ -144,22 +145,10 @@ export default function ResultList({
                 dangerouslySetInnerHTML={{ __html: highlight(r.title, query) }}
               />
               {r.subtitle && (
-                <div
-                  style={{
-                    fontSize: "12px",
-                    color: colors.sub,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    fontFamily:
-                      r.subtitle.startsWith("/") || r.subtitle.includes("\\")
-                        ? "'JetBrains Mono', 'Fira Code', monospace"
-                        : "inherit",
-                    marginTop: "1px",
-                  }}
-                >
-                  {r.subtitle}
-                </div>
+                <FormattedSubtitle
+                  text={r.subtitle}
+                  color={colors.sub}
+                />
               )}
             </div>
 
