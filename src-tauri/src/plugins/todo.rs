@@ -21,7 +21,7 @@ fn config_dir() -> std::path::PathBuf {
 }
 
 fn db_path() -> std::path::PathBuf {
-    config_dir().join("todo.sqlite")
+    config_dir().join("omnilauncher.sqlite")
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
@@ -31,7 +31,13 @@ fn open_db() -> rusqlite::Result<Connection> {
     std::fs::create_dir_all(&dir).map_err(|e| {
         rusqlite::Error::InvalidPath(format!("Failed to create config dir {:?}: {}", dir, e).into())
     })?;
-    let conn = Connection::open(db_path())?;
+    // One-time rename: migrate todo.sqlite → omnilauncher.sqlite
+    let old_db = dir.join("todo.sqlite");
+    let new_db = db_path();
+    if old_db.exists() && !new_db.exists() {
+        let _ = std::fs::rename(&old_db, &new_db);
+    }
+    let conn = Connection::open(new_db)?;
     db::run_migrations(&conn)?;
     migrate_json(&conn);
     Ok(conn)
@@ -385,7 +391,7 @@ tr.group-header td{{background:#252535;color:#6c7086;font-size:11px;font-weight:
     <div class="logo">✦</div>
     <div>
       <h1>OmniLauncher Todos</h1>
-      <div class="sub">~/.config/omnilauncher/todo.sqlite</div>
+      <div class="sub">~/.config/omnilauncher/omnilauncher.sqlite</div>
     </div>
   </header>
 
