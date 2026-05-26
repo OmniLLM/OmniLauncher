@@ -264,7 +264,6 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
     }
 
     let mut plugins: Vec<ExternalPlugin> = vec![];
-    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for base in &dirs {
         if !base.exists() {
@@ -276,20 +275,11 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
                     let path = entry.path();
                     if path.is_dir() {
                         for (plugin_dir, manifest) in discover_plugins_in_repo(&path) {
-                            if seen_names.contains(&manifest.name) {
-                                log::info!(
-                                    "Skipping duplicate plugin '{}' from {}",
-                                    manifest.name,
-                                    plugin_dir.display()
-                                );
-                                continue;
-                            }
                             log::info!(
-                                "Loaded external plugin '{}' from {}",
+                                "Discovered external plugin '{}' from {}",
                                 manifest.name,
                                 plugin_dir.display()
                             );
-                            seen_names.insert(manifest.name.clone());
                             plugins.push(ExternalPlugin::new(plugin_dir, manifest));
                         }
                     }

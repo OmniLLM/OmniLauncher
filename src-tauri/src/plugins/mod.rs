@@ -63,6 +63,32 @@ impl PluginManager {
         self.plugins.push(p);
     }
 
+    /// Register a plugin, evicting any existing plugin that conflicts on name or keyword.
+    /// Use this instead of `register()` when later registrations should win over earlier ones
+    /// (e.g. external plugins overriding built-ins, or user plugins overriding defaults).
+    pub fn register_override(&mut self, p: Box<dyn Plugin>) {
+        let name = p.name().to_string();
+        let keyword = p.keyword().map(str::to_string);
+
+        if self.has_name(&name) {
+            log::info!(
+                "Plugin '{}' overrides existing plugin with same name",
+                name
+            );
+            self.unregister_by_name(&name);
+        }
+        if let Some(ref kw) = keyword {
+            if self.has_keyword(kw) {
+                log::info!(
+                    "Plugin '{}' overrides existing plugin with keyword '{}'",
+                    name, kw
+                );
+                self.unregister_by_keyword(kw);
+            }
+        }
+        self.plugins.push(p);
+    }
+
     /// Returns true if any registered plugin has this exact name.
     pub fn has_name(&self, name: &str) -> bool {
         self.plugins.iter().any(|p| p.name() == name)
