@@ -307,6 +307,8 @@ fn is_other_plugin_prefix(raw: &str) -> bool {
         || raw.starts_with("env ")  // env_vars
         || raw.starts_with("git ")  // git
         || raw.starts_with("hosts ")// hosts
+        || raw == "ip"
+        || raw.starts_with("ip ")
         || raw.starts_with("net ")  // network
         || raw.starts_with("ps ")   // process_manager
         || raw.starts_with("snip ") // snippets

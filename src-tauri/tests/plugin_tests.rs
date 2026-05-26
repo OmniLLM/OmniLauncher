@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use omnilauncher_lib::create_plugin_manager;
 use omnilauncher_lib::plugins::{Plugin, PluginManager, Query, QueryResult};
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 static TODO_LOCK: Mutex<()> = Mutex::new(());
@@ -63,6 +64,44 @@ async fn test_plugin_manager_all_tool_schemas() {
     for schema in &schemas {
         assert!(schema["function"]["name"].is_string());
         assert!(schema["function"]["description"].is_string());
+    }
+}
+
+#[tokio::test]
+async fn test_every_registered_plugin_has_valid_metadata_and_query_smoke() {
+    let pm = create_plugin_manager();
+    let mut names = HashSet::new();
+
+    for plugin in &pm.plugins {
+        let name = plugin.name();
+        assert!(!name.trim().is_empty(), "plugin has an empty name");
+        assert!(names.insert(name.to_string()), "duplicate plugin name: {name}");
+        assert!(
+            !plugin.description().trim().is_empty(),
+            "plugin {name} has an empty description"
+        );
+
+        let raw = plugin.keyword().unwrap_or("").to_string();
+        let query = Query {
+            raw: raw.clone(),
+            terms: raw.split_whitespace().map(String::from).collect(),
+        };
+        let _ = plugin.query(&query).await;
+
+        if let Some(schema) = plugin.tool_schema() {
+            assert_eq!(
+                schema["type"], "function",
+                "plugin {name} has an invalid tool schema type"
+            );
+            assert!(
+                schema["function"]["name"].is_string(),
+                "plugin {name} schema is missing function.name"
+            );
+            assert!(
+                schema["function"]["description"].is_string(),
+                "plugin {name} schema is missing function.description"
+            );
+        }
     }
 }
 
@@ -566,6 +605,16 @@ async fn test_network_list() {
     let pm = create_plugin_manager();
     let r = pm.query_all("net ").await;
     assert!(r.len() >= 3);
+}
+
+#[tokio::test]
+async fn test_network_bare_ip_query_does_not_fall_through_to_google() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("ip 8.8.8.8").await;
+    assert!(!r.is_empty());
+    assert_eq!(r[0].id, "net:ping:8.8.8.8");
+    assert_eq!(r[0].action_type, "shell");
+    assert!(r.iter().all(|result| !result.id.starts_with("google_fallback:")));
 }
 
 // ============================================================

@@ -15,16 +15,14 @@ impl Plugin for NetworkPlugin {
     }
 
     fn keyword(&self) -> Option<&str> {
-        Some("net ")
+        None
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        let term = q
-            .raw
-            .strip_prefix("net ")
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
+        let raw = q.raw.trim_start();
+        let Some(term) = network_term(raw) else {
+            return vec![];
+        };
 
         let commands = vec![
             ("ip", "🌍", "Show public IP address", get_ip_cmd()),
@@ -78,6 +76,23 @@ impl Plugin for NetworkPlugin {
 
         results
     }
+}
+
+fn network_term(raw: &str) -> Option<String> {
+    if raw.trim_end().eq_ignore_ascii_case("net") {
+        return Some(String::new());
+    }
+
+    if let Some(term) = raw.strip_prefix("net ") {
+        return Some(term.trim().to_lowercase());
+    }
+
+    if raw.eq_ignore_ascii_case("ip") {
+        return Some("ip".to_string());
+    }
+
+    raw.strip_prefix("ip ")
+        .map(|term| term.trim().to_lowercase())
 }
 
 #[cfg(target_os = "windows")]
