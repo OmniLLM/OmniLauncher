@@ -148,6 +148,7 @@ fn urlencoding_encode(s: &str) -> String {
 /// Read X11 PRIMARY selection (selected text in any focused app).
 /// Falls back to CLIPBOARD if PRIMARY is empty.
 /// Returns None if xclip / xsel / xdotool is unavailable or nothing is selected.
+#[cfg(target_os = "linux")]
 pub fn read_x11_selection() -> Option<String> {
     // Try xclip PRIMARY first
     if let Ok(out) = std::process::Command::new("xclip")
@@ -185,6 +186,106 @@ pub fn read_x11_selection() -> Option<String> {
             }
         }
     }
+    None
+}
+
+/// macOS: read selection via pbpaste (clipboard) or osascript (accessibility).
+/// macOS doesn't have a concept of X11 PRIMARY — the selection only lands in
+/// the clipboard after a copy.  We simulate Cmd+C via AppleScript and read
+/// the clipboard immediately after.
+#[cfg(target_os = "macos")]
+pub fn read_x11_selection() -> Option<String> {
+    // Simulate Cmd+C to copy current selection into clipboard
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", "tell application \"System Events\" to keystroke \"c\" using command down"])
+        .output();
+    // Small delay for clipboard to update
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    // Read clipboard
+    if let Ok(out) = std::process::Command::new("pbpaste").output() {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+/// Windows: read selection via UI Automation (focused element TextPattern)
+/// then fall back to simulating Ctrl+C + clipboard read.
+///
+/// Strategy (mirrors Wox's Windows implementation):
+///   1. Try UI Automation — query the focused element's ITextPattern for
+///      selected text ranges.  Works for most Win32/WPF/UWP apps without
+///      touching the clipboard.
+///   2. Fall back: send Ctrl+C via PowerShell, wait briefly, read clipboard.
+#[cfg(target_os = "windows")]
+pub fn read_x11_selection() -> Option<String> {
+    // First try: UI Automation via PowerShell (no extra crate needed)
+    // This script gets the focused element's selected text using UIA.
+    let uia_script = r#"
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$ae = [System.Windows.Automation.AutomationElement]::FocusedElement
+if ($ae -ne $null) {
+    $tp = $ae.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+    if ($tp -ne $null) {
+        $sel = $tp.GetSelection()
+        if ($sel.Length -gt 0) {
+            Write-Output $sel[0].GetText(-1)
+            exit 0
+        }
+    }
+    $vp = $ae.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    if ($vp -ne $null) {
+        Write-Output $vp.Current.Value
+        exit 0
+    }
+}
+exit 1
+"#;
+    if let Ok(out) = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", uia_script])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+
+    // Fallback: Ctrl+C + clipboard
+    let clip_script = r#"
+$before = Get-Clipboard
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait("^c")
+Start-Sleep -Milliseconds 100
+$after = Get-Clipboard
+if ($after -ne $before -and $after -ne $null -and $after.Trim() -ne "") {
+    Write-Output $after
+}
+"#;
+    if let Ok(out) = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", clip_script])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+/// Fallback stub for unsupported platforms
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub fn read_x11_selection() -> Option<String> {
     None
 }
 
