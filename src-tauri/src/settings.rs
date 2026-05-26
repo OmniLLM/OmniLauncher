@@ -20,7 +20,7 @@ impl Default for AppSettings {
             ai_base_url: "http://localhost:5000".to_string(),
             ai_model: "auto".to_string(),
             ai_api_key: String::new(),
-            theme: "dark".to_string(),
+            theme: "system".to_string(),
             hotkey: "Alt+Space".to_string(),
             max_results: 10,
             plugin_dirs: vec![],

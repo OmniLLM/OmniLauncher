@@ -40,6 +40,27 @@ interface AppSettings {
   max_results: number;
 }
 
+type ThemeMode = "dark" | "light" | "system";
+type ResolvedTheme = "dark" | "light";
+
+function getSystemTheme(): ResolvedTheme {
+  if (
+    typeof window !== "undefined" &&
+    window.matchMedia &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+  ) {
+    return "dark";
+  }
+  return "light";
+}
+
+function parseThemeMode(theme: string): ThemeMode {
+  if (theme === "dark" || theme === "light" || theme === "system") {
+    return theme;
+  }
+  return "system";
+}
+
 /**
  * Detect if the user typed an explicit AI prefix.
  * Mirrors Router::decide() in router.rs.
@@ -113,17 +134,17 @@ function isHelpHintQuery(input: string): boolean {
 }
 
 const DARK_COLORS = {
-  bg: "#1E1E2E",
-  surface: "#313244",
-  surface2: "#45475A",
-  text: "#CDD6F4",
-  accent: "#CBA6F7",
-  accentDim: "#9B76C7",
-  sub: "#6C7086",
-  userBubble: "#CBA6F7",
-  userBubbleText: "#1E1E2E",
-  aiBubble: "#313244",
-  aiText: "#CDD6F4",
+  bg: "#111214",
+  surface: "#1F2227",
+  surface2: "#2C3037",
+  text: "#EEF1F5",
+  accent: "#AEB5C2",
+  accentDim: "#D1D6DE",
+  sub: "#9AA1AD",
+  userBubble: "#6F7786",
+  userBubbleText: "#FFFFFF",
+  aiBubble: "#1F2227",
+  aiText: "#EEF1F5",
 };
 
 const LIGHT_COLORS = {
@@ -493,7 +514,10 @@ export default function App() {
   const [aiModeEnabled, setAiModeEnabled] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showPluginManager, setShowPluginManager] = useState(false);
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [theme, setTheme] = useState<ThemeMode>("system");
+  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(
+    getSystemTheme(),
+  );
   const [conversationHistory, setConversationHistory] = useState<
     ConversationTurn[]
   >([]);
@@ -502,7 +526,9 @@ export default function App() {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const colors = theme === "dark" ? DARK_COLORS : LIGHT_COLORS;
+  const resolvedTheme: ResolvedTheme =
+    theme === "system" ? systemTheme : theme;
+  const colors = resolvedTheme === "dark" ? DARK_COLORS : LIGHT_COLORS;
 
   const focusInput = useCallback((select = false) => {
     inputRef.current?.focus();
@@ -516,10 +542,26 @@ export default function App() {
     invoke<AppSettings>("get_settings")
       .then((s) => {
         setSettings(s);
-        if (s.theme === "light") setTheme("light");
+        setTheme(parseThemeMode(s.theme));
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (event: MediaQueryListEvent) => {
+      setSystemTheme(event.matches ? "dark" : "light");
+    };
+
+    setSystemTheme(media.matches ? "dark" : "light");
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", resolvedTheme);
+  }, [resolvedTheme]);
 
   const doSearch = useCallback(async (q: string) => {
     if (isHelpQuery(q)) {
@@ -603,6 +645,30 @@ export default function App() {
       unlistenShown?.();
     };
   }, [focusInput]);
+
+  // Browser-level fallback for focus restore (useful in dev/web context)
+  useEffect(() => {
+    const shouldFocusLauncherInput = () => !showSettings && !showPluginManager;
+
+    const restoreFocus = () => {
+      if (!shouldFocusLauncherInput()) return;
+      setTimeout(() => focusInput(), 0);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        restoreFocus();
+      }
+    };
+
+    window.addEventListener("focus", restoreFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", restoreFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [focusInput, showSettings, showPluginManager]);
 
   const doAiQuery = useCallback(
     async (q: string) => {
@@ -856,9 +922,11 @@ export default function App() {
   const launcherHasContent =
     results.length > 0 || showSettings || showPluginManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
-  const panelHeight = isAiMode ? 560 : launcherHasContent ? 520 : 88;
+  const panelHeight = isAiMode ? 560 : launcherHasContent ? 520 : 210;
   const windowHeight = `${panelHeight}px`;
   const maxHeight = `${panelHeight}px`;
+  const shellFont =
+    "'Aptos Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif";
 
   useEffect(() => {
     invoke("set_window_geometry", {
@@ -904,12 +972,15 @@ export default function App() {
           maxHeight,
           background: colors.bg,
           color: colors.text,
-          fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
+          fontFamily: shellFont,
           borderRadius: "0",
           overflow: "hidden",
           boxShadow: "none",
           display: "flex",
           flexDirection: "column",
+          justifyContent: isCompactMode ? "center" : "flex-start",
+          padding: isCompactMode ? "14px 0" : 0,
+          boxSizing: "border-box",
           transition:
             "height 220ms cubic-bezier(0.4,0,0.2,1), max-height 220ms cubic-bezier(0.4,0,0.2,1)",
           outline: isAiMode ? `1.5px solid ${colors.accent}33` : "none",
@@ -1065,6 +1136,7 @@ export default function App() {
           showHintBar={
             !isAiMode && (isHelpHintQuery(query) || query.trim() === "")
           }
+          compact={isCompactMode}
           inputRef={inputRef}
         />
       </div>

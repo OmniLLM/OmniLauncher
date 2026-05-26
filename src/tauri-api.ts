@@ -45,7 +45,7 @@ export async function invoke<T = unknown>(
         aiBaseUrl: "",
         aiApiKey: "",
         aiModel: "gpt-4",
-        theme: "dark",
+        theme: "system",
       } as T;
     }
     return {} as T;

@@ -18,7 +18,7 @@ fn ensure_ext_plugins_dir() -> Result<PathBuf, String> {
 fn dir_name_from_source(source: &str) -> String {
     let base = source.trim_end_matches('/').trim_end_matches(".git");
 
-    base.rsplit(['/', ':'])
+    base.rsplit(['/', '\\', ':'])
         .next()
         .unwrap_or("plugin")
         .to_string()
@@ -55,13 +55,9 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
 
     if is_remote {
         // Clone the repo
+        let dest_str = dest.to_string_lossy().into_owned();
         let output = tokio::process::Command::new("git")
-            .args([
-                "clone",
-                "--depth=1",
-                &source,
-                dest.to_str().unwrap_or(&dir_name),
-            ])
+            .args(["clone", "--depth=1", &source, &dest_str])
             .output()
             .await
             .map_err(|e| format!("Failed to spawn git: {e}"))?;
@@ -111,26 +107,88 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
         }
     }
 
-    // Validate plugin.json
-    match load_manifest(&dest) {
-        Some(manifest) => {
-            // Confirm entry exists
-            let entry_path = dest.join(&manifest.entry);
-            if !entry_path.exists() {
-                // Clean up
-                let _ = std::fs::remove_dir_all(&dest);
-                return Err(format!(
-                    "plugin.json found but entry '{}' does not exist.",
-                    manifest.entry
-                ));
-            }
-            log::info!("Installed external plugin '{}'", manifest.name);
-            Ok(manifest.name)
+    install_staged_plugin(&dest, &base_dir)
+}
+
+fn install_staged_plugin(dest: &PathBuf, base_dir: &PathBuf) -> Result<String, String> {
+    if let Some(manifest) = load_manifest(dest) {
+        let entry_path = dest.join(&manifest.entry);
+        if !entry_path.exists() {
+            let _ = std::fs::remove_dir_all(dest);
+            return Err(format!(
+                "plugin.json found but entry '{}' does not exist.",
+                manifest.entry
+            ));
         }
-        None => {
-            // Clean up invalid install
-            let _ = std::fs::remove_dir_all(&dest);
-            Err("No valid plugin.json found in the plugin directory.".to_string())
+        log::info!("Installed external plugin '{}'", manifest.name);
+        return Ok(format!("Installed {}", manifest.name));
+    }
+
+    install_collection_plugins(dest, base_dir)
+}
+
+fn install_collection_plugins(collection_dir: &PathBuf, base_dir: &PathBuf) -> Result<String, String> {
+    let mut installed_names = Vec::new();
+
+    let entries = std::fs::read_dir(collection_dir)
+        .map_err(|e| format!("Failed to read plugin directory '{}': {e}", collection_dir.display()))?;
+
+    for entry in entries.flatten() {
+        let plugin_dir = entry.path();
+        if !plugin_dir.is_dir() {
+            continue;
+        }
+
+        let Some(manifest) = load_manifest(&plugin_dir) else {
+            continue;
+        };
+
+        if !plugin_dir.join(&manifest.entry).exists() {
+            continue;
+        }
+
+        let dir_name = plugin_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&manifest.name)
+            .to_string();
+        let target = base_dir.join(&dir_name);
+        if target.exists() {
+            let _ = std::fs::remove_dir_all(collection_dir);
+            return Err(format!(
+                "Plugin directory '{}' already exists. Remove it first with remove_plugin.",
+                dir_name
+            ));
+        }
+
+        move_dir(&plugin_dir, &target)?;
+        log::info!("Installed external plugin '{}'", manifest.name);
+        installed_names.push(manifest.name);
+    }
+
+    let _ = std::fs::remove_dir_all(collection_dir);
+
+    if installed_names.is_empty() {
+        return Err(
+            "No valid plugin.json found in the plugin directory or its immediate subdirectories."
+                .to_string(),
+        );
+    }
+
+    Ok(format!(
+        "Installed {} plugins: {}",
+        installed_names.len(),
+        installed_names.join(", ")
+    ))
+}
+
+fn move_dir(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            copy_dir_recursive(src, dst)?;
+            std::fs::remove_dir_all(src)
+                .map_err(|e| format!("Failed to remove plugin directory '{}': {e}", src.display()))
         }
     }
 }
@@ -228,6 +286,78 @@ fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    fn write_test_plugin(dir: &std::path::Path, name: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("plugin.json"),
+            format!(
+                r#"{{"name":"{name}","description":"Test plugin","version":"1.0.0","entry":"run.cmd"}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("run.cmd"), "@echo off\r\necho {}\r\n").unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_single_plugin_from_local_path() {
+        let source = TempDir::new().unwrap();
+        let target = TempDir::new().unwrap();
+        write_test_plugin(source.path(), "single-test");
+
+        let result = install_plugin(
+            source.path().to_string_lossy().to_string(),
+            Some(target.path().to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap();
+
+        let installed_dir = source.path().file_name().unwrap();
+        assert_eq!(result, "Installed single-test");
+        assert!(target.path().join(installed_dir).join("plugin.json").exists());
+    }
+
+    #[tokio::test]
+    async fn install_plugin_collection_from_local_path() {
+        let source = TempDir::new().unwrap();
+        let target = TempDir::new().unwrap();
+        write_test_plugin(&source.path().join("color"), "color");
+        write_test_plugin(&source.path().join("currency"), "currency");
+        std::fs::create_dir(source.path().join("notes")).unwrap();
+
+        let result = install_plugin(
+            source.path().to_string_lossy().to_string(),
+            Some(target.path().to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.contains("Installed 2 plugins"), "{result}");
+        assert!(result.contains("color"), "{result}");
+        assert!(result.contains("currency"), "{result}");
+        assert!(target.path().join("color").join("plugin.json").exists());
+        assert!(target.path().join("currency").join("plugin.json").exists());
+    }
+
+    #[tokio::test]
+    async fn install_plugin_collection_requires_at_least_one_valid_plugin() {
+        let source = TempDir::new().unwrap();
+        let target = TempDir::new().unwrap();
+        std::fs::create_dir(source.path().join("not-a-plugin")).unwrap();
+
+        let error = install_plugin(
+            source.path().to_string_lossy().to_string(),
+            Some(target.path().to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "No valid plugin.json found in the plugin directory or its immediate subdirectories."
+        );
+    }
 
     #[test]
     fn dir_name_from_https_url() {

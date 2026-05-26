@@ -10,9 +10,18 @@ interface AppSettings {
   max_results: number;
 }
 
+type ThemeMode = "dark" | "light" | "system";
+
+function parseThemeMode(theme: string): ThemeMode {
+  if (theme === "dark" || theme === "light" || theme === "system") {
+    return theme;
+  }
+  return "system";
+}
+
 interface Props {
   theme: string;
-  onThemeChange: (t: "dark" | "light") => void;
+  onThemeChange: (t: ThemeMode) => void;
   onClose: () => void;
   initialSettings: AppSettings | null;
 }
@@ -115,7 +124,7 @@ export default function SettingsPanel({
       await invoke("save_settings_cmd", { settings });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      onThemeChange(settings.theme as "dark" | "light");
+      onThemeChange(parseThemeMode(settings.theme));
     } catch (e) {
       console.error("Save error:", e);
     }
@@ -217,7 +226,8 @@ export default function SettingsPanel({
               setSettings((s) => s && { ...s, theme: e.target.value })
             }
           >
-            <option value="dark">Dark (Catppuccin Mocha)</option>
+            <option value="system">System (Follow OS)</option>
+            <option value="dark">Dark (Silver Gray)</option>
             <option value="light">Light (Catppuccin Latte)</option>
           </select>
         </label>

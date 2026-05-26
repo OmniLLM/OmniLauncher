@@ -27,7 +27,7 @@ dev: stop-running stop-dev-server
 	@cmd /c "set CARGO_TARGET_DIR=target\dev&& npm run tauri dev"
 
 dev-debug: stop-running stop-dev-server
-	@cmd /c "set CARGO_TARGET_DIR=target\dev&& npm run tauri dev -- --debug"
+	@cmd /c "set CARGO_TARGET_DIR=target\dev&& npm run tauri -- dev -- -- --debug"
 
 prod: stop-running release
 	@pwsh -NoProfile -Command "if (Test-Path src-tauri/target/release/omnilauncher.exe) { Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' } else { Write-Error 'Release binary not found. Run make release first.'; exit 1 }"

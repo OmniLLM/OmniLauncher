@@ -60,11 +60,11 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
     if (!trimmed) return;
     setStatus({ type: "loading", message: "Installing…" });
     try {
-      const name = await invoke<string>("install_plugin", {
+      const message = await invoke<string>("install_plugin", {
         source: trimmed,
         targetDir: targetDir || null,
       });
-      setStatus({ type: "success", message: `✓ Installed "${name}"` });
+      setStatus({ type: "success", message: `✓ ${message}` });
       setSource("");
       refresh();
     } catch (e) {
@@ -198,7 +198,7 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
             border: "none",
             borderRadius: "8px",
             padding: "7px 14px",
-            color: "#1E1E2E",
+            color: "#111214",
             fontSize: "13px",
             fontWeight: 600,
             cursor: source.trim() ? "pointer" : "default",

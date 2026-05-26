@@ -11,6 +11,8 @@ interface Props {
   onSettingsClick: () => void;
   /** Show the one-line hint bar at the bottom of an empty launcher input */
   showHintBar?: boolean;
+  /** Render the empty launcher as a centered card */
+  compact?: boolean;
   /** External ref forwarded from App so App can imperatively focus */
   inputRef?: RefObject<HTMLInputElement>;
 }
@@ -53,6 +55,7 @@ export default function SearchBar({
   colors,
   onSettingsClick,
   showHintBar = false,
+  compact = false,
   inputRef: externalRef,
 }: Props) {
   const internalRef = useRef<HTMLInputElement>(null);
@@ -100,19 +103,21 @@ export default function SearchBar({
         {!isAiMode && (
           <div
             style={{
-              padding: "12px 16px 0",
-              animation: "omni-tagline-fadein 200ms ease both",
+              padding: compact ? "0 2px 14px" : "12px 16px 0",
+              animation: "omni-tagline-fadein 240ms ease both",
+              textAlign: compact ? "center" : "left",
             }}
           >
             <div
               style={{
                 color: colors.text,
-                fontSize: "13px",
-                fontWeight: 700,
-                letterSpacing: "0.02em",
+                fontSize: compact ? "18px" : "13px",
+                fontWeight: 800,
+                letterSpacing: compact ? "0.01em" : "0.02em",
+                lineHeight: 1.2,
               }}
             >
-              Omnilauncher: Your powerful Personal AI assisant
+              OMNILAUNCHER
             </div>
           </div>
         )}
@@ -122,21 +127,32 @@ export default function SearchBar({
           style={{
             display: "flex",
             alignItems: "center",
-            padding: "0 14px",
-            height: "56px",
+            padding: compact ? "0 16px" : "0 14px",
+            height: compact ? "62px" : "56px",
+            width: compact ? "min(96%, 840px)" : "100%",
+            margin: compact ? "0 auto" : undefined,
             gap: "10px",
+            border:
+              compact && !isAiMode
+                ? `1px solid ${colors.surface2}`
+                : "none",
             borderBottom:
-              !isAiMode && value ? `1px solid ${colors.surface}` : "none",
-            background: colors.bg,
-            borderRadius: isAiMode ? "0" : "14px",
+              !compact && !isAiMode && value
+                ? `1px solid ${colors.surface}`
+                : "none",
+            background: compact
+              ? colors.bg
+              : colors.bg,
+            borderRadius: compact ? "18px" : isAiMode ? "0" : "14px",
+            boxShadow: "none",
           }}
         >
           {/* Leading icon / spinner */}
           <span
             style={{
-              fontSize: "17px",
-              opacity: loading ? 1 : 0.5,
-              transition: "opacity 150ms",
+              fontSize: compact ? "18px" : "17px",
+              opacity: loading ? 1 : compact ? 0.82 : 0.5,
+              color: compact ? colors.text : undefined,
               flexShrink: 0,
               lineHeight: 1,
               display: "flex",
@@ -173,6 +189,7 @@ export default function SearchBar({
 
           {/* Input */}
           <input
+            autoFocus
             ref={inputRef}
             value={value}
             onChange={(e) => onChange(e.target.value)}
@@ -188,10 +205,12 @@ export default function SearchBar({
               background: "transparent",
               border: "none",
               outline: "none",
-              fontSize: "16px",
+              fontSize: compact ? "16.5px" : "16px",
               color: colors.text,
               caretColor: colors.accent,
               fontFamily: "inherit",
+              fontWeight: compact ? 500 : 400,
+              letterSpacing: compact ? "0.005em" : undefined,
             }}
           />
 
@@ -241,17 +260,20 @@ export default function SearchBar({
         {showHintBar && (
           <div
             style={{
-              padding: "4px 16px 8px",
-              animation: "omni-hint-fadein 200ms ease both",
+              padding: compact ? "10px 2px 0" : "4px 16px 8px",
+              width: compact ? "min(96%, 840px)" : "100%",
+              margin: compact ? "0 auto" : undefined,
+              animation: "omni-hint-fadein 240ms ease both",
             }}
           >
             {/* Core prefixes row */}
             <div
               style={{
                 display: "flex",
-                gap: "4px",
+                justifyContent: compact ? "center" : "flex-start",
+                gap: compact ? "6px" : "4px",
                 flexWrap: "wrap",
-                marginBottom: "4px",
+                marginBottom: compact ? "0" : "4px",
               }}
             >
               {HINT_CORE.map(({ key, label }) => (
@@ -260,17 +282,25 @@ export default function SearchBar({
                   prefix={key}
                   label={label}
                   colors={colors}
+                  compact={compact}
                 />
               ))}
             </div>
-            {/* Web search prefixes row */}
-            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: compact ? "center" : "flex-start",
+                gap: compact ? "6px" : "4px",
+                flexWrap: "wrap",
+              }}
+            >
               {HINT_SEARCH.map(({ key, label }) => (
                 <HintChip
                   key={key}
                   prefix={key}
                   label={label}
                   colors={colors}
+                  compact={compact}
                 />
               ))}
             </div>
@@ -287,31 +317,34 @@ function HintChip({
   prefix,
   label,
   colors,
+  compact = false,
 }: {
   prefix: string;
   label: string;
   colors: Record<string, string>;
+  compact?: boolean;
 }) {
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: "3px",
-        fontSize: "11px",
-        color: colors.sub,
+        gap: compact ? "5px" : "3px",
+        fontSize: compact ? "10.5px" : "11px",
+        color: compact ? `${colors.text}D0` : colors.sub,
+        lineHeight: 1.35,
         userSelect: "none",
-        marginRight: "4px",
+        marginRight: compact ? "0" : "4px",
       }}
     >
       <kbd
         style={{
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-          fontSize: "10px",
+          fontFamily: "'Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+          fontSize: compact ? "9.5px" : "10px",
           background: colors.surface,
           color: colors.accent,
-          padding: "1px 5px",
-          borderRadius: "4px",
+          padding: compact ? "2px 6px" : "1px 5px",
+          borderRadius: compact ? "6px" : "4px",
           border: `1px solid ${colors.surface2}`,
           lineHeight: 1.6,
           whiteSpace: "nowrap",
@@ -319,7 +352,7 @@ function HintChip({
       >
         {prefix}
       </kbd>
-      <span style={{ opacity: 0.7 }}>{label}</span>
+      <span style={{ opacity: compact ? 0.86 : 0.7 }}>{label}</span>
     </span>
   );
 }
