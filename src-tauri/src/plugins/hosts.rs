@@ -79,6 +79,46 @@ impl Plugin for HostsPlugin {
 
         results
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "hosts",
+                "description": "View system hosts file entries, optionally filtered",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filter": { "type": "string", "description": "Optional filter string to match hostname or IP (leave empty to list all)" }
+                    },
+                    "required": []
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let filter = args["filter"].as_str().unwrap_or("").trim().to_lowercase();
+        let hosts_path = get_hosts_path();
+        let content = match std::fs::read_to_string(&hosts_path) {
+            Ok(c) => c,
+            Err(e) => return format!("Cannot read hosts file {}: {}", hosts_path, e),
+        };
+        let entries: Vec<_> = content
+            .lines()
+            .filter(|line| {
+                let t = line.trim();
+                !t.is_empty() && !t.starts_with('#')
+            })
+            .filter(|line| filter.is_empty() || line.to_lowercase().contains(&filter))
+            .take(50)
+            .collect();
+        if entries.is_empty() {
+            format!("No hosts entries found{}", if filter.is_empty() { String::new() } else { format!(" matching '{}'", filter) })
+        } else {
+            entries.join("\n")
+        }
+    }
 }
 
 fn get_hosts_path() -> String {

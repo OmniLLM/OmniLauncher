@@ -71,6 +71,39 @@ impl Plugin for ColorPickerPlugin {
 
         results
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "color_picker",
+                "description": "Convert colors between hex, rgb, hsl formats",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "color": { "type": "string", "description": "Color to convert: hex (#ff0000), rgb(255,0,0), or color name (red, blue, ...)" }
+                    },
+                    "required": ["color"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let color = args["color"].as_str().unwrap_or("").trim().to_string();
+        if color.is_empty() {
+            return "Error: 'color' parameter is required".to_string();
+        }
+        if let Some((r, g, b)) = parse_hex(&color).or_else(|| parse_rgb(&color)).or_else(|| named_color(&color)) {
+            let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
+            let rgb = format!("rgb({}, {}, {})", r, g, b);
+            let (h, s, l) = rgb_to_hsl(r, g, b);
+            let hsl = format!("hsl({}, {}%, {}%)", h, s, l);
+            format!("HEX: {}\nRGB: {}\nHSL: {}", hex, rgb, hsl)
+        } else {
+            format!("Could not parse color: '{}'. Use hex (#ff0000), rgb(255,0,0), or a color name.", color)
+        }
+    }
 }
 
 fn make_result(format: &str, value: &str) -> QueryResult {

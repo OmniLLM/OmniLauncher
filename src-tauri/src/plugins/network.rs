@@ -76,6 +76,68 @@ impl Plugin for NetworkPlugin {
 
         results
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "network",
+                "description": "Network utilities: get public/local IP, flush DNS, show connections, ping a host, DNS lookup",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "Command: 'ip', 'localip', 'flush', 'connections', 'ports', 'wifi', 'ping <host>', or 'dns <host>'" }
+                    },
+                    "required": ["command"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let command = args["command"].as_str().unwrap_or("").trim();
+        if command.is_empty() {
+            return "Error: 'command' parameter is required. Options: ip, localip, flush, connections, ports, wifi, ping <host>, dns <host>".to_string();
+        }
+        let shell_cmd = if command == "ip" {
+            get_ip_cmd()
+        } else if command == "localip" {
+            get_local_ip_cmd()
+        } else if command == "flush" {
+            flush_dns_cmd()
+        } else if command == "connections" {
+            connections_cmd()
+        } else if command == "ports" {
+            ports_cmd()
+        } else if command == "wifi" {
+            wifi_cmd()
+        } else if let Some(host) = command.strip_prefix("ping ") {
+            format!("ping {}", host.trim())
+        } else if let Some(host) = command.strip_prefix("dns ") {
+            let h = host.trim();
+            if cfg!(target_os = "windows") {
+                format!("nslookup {}", h)
+            } else {
+                format!("dig +short {}", h)
+            }
+        } else {
+            return format!("Unknown command: '{}'. Options: ip, localip, flush, connections, ports, wifi, ping <host>, dns <host>", command);
+        };
+
+        let output = if cfg!(target_os = "windows") {
+            std::process::Command::new("cmd").args(["/C", &shell_cmd]).output()
+        } else {
+            std::process::Command::new("sh").args(["-c", &shell_cmd]).output()
+        };
+        match output {
+            Ok(o) => {
+                let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                if !stdout.is_empty() { stdout } else if !stderr.is_empty() { stderr } else { "Command completed with no output".to_string() }
+            }
+            Err(e) => format!("Error running command: {}", e),
+        }
+    }
 }
 
 fn network_term(raw: &str) -> Option<String> {

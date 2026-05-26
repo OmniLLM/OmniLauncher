@@ -157,4 +157,42 @@ impl Plugin for BrowserBookmarksPlugin {
             })
             .collect()
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "browser_bookmarks",
+                "description": "Search browser bookmarks from Chrome and Edge",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Search term to filter bookmarks by title or URL" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let query = args["query"].as_str().unwrap_or("").trim().to_lowercase();
+        if query.is_empty() {
+            return "Error: 'query' parameter is required".to_string();
+        }
+        let bookmarks = Self::load_all_bookmarks();
+        let matches: Vec<_> = bookmarks
+            .into_iter()
+            .filter(|(name, url)| name.to_lowercase().contains(&query) || url.to_lowercase().contains(&query))
+            .take(20)
+            .collect();
+        if matches.is_empty() {
+            return format!("No bookmarks found matching '{}'", query);
+        }
+        matches
+            .into_iter()
+            .map(|(name, url)| format!("- {} — {}", name, url))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }

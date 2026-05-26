@@ -23,6 +23,10 @@ pub struct PluginManifest {
     /// Falls back to `entry` when absent.
     #[serde(default)]
     pub entry_windows: Option<String>,
+    /// Optional AI tool schema (OpenAI function-calling format).
+    /// When present, this plugin is visible to the AI agent.
+    #[serde(default)]
+    pub tool_schema: Option<serde_json::Value>,
 }
 
 // ─── ExternalPlugin ───────────────────────────────────────────────────────────
@@ -79,6 +83,10 @@ impl Plugin for ExternalPlugin {
 
     fn keyword(&self) -> Option<&str> {
         self.manifest.keyword.as_deref()
+    }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        self.manifest.tool_schema.clone()
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
@@ -145,13 +153,9 @@ impl Plugin for ExternalPlugin {
     }
 
     async fn execute_tool(&self, args: serde_json::Value) -> String {
-        let id = args["id"].as_str().unwrap_or("").to_string();
-        let action_data = args["action_data"].as_str().unwrap_or("").to_string();
-
         let request = serde_json::json!({
-            "op": "execute",
-            "id": id,
-            "action_data": action_data,
+            "op": "tool_call",
+            "args": args,
         });
         let input = request.to_string();
 

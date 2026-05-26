@@ -637,4 +637,46 @@ impl Plugin for EmojiPickerPlugin {
         results.truncate(12);
         results
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "emoji_picker",
+                "description": "Search emojis by keyword and return matching emojis with names",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Keyword to search emojis (e.g. happy, fire, heart)" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let query = args["query"].as_str().unwrap_or("").trim().to_lowercase();
+        if query.is_empty() {
+            return "Error: 'query' parameter is required".to_string();
+        }
+        let results: Vec<_> = EMOJIS
+            .iter()
+            .filter_map(|(emoji, name, keywords)| {
+                let s = score_emoji(name, keywords, &query);
+                if s == 0 { None } else { Some((s, emoji, name)) }
+            })
+            .collect();
+        if results.is_empty() {
+            return format!("No emojis found matching '{}'", query);
+        }
+        let mut results = results;
+        results.sort_by(|a, b| b.0.cmp(&a.0));
+        results.truncate(12);
+        results
+            .into_iter()
+            .map(|(_, emoji, name)| format!("{} {}", emoji, name))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }

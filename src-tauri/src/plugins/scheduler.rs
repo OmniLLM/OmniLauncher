@@ -435,6 +435,95 @@ impl Plugin for SchedulerPlugin {
 
         vec![]
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "scheduler",
+                "description": "Manage scheduled recurring tasks: list, add, delete, enable or disable jobs",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "description": "'list', 'add', 'delete', 'enable', or 'disable'" },
+                        "id": { "type": "integer", "description": "Job ID (required for delete/enable/disable)" },
+                        "label": { "type": "string", "description": "Job label (required for add)" },
+                        "schedule": { "type": "string", "description": "Schedule for add: interval like '5m','1h','30s' or cron '*/5 * * * *'" },
+                        "command": { "type": "string", "description": "Shell command to run (required for add)" }
+                    },
+                    "required": ["action"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let action = args["action"].as_str().unwrap_or("").trim();
+        match action {
+            "list" => {
+                let jobs = list_jobs();
+                if jobs.is_empty() {
+                    return "No scheduled jobs".to_string();
+                }
+                jobs.iter().map(|j| {
+                    let sched_display = Schedule::from_stored(&j.schedule)
+                        .map(|s| s.display())
+                        .unwrap_or_else(|| j.schedule.clone());
+                    let status = if j.enabled { "enabled" } else { "disabled" };
+                    format!("#{} [{}] {} — {} | cmd: {} | runs: {}", j.id, status, j.label, sched_display, j.command, j.run_count)
+                }).collect::<Vec<_>>().join("\n")
+            }
+            "add" => {
+                let label = match args["label"].as_str() {
+                    Some(l) if !l.is_empty() => l,
+                    _ => return "Error: 'label' is required for add".to_string(),
+                };
+                let sched_str = match args["schedule"].as_str() {
+                    Some(s) if !s.is_empty() => s,
+                    _ => return "Error: 'schedule' is required for add (e.g. '5m' or '*/5 * * * *')".to_string(),
+                };
+                let cmd = match args["command"].as_str() {
+                    Some(c) if !c.is_empty() => c,
+                    _ => return "Error: 'command' is required for add".to_string(),
+                };
+                let schedule = if let Some(secs) = parse_interval(sched_str) {
+                    Schedule::Interval(secs)
+                } else {
+                    Schedule::Cron(sched_str.to_string())
+                };
+                match add_job(label, &schedule, cmd) {
+                    Ok(id) => format!("Job #{} added: {} — {} | cmd: {}", id, label, schedule.display(), cmd),
+                    Err(e) => format!("Error adding job: {}", e),
+                }
+            }
+            "delete" => {
+                let id = match args["id"].as_i64() {
+                    Some(i) => i,
+                    None => return "Error: 'id' is required for delete".to_string(),
+                };
+                if delete_job(id) {
+                    format!("Job #{} deleted", id)
+                } else {
+                    format!("Job #{} not found", id)
+                }
+            }
+            "enable" => {
+                let id = match args["id"].as_i64() {
+                    Some(i) => i,
+                    None => return "Error: 'id' is required for enable".to_string(),
+                };
+                if toggle_job(id, true) { format!("Job #{} enabled", id) } else { format!("Job #{} not found", id) }
+            }
+            "disable" => {
+                let id = match args["id"].as_i64() {
+                    Some(i) => i,
+                    None => return "Error: 'id' is required for disable".to_string(),
+                };
+                if toggle_job(id, false) { format!("Job #{} disabled", id) } else { format!("Job #{} not found", id) }
+            }
+            _ => format!("Unknown action: '{}'. Use: list, add, delete, enable, disable", action),
+        }
+    }
 }
 
 fn list_results() -> Vec<QueryResult> {

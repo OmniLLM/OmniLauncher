@@ -241,8 +241,25 @@ impl Plugin for PomodoroPlugin {
         results
     }
 
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "pomodoro",
+                "description": "Control the Pomodoro timer: start a work session, short/long break, check status, or stop",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "'start' (25min work), 'short' (5min break), 'long' (15min break), 'status', or 'stop'" }
+                    },
+                    "required": ["command"]
+                }
+            }
+        }))
+    }
+
     async fn execute_tool(&self, args: serde_json::Value) -> String {
-        let action = args["action"].as_str().unwrap_or("");
+        let action = args["command"].as_str().or_else(|| args["action"].as_str()).unwrap_or("");
         match action {
             "stop" => {
                 clear_state();

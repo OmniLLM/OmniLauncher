@@ -60,4 +60,39 @@ impl Plugin for EnvVarsPlugin {
             })
             .collect()
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "env_vars",
+                "description": "List environment variables, optionally filtered by name or value",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filter": { "type": "string", "description": "Optional filter string to match env var name or value (leave empty to list all)" }
+                    },
+                    "required": []
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let filter = args["filter"].as_str().unwrap_or("").trim().to_lowercase();
+        let vars: Vec<_> = std::env::vars()
+            .filter(|(key, val)| {
+                filter.is_empty()
+                    || key.to_lowercase().contains(&filter)
+                    || val.to_lowercase().contains(&filter)
+            })
+            .take(50)
+            .map(|(key, val)| format!("{}={}", key, val))
+            .collect();
+        if vars.is_empty() {
+            format!("No environment variables found matching '{}'", filter)
+        } else {
+            vars.join("\n")
+        }
+    }
 }

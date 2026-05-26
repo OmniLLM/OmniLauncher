@@ -272,4 +272,51 @@ impl Plugin for WindowResizePlugin {
         results.truncate(10);
         results
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "window_resize",
+                "description": "Tile or resize the active window to a layout position",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "layout": { "type": "string", "description": "Layout: 'fullscreen', 'maximize', 'left half', 'right half', 'top half', 'bottom half', 'top left', 'top right', 'bottom left', 'bottom right', 'center', 'wide center', 'left 70', 'right 70', 'left 30', 'right 30'" }
+                    },
+                    "required": ["layout"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let layout = args["layout"].as_str().unwrap_or("").trim().to_lowercase();
+        if layout.is_empty() {
+            return "Error: 'layout' parameter is required".to_string();
+        }
+        let matched = LAYOUTS.iter().find(|l| l.keyword == layout.as_str());
+        match matched {
+            Some(l) => {
+                let cmd = build_resize_command(l.rect);
+                let output = if cfg!(target_os = "windows") {
+                    std::process::Command::new("cmd").args(["/C", &cmd]).output()
+                } else {
+                    std::process::Command::new("sh").args(["-c", &cmd]).output()
+                };
+                match output {
+                    Ok(o) if o.status.success() => format!("Window resized to '{}'", l.label),
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                        format!("Resize '{}' completed (code {}): {}", l.label, o.status.code().unwrap_or(-1), stderr)
+                    }
+                    Err(e) => format!("Error executing resize: {}", e),
+                }
+            }
+            None => {
+                let available: Vec<_> = LAYOUTS.iter().map(|l| l.keyword).collect();
+                format!("Unknown layout: '{}'. Available: {}", layout, available.join(", "))
+            }
+        }
+    }
 }

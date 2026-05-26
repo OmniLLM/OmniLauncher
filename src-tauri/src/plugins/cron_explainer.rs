@@ -259,6 +259,34 @@ impl Plugin for CronExplainerPlugin {
             }
         }
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "cron_explainer",
+                "description": "Explain a cron expression in plain English",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expression": { "type": "string", "description": "Cron expression with 5 fields: min hour dom month dow (e.g. */5 * * * *)" }
+                    },
+                    "required": ["expression"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let expr = args["expression"].as_str().unwrap_or("").trim();
+        if expr.is_empty() {
+            return "Error: 'expression' parameter is required".to_string();
+        }
+        match explain_cron(expr) {
+            Some(human) => format!("{}\n(Expression: {})", human, expr),
+            None => format!("Invalid cron expression: '{}'. Expected 5 fields: min hour dom month dow", expr),
+        }
+    }
 }
 
 fn mk_example(expr: &str, desc: &str) -> QueryResult {

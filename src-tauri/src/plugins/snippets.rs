@@ -65,6 +65,83 @@ impl Plugin for SnippetsPlugin {
             })
             .collect()
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "snippets",
+                "description": "Manage text snippets: list, get, add, or delete",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "description": "'list', 'get', 'add', or 'delete'" },
+                        "name": { "type": "string", "description": "Snippet name (required for get/add/delete)" },
+                        "content": { "type": "string", "description": "Snippet content (required for add)" }
+                    },
+                    "required": ["action"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let action = args["action"].as_str().unwrap_or("").trim();
+        match action {
+            "list" => {
+                let snips = load_snippets();
+                if snips.is_empty() {
+                    return "No snippets found. Add snippets to ~/.omnilauncher/snippets.json".to_string();
+                }
+                snips.iter().map(|(name, content)| {
+                    let preview = if content.len() > 60 { format!("{}...", &content[..60]) } else { content.clone() };
+                    format!("{}: {}", name, preview)
+                }).collect::<Vec<_>>().join("\n")
+            }
+            "get" => {
+                let name = match args["name"].as_str() { Some(n) if !n.is_empty() => n, _ => return "Error: 'name' is required for get".to_string() };
+                let snips = load_snippets();
+                snips.into_iter().find(|(n, _)| n == name)
+                    .map(|(_, c)| c)
+                    .unwrap_or_else(|| format!("Snippet '{}' not found", name))
+            }
+            "add" => {
+                let name = match args["name"].as_str() { Some(n) if !n.is_empty() => n, _ => return "Error: 'name' is required for add".to_string() };
+                let content = match args["content"].as_str() { Some(c) => c, None => return "Error: 'content' is required for add".to_string() };
+                let path = snippets_path();
+                if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+                let mut map: std::collections::HashMap<String, String> = std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+                map.insert(name.to_string(), content.to_string());
+                match serde_json::to_string_pretty(&map) {
+                    Ok(json) => {
+                        let _ = std::fs::write(&path, json);
+                        format!("Snippet '{}' saved", name)
+                    }
+                    Err(e) => format!("Error saving snippet: {}", e),
+                }
+            }
+            "delete" => {
+                let name = match args["name"].as_str() { Some(n) if !n.is_empty() => n, _ => return "Error: 'name' is required for delete".to_string() };
+                let path = snippets_path();
+                let mut map: std::collections::HashMap<String, String> = std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+                if map.remove(name).is_some() {
+                    match serde_json::to_string_pretty(&map) {
+                        Ok(json) => { let _ = std::fs::write(&path, json); format!("Snippet '{}' deleted", name) }
+                        Err(e) => format!("Error saving: {}", e),
+                    }
+                } else {
+                    format!("Snippet '{}' not found", name)
+                }
+            }
+            _ => format!("Unknown action: '{}'. Use: list, get, add, delete", action),
+        }
+    }
 }
 
 fn snippets_path() -> std::path::PathBuf {

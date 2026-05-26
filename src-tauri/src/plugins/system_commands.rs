@@ -45,6 +45,51 @@ impl Plugin for SystemCommandsPlugin {
             })
             .collect()
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "system_commands",
+                "description": "Execute system commands: lock screen, sleep, shutdown, or restart",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "'lock', 'sleep', 'shutdown', or 'restart'" }
+                    },
+                    "required": ["command"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let command = args["command"].as_str().unwrap_or("").trim();
+        let shell_cmd = match command {
+            "lock" => sys_lock_cmd(),
+            "sleep" => sys_sleep_cmd(),
+            "shutdown" => sys_shutdown_cmd(),
+            "restart" => sys_restart_cmd(),
+            _ => return format!("Unknown command: '{}'. Use: lock, sleep, shutdown, restart", command),
+        };
+        let output = if cfg!(target_os = "windows") {
+            std::process::Command::new("cmd").args(["/C", &shell_cmd]).output()
+        } else {
+            std::process::Command::new("sh").args(["-c", &shell_cmd]).output()
+        };
+        match output {
+            Ok(o) => {
+                let code = o.status.code().unwrap_or(-1);
+                if o.status.success() {
+                    format!("Command '{}' executed successfully", command)
+                } else {
+                    let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                    format!("Command '{}' exited with code {}: {}", command, code, stderr)
+                }
+            }
+            Err(e) => format!("Error executing command: {}", e),
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

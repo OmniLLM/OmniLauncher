@@ -36,6 +36,23 @@ impl Plugin for ShellPlugin {
         }]
     }
 
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "description": "Run a shell command and return its output (> prefix plugin)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "Shell command to execute" }
+                    },
+                    "required": ["command"]
+                }
+            }
+        }))
+    }
+
     async fn execute_tool(&self, args: serde_json::Value) -> String {
         let cmd = args["command"].as_str().unwrap_or("");
         if cmd.is_empty() {

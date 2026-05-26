@@ -119,4 +119,76 @@ impl Plugin for WindowsSettingsPlugin {
             })
             .collect()
     }
+
+    fn tool_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "windows_settings",
+                "description": "Open a Windows Settings page by name",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "page": { "type": "string", "description": "Settings page name e.g. 'display', 'sound', 'notifications', 'power', 'bluetooth', 'wifi', 'privacy', 'update', 'apps'" }
+                    },
+                    "required": ["page"]
+                }
+            }
+        }))
+    }
+
+    async fn execute_tool(&self, args: serde_json::Value) -> String {
+        let page = args["page"].as_str().unwrap_or("").trim().to_lowercase();
+        if page.is_empty() {
+            return "Error: 'page' parameter is required".to_string();
+        }
+        let settings = vec![
+            ("display", "ms-settings:display"),
+            ("sound", "ms-settings:sound"),
+            ("notifications", "ms-settings:notifications"),
+            ("power", "ms-settings:powersleep"),
+            ("battery", "ms-settings:batterysaver"),
+            ("storage", "ms-settings:storagesense"),
+            ("bluetooth", "ms-settings:bluetooth"),
+            ("wifi", "ms-settings:network-wifi"),
+            ("vpn", "ms-settings:network-vpn"),
+            ("proxy", "ms-settings:network-proxy"),
+            ("ethernet", "ms-settings:network-ethernet"),
+            ("background", "ms-settings:personalization-background"),
+            ("colors", "ms-settings:personalization-colors"),
+            ("lockscreen", "ms-settings:lockscreen"),
+            ("taskbar", "ms-settings:taskbar"),
+            ("startup", "ms-settings:startupapps"),
+            ("defaultapps", "ms-settings:defaultapps"),
+            ("about", "ms-settings:about"),
+            ("update", "ms-settings:windowsupdate"),
+            ("mouse", "ms-settings:mousetouchpad"),
+            ("keyboard", "ms-settings:keyboard"),
+            ("apps", "ms-settings:appsfeatures"),
+            ("privacy", "ms-settings:privacy"),
+            ("time", "ms-settings:dateandtime"),
+            ("region", "ms-settings:regionformatting"),
+            ("accounts", "ms-settings:yourinfo"),
+            ("signin", "ms-settings:signinoptions"),
+            ("recovery", "ms-settings:recovery"),
+            ("developers", "ms-settings:developers"),
+            ("nightlight", "ms-settings:nightlight"),
+            ("focus", "ms-settings:quiethours"),
+            ("multitasking", "ms-settings:multitasking"),
+            ("clipboard", "ms-settings:clipboard"),
+            ("remotedesktop", "ms-settings:remotedesktop"),
+            ("firewall", "ms-settings:windowsdefender"),
+        ];
+        let matched = settings.iter().find(|(name, _)| page.contains(name) || name.contains(&page.as_str()));
+        match matched {
+            Some((name, uri)) => {
+                let output = std::process::Command::new("cmd").args(["/C", &format!("start {}", uri)]).output();
+                match output {
+                    Ok(_) => format!("Opened Windows Settings: {} ({})", name, uri),
+                    Err(e) => format!("Error opening settings: {}", e),
+                }
+            }
+            None => format!("Unknown settings page: '{}'. Try: display, sound, notifications, power, bluetooth, wifi, privacy, update, apps", page),
+        }
+    }
 }
