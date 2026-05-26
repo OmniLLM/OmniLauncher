@@ -966,3 +966,602 @@ async fn test_todo_live_html_defines_status_helpers_used_by_render() {
         std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
     }
 }
+
+// ============================================================
+// Unit Converter
+// ============================================================
+
+#[tokio::test]
+async fn test_unit_converter_km_to_m() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool(
+            "convert_unit",
+            serde_json::json!({"value": 1.0, "from_unit": "km", "to_unit": "m"}),
+        )
+        .await;
+    assert!(r.contains("1000"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_unit_converter_celsius_to_fahrenheit() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool(
+            "convert_unit",
+            serde_json::json!({"value": 100.0, "from_unit": "c", "to_unit": "f"}),
+        )
+        .await;
+    assert!(r.contains("212"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_unit_converter_kg_to_lb() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool(
+            "convert_unit",
+            serde_json::json!({"value": 1.0, "from_unit": "kg", "to_unit": "lb"}),
+        )
+        .await;
+    assert!(r.contains("2.2") || r.contains("2204"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_unit_converter_bad_units() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool(
+            "convert_unit",
+            serde_json::json!({"value": 1.0, "from_unit": "foobar", "to_unit": "baz"}),
+        )
+        .await;
+    assert!(r.to_lowercase().contains("cannot") || r.to_lowercase().contains("convert"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_unit_converter_query() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("conv 1 km to m").await;
+    assert!(!r.is_empty());
+    assert!(
+        r[0].title.contains("1000") || r[0].subtitle.as_deref().unwrap_or("").contains("1000"),
+        "Got: {:?}", r[0]
+    );
+}
+
+// ============================================================
+// Cron Explainer
+// ============================================================
+
+#[tokio::test]
+async fn test_cron_explain_every_5_min() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool(
+            "cron_explainer",
+            serde_json::json!({"expression": "*/5 * * * *"}),
+        )
+        .await;
+    assert!(r.to_lowercase().contains("minute") || r.contains("5"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_cron_explain_daily_midnight() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool(
+            "cron_explainer",
+            serde_json::json!({"expression": "0 0 * * *"}),
+        )
+        .await;
+    assert!(!r.is_empty(), "Expected a non-empty explanation");
+}
+
+#[tokio::test]
+async fn test_cron_explain_query() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("cron */15 * * * *").await;
+    assert!(!r.is_empty());
+}
+
+// ============================================================
+// Emoji Picker
+// ============================================================
+
+#[tokio::test]
+async fn test_emoji_query_fire() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("emoji fire").await;
+    assert!(!r.is_empty());
+    assert!(r.iter().any(|x| x.title.contains("\u{1F525}") || x.id.contains("fire")));
+}
+
+#[tokio::test]
+async fn test_emoji_query_heart() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("emoji heart").await;
+    assert!(!r.is_empty());
+}
+
+#[tokio::test]
+async fn test_emoji_tool() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("emoji_picker", serde_json::json!({"query": "smile"}))
+        .await;
+    assert!(!r.is_empty(), "Got: {}", r);
+}
+
+// ============================================================
+// Process Manager
+// ============================================================
+
+#[tokio::test]
+async fn test_process_manager_list() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("process_manager", serde_json::json!({"action": "list"}))
+        .await;
+    assert!(!r.is_empty(), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_process_manager_kill_nonexistent() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool(
+            "process_manager",
+            serde_json::json!({"action": "kill", "name": "zzz_no_such_proc_xyz"}),
+        )
+        .await;
+    assert!(
+        r.contains("not found") || r.contains("No process") || r.contains("zzz"),
+        "Got: {}",
+        r
+    );
+}
+
+#[tokio::test]
+async fn test_process_manager_query() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("ps ").await;
+    assert!(!r.is_empty());
+}
+
+// ============================================================
+// Snippets
+// ============================================================
+
+#[tokio::test]
+async fn test_snippets_lifecycle() {
+    let pm = create_plugin_manager();
+    let add = pm
+        .execute_tool(
+            "snippets",
+            serde_json::json!({"action": "add", "name": "_test_snip", "content": "hello snippet"}),
+        )
+        .await;
+    assert!(
+        add.to_lowercase().contains("add")
+            || add.to_lowercase().contains("saved")
+            || add.to_lowercase().contains("success")
+            || add.contains("_test_snip"),
+        "add: {}",
+        add
+    );
+    let get = pm
+        .execute_tool("snippets", serde_json::json!({"action": "get", "name": "_test_snip"}))
+        .await;
+    assert!(get.contains("hello snippet"), "get: {}", get);
+    let list = pm
+        .execute_tool("snippets", serde_json::json!({"action": "list"}))
+        .await;
+    assert!(list.contains("_test_snip"), "list: {}", list);
+    let del = pm
+        .execute_tool("snippets", serde_json::json!({"action": "delete", "name": "_test_snip"}))
+        .await;
+    assert!(!del.to_lowercase().contains("error"), "delete: {}", del);
+}
+
+#[tokio::test]
+async fn test_snippets_get_nonexistent() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("snippets", serde_json::json!({"action": "get", "name": "zzz_no_snip"}))
+        .await;
+    assert!(
+        r.to_lowercase().contains("not found") || r.contains("zzz_no_snip"),
+        "Got: {}",
+        r
+    );
+}
+
+// ============================================================
+// Timer
+// ============================================================
+
+#[tokio::test]
+async fn test_timer_set() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("set_timer", serde_json::json!({"duration_seconds": 30}))
+        .await;
+    assert!(r.contains("30"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_timer_invalid_duration() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("set_timer", serde_json::json!({"duration_seconds": 0}))
+        .await;
+    assert!(r.to_lowercase().contains("invalid"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_timer_query_parse() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("timer 5m").await;
+    assert!(!r.is_empty());
+}
+
+// ============================================================
+// Pomodoro
+// ============================================================
+
+#[tokio::test]
+async fn test_pomodoro_status_no_active() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("pomodoro", serde_json::json!({"command": "status"}))
+        .await;
+    assert!(
+        r.contains("No active") || r.contains("Remaining") || r.contains("Mode"),
+        "Got: {}",
+        r
+    );
+}
+
+#[tokio::test]
+async fn test_pomodoro_stop() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("pomodoro", serde_json::json!({"command": "stop"}))
+        .await;
+    assert!(r.contains("stopped"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_pomodoro_unknown_action() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("pomodoro", serde_json::json!({"command": "zzz_unknown"}))
+        .await;
+    assert!(r.to_lowercase().contains("unknown"), "Got: {}", r);
+}
+
+// ============================================================
+// Scheduler
+// ============================================================
+
+#[tokio::test]
+async fn test_scheduler_list_empty_or_jobs() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("scheduler", serde_json::json!({"action": "list"}))
+        .await;
+    assert!(!r.is_empty(), "Got empty string from scheduler list");
+}
+
+#[tokio::test]
+async fn test_scheduler_add_and_delete() {
+    let pm = create_plugin_manager();
+    let add = pm
+        .execute_tool(
+            "scheduler",
+            serde_json::json!({
+                "action": "add",
+                "label": "_test_job_xyz",
+                "schedule": "5m",
+                "command": "echo hello"
+            }),
+        )
+        .await;
+    assert!(!add.to_lowercase().contains("error"), "add: {}", add);
+    let list = pm
+        .execute_tool("scheduler", serde_json::json!({"action": "list"}))
+        .await;
+    assert!(list.contains("_test_job_xyz"), "list: {}", list);
+    let id: Option<u64> = list
+        .lines()
+        .find(|l| l.contains("_test_job_xyz"))
+        .and_then(|l| l.trim_start_matches('#').split_whitespace().next())
+        .and_then(|s| s.parse().ok());
+    if let Some(id) = id {
+        let del = pm
+            .execute_tool("scheduler", serde_json::json!({"action": "delete", "id": id}))
+            .await;
+        assert!(!del.to_lowercase().contains("error"), "delete: {}", del);
+    }
+}
+
+#[tokio::test]
+async fn test_scheduler_add_missing_required_fields() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("scheduler", serde_json::json!({"action": "add", "label": "x"}))
+        .await;
+    assert!(
+        r.to_lowercase().contains("error") || r.to_lowercase().contains("required"),
+        "Got: {}",
+        r
+    );
+}
+
+// ============================================================
+// File Search
+// ============================================================
+
+#[tokio::test]
+async fn test_file_search_finds_existing() {
+    let pm = create_plugin_manager();
+    let d = std::env::temp_dir().join("omni_fsearch");
+    let _ = std::fs::create_dir_all(&d);
+    std::fs::write(d.join("unique_omnitest.txt"), "x").unwrap();
+    let r = pm
+        .execute_tool("file_search", serde_json::json!({"query": "unique_omnitest"}))
+        .await;
+    assert!(r.contains("unique_omnitest"), "Got: {}", r);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[tokio::test]
+async fn test_file_search_empty_query() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("file_search", serde_json::json!({"query": ""}))
+        .await;
+    assert!(!r.is_empty(), "Expected non-empty response to empty query");
+}
+
+#[tokio::test]
+async fn test_file_search_query_prefix() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("find Cargo.toml").await;
+    assert!(!r.is_empty(), "Expected file search results for Cargo.toml");
+}
+
+// ============================================================
+// Selection
+// ============================================================
+
+#[tokio::test]
+async fn test_selection_search() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool(
+            "act_on_selection",
+            serde_json::json!({"text": "rust programming", "action": "search"}),
+        )
+        .await;
+    assert!(
+        r.contains("google.com") || r.contains("http") || r.contains("search"),
+        "Got: {}",
+        r
+    );
+}
+
+#[tokio::test]
+async fn test_selection_empty_text_no_panic() {
+    let pm = create_plugin_manager();
+    let _r = pm
+        .execute_tool(
+            "act_on_selection",
+            serde_json::json!({"text": "", "action": "search"}),
+        )
+        .await;
+}
+
+// ============================================================
+// Window Resize
+// ============================================================
+
+#[tokio::test]
+async fn test_window_resize_query() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("resize left").await;
+    assert!(!r.is_empty(), "Expected results for 'resize left'");
+}
+
+#[tokio::test]
+async fn test_window_resize_fullscreen_query() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("resize fullscreen").await;
+    assert!(!r.is_empty());
+}
+
+#[tokio::test]
+async fn test_window_resize_tool_returns_something() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("window_resize", serde_json::json!({"layout": "left half"}))
+        .await;
+    assert!(!r.is_empty(), "Got empty string from window_resize");
+}
+
+// ============================================================
+// URL Opener
+// ============================================================
+
+#[tokio::test]
+async fn test_url_opener_empty_url() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("open_url", serde_json::json!({"url": ""}))
+        .await;
+    assert!(
+        r.to_lowercase().contains("error")
+            || r.to_lowercase().contains("invalid")
+            || r.to_lowercase().contains("no url"),
+        "Got: {}",
+        r
+    );
+}
+
+#[tokio::test]
+async fn test_url_opener_tool_returns_something() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("open_url", serde_json::json!({"url": "https://example.com"}))
+        .await;
+    assert!(!r.is_empty(), "Got: {}", r);
+}
+
+// ============================================================
+// Script Runner
+// ============================================================
+
+#[tokio::test]
+async fn test_script_runner_missing_script() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("run_user_script", serde_json::json!({"script_name": "zzz_no_script"}))
+        .await;
+    assert!(
+        r.to_lowercase().contains("not found")
+            || r.to_lowercase().contains("error")
+            || r.contains("zzz"),
+        "Got: {}",
+        r
+    );
+}
+
+// ============================================================
+// Translate
+// ============================================================
+
+#[tokio::test]
+async fn test_translate_query_prefix() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("tl hello").await;
+    assert!(!r.is_empty(), "Expected translate suggestions for 'tl hello'");
+}
+
+// ============================================================
+// Agent Delegate
+// ============================================================
+
+#[tokio::test]
+async fn test_agent_delegate_query_at_claude() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("@claude fix the tests").await;
+    assert!(!r.is_empty(), "Expected results for @claude query");
+}
+
+#[tokio::test]
+async fn test_agent_delegate_query_at_codex() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("@codex refactor").await;
+    assert!(!r.is_empty());
+}
+
+// ============================================================
+// Clipboard
+// ============================================================
+
+#[tokio::test]
+async fn test_clipboard_query_no_panic() {
+    let pm = create_plugin_manager();
+    let _r = pm.query_all("clip ").await;
+}
+
+// ============================================================
+// Browser Bookmarks
+// ============================================================
+
+#[tokio::test]
+async fn test_bookmarks_query_no_panic() {
+    let pm = create_plugin_manager();
+    let _r = pm.query_all("bm ").await;
+}
+
+// ============================================================
+// Sys Info (extended)
+// ============================================================
+
+#[tokio::test]
+async fn test_sys_info_cpu() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("sys_info", serde_json::json!({"info_type": "cpu"}))
+        .await;
+    assert!(!r.is_empty(), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_sys_info_memory() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("sys_info", serde_json::json!({"info_type": "memory"}))
+        .await;
+    assert!(!r.is_empty(), "Got: {}", r);
+}
+
+// ============================================================
+// Git (extended)
+// ============================================================
+
+#[tokio::test]
+async fn test_git_log_runs() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("git_ops", serde_json::json!({"subcommand": "log"}))
+        .await;
+    assert!(!r.is_empty(), "Got: {}", r);
+}
+
+// ============================================================
+// Calculator (extended)
+// ============================================================
+
+#[tokio::test]
+async fn test_calc_division() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("= 100/4").await;
+    assert!(!r.is_empty());
+    assert!(r[0].title.contains("25"), "Got: {}", r[0].title);
+}
+
+#[tokio::test]
+async fn test_calc_sqrt() {
+    let pm = create_plugin_manager();
+    let r = pm.query_all("= sqrt(144)").await;
+    assert!(!r.is_empty());
+    assert!(r[0].title.contains("12"), "Got: {}", r[0].title);
+}
+
+// ============================================================
+// Web Search (extended)
+// ============================================================
+
+#[tokio::test]
+async fn test_web_search_bing() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool("web_search", serde_json::json!({"query": "rust lang", "engine": "bing"}))
+        .await;
+    assert!(r.contains("bing.com"), "Got: {}", r);
+}
+
+#[tokio::test]
+async fn test_web_search_github() {
+    let pm = create_plugin_manager();
+    let r = pm
+        .execute_tool(
+            "web_search",
+            serde_json::json!({"query": "omnilauncher", "engine": "github"}),
+        )
+        .await;
+    assert!(r.contains("github.com"), "Got: {}", r);
+}
