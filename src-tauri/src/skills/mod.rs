@@ -360,4 +360,31 @@ When the user asks to summarize a URL, do the following.
         let none = mgr.find_relevant("launch chrome");
         assert_eq!(none.len(), 0);
     }
+
+    #[test]
+    fn test_install_from_path() {
+        use std::io::Write;
+
+        // Write a temp SKILL.md file
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let skill_path = dir.path().join("SKILL.md");
+        let mut f = std::fs::File::create(&skill_path).unwrap();
+        write!(f, "{}", SAMPLE).unwrap();
+        drop(f);
+
+        let mut mgr = SkillManager::new();
+        let result = mgr.install_from_path(skill_path.to_str().unwrap());
+        assert!(result.is_ok(), "install_from_path failed: {:?}", result);
+        assert!(result.unwrap().contains("web-summarizer"));
+
+        // Skill should now be findable
+        let found = mgr.find_relevant("tldr this page");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].meta.name, "web-summarizer");
+
+        // Reinstall (overwrite) should also succeed
+        let result2 = mgr.install_from_path(skill_path.to_str().unwrap());
+        assert!(result2.is_ok());
+        assert_eq!(mgr.list_meta().len(), 1); // No duplicates
+    }
 }
