@@ -46,5 +46,7 @@ pub fn create_plugin_manager() -> PluginManager {
     pm.register(Box::new(plugins::web_fetch::WebFetchPlugin));
     pm.register(Box::new(plugins::web_search::WebSearchPlugin));
     pm.register(Box::new(plugins::windows_settings::WindowsSettingsPlugin));
+    pm.register(Box::new(plugins::script_runner::ScriptRunnerPlugin));
+    pm.register(Box::new(plugins::screenshot::ScreenshotPlugin));
     pm
 }

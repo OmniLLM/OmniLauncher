@@ -119,3 +119,5 @@ pub mod url_opener;
 pub mod web_fetch;
 pub mod web_search;
 pub mod windows_settings;
+pub mod script_runner;
+pub mod screenshot;
