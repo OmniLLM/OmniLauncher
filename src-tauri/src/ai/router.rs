@@ -179,6 +179,18 @@ impl Router {
         let tools = plugin_manager.all_tool_schemas();
 
         let os_info = get_os_info();
+        // Build dynamic tool list from registered plugins
+        let tool_names: Vec<String> = tools
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        let tool_list = tool_names.join(", ");
+
         let system_prompt = format!(
             "You are OmniLauncher, an AI-powered desktop assistant with full tool access.\n\
             \n\
@@ -189,9 +201,18 @@ impl Router {
             IMPORTANT: When executing shell commands via shell_exec or code_execute, you MUST use the correct shell syntax for this OS:\n\
             {}\n\
             \n\
-            Available tools: shell_exec, file_read, file_write, file_edit, grep_search, glob_files, \
-            list_dir, git_ops, code_execute (python/javascript/powershell/bash/rust), \
-            http_request, web_fetch, web_search, sys_info, todo_memory.\n\
+            AVAILABLE TOOLS ({} total): {}\n\
+            \n\
+            TOOL SELECTION STRATEGY — do your best to find the most appropriate tool:\n\
+            - ALWAYS prefer a specific plugin tool over a generic one when one exists.\n\
+              Example: use `color_picker` for color conversion, NOT `shell_exec`.\n\
+              Example: use `dns` for DNS lookups, NOT `shell_exec` with nslookup.\n\
+              Example: use `currency` for currency conversion, NOT `web_search`.\n\
+              Example: use `timestamp` for time conversions, NOT `code_execute`.\n\
+              Example: use `ip_info` for IP lookups, NOT `http_request`.\n\
+            - For each task, mentally scan the full tool list and pick the most targeted one.\n\
+            - Chain tools when needed: e.g. use `web_search` to find info, then `web_fetch` to read it.\n\
+            - Fall back to `shell_exec` or `code_execute` only when no dedicated tool fits.\n\
             \n\
             OUTPUT FORMATTING:\n\
             - Always use well-formatted Markdown in your responses\n\
@@ -202,8 +223,8 @@ impl Router {
             - Use headers (## Section) to organize longer responses\n\
             - Keep responses concise but visually clear and scannable\n\
             \n\
-            Use tools proactively to help the user.",
-            os_info.0, os_info.1, os_info.2
+            Use tools proactively. When in doubt, try the most specific tool first.",
+            os_info.0, os_info.1, os_info.2, tool_names.len(), tool_list
         );
 
         // Find relevant skills
@@ -274,9 +295,18 @@ impl Router {
                     IMPORTANT: When executing shell commands via shell_exec or code_execute, you MUST use the correct shell syntax for this OS:\n\
                     {}\n\
                     \n\
-                    Available tools: shell_exec, file_read, file_write, file_edit, grep_search, glob_files, \
-                    list_dir, git_ops, code_execute (python/javascript/powershell/bash/rust), \
-                    http_request, web_fetch, web_search, sys_info, todo_memory.\n\
+                    AVAILABLE TOOLS ({} total): {}\n\
+                    \n\
+                    TOOL SELECTION STRATEGY — do your best to find the most appropriate tool:\n\
+                    - ALWAYS prefer a specific plugin tool over a generic one when one exists.\n\
+                      Example: use `color_picker` for color conversion, NOT `shell_exec`.\n\
+                      Example: use `dns` for DNS lookups, NOT `shell_exec` with nslookup.\n\
+                      Example: use `currency` for currency conversion, NOT `web_search`.\n\
+                      Example: use `timestamp` for time conversions, NOT `code_execute`.\n\
+                      Example: use `ip_info` for IP lookups, NOT `http_request`.\n\
+                    - For each task, mentally scan the full tool list and pick the most targeted one.\n\
+                    - Chain tools when needed: e.g. use `web_search` to find info, then `web_fetch` to read it.\n\
+                    - Fall back to `shell_exec` or `code_execute` only when no dedicated tool fits.\n\
                     \n\
                     OUTPUT FORMATTING:\n\
                     - Always use well-formatted Markdown in your responses\n\
@@ -287,8 +317,8 @@ impl Router {
                     - Use headers (## Section) to organize longer responses\n\
                     - Keep responses concise but visually clear and scannable\n\
                     \n\
-                    Use tools proactively to help the user.",
-                    os_info.0, os_info.1, os_info.2
+                    Use tools proactively. When in doubt, try the most specific tool first.",
+                    os_info.0, os_info.1, os_info.2, tool_names.len(), tool_list
                 );
                 let rebuilt = local_ctx.get_messages_with_system(&system_prompt_rebuild);
                 // Re-append any tool results from previous iterations that aren't in local_ctx
