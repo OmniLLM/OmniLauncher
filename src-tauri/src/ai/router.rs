@@ -1096,7 +1096,7 @@ Skills are Markdown files (`SKILL.md`) with YAML frontmatter that inject behavio
 When your query matches a skill's triggers, the skill's instructions are automatically included.
 
 **User skills directory:**
-`~/.config/omnilauncher/skills/<skill-name>/SKILL.md`
+`~/.omnilauncher/skills/<skill-name>/SKILL.md`
 
 **Examples:**
 ```
@@ -1118,7 +1118,7 @@ fn get_command_help(cmd: &str) -> String {
         "/ls" => "## `/ls`\n\nList files and directories.\n\n**Usage:** `/ls [path]`\n\n**Examples:**\n```\n/ls\n/ls src\n/ls C:\\Users\\jzhu\\repos\n/ls ~/Documents\n```\n\n**Notes:**\n- Defaults to current directory if no path given\n- Directories shown with trailing `/`\n- Sorted alphabetically".to_string(),
         "/git" => "## `/git`\n\nRun any git subcommand.\n\n**Usage:** `/git [subcommand]`\n\n**Examples:**\n```\n/git\n/git log --oneline -10\n/git branch -a\n/git diff --stat\n/git stash list\n/git remote -v\n```\n\n**Notes:**\n- Defaults to `git status` when no subcommand given\n- Output displayed in a code block\n- Runs in the current working directory".to_string(),
         "/calc" | "/c" => "## `/calc` (shortcut: `/c`)\n\nEvaluate math expressions.\n\n**Usage:** `/calc <expression>`\n\n**Examples:**\n```\n/calc 2^10\n/calc 15 * 3 + 7\n/c sqrt(144)\n/calc (100 - 15) / 5\n/calc 2.5 * 1.1\n```\n\n**Supported:** `+`, `-`, `*`, `/`, `^` (power), parentheses, `sqrt`".to_string(),
-        "/todo" | "/t" => "## `/todo` (shortcut: `/t`)\n\nManage a persistent todo list.\n\n**Usage:**\n- `/todo` — list all todos\n- `/todo <text>` — add a new todo\n\n**Examples:**\n```\n/todo\n/t buy groceries\n/todo review PR #42\n/t fix login bug\n```\n\n**Notes:**\n- Stored in `~/.omnilauncher/todos.json`\n- Use AI for remove/clear: \"remove todo #2\"".to_string(),
+        "/todo" | "/t" => "## `/todo` (shortcut: `/t`)\n\nManage a persistent todo list.\n\n**Usage:**\n- `/todo` — list all todos\n- `/todo <text>` — add a new todo\n\n**Examples:**\n```\n/todo\n/t buy groceries\n/todo review PR #42\n/t fix login bug\n```\n\n**Notes:**\n- Stored in `~/.omnilauncher/omnilauncher.sqlite`\n- Use AI for remove/clear: \"remove todo #2\"".to_string(),
         "/web" | "/w" => "## `/web` (shortcut: `/w`)\n\nSearch the web via Google.\n\n**Usage:** `/web <query>`\n\n**Examples:**\n```\n/web rust async tutorial\n/w tauri v2 documentation\n/web \"best pizza near me\"\n```\n\n**Notes:**\n- Opens a Google search result link\n- For YouTube use `yt <query>`, for GitHub use `gh <query>`".to_string(),
         "/ip" => "## `/ip`\n\nShow your public IP address.\n\n**Usage:** `/ip`\n\n**Notes:**\n- Fetches from https://api.ipify.org\n- Requires internet connection".to_string(),
         "/ports" => "## `/ports`\n\nShow all listening network ports.\n\n**Usage:** `/ports`\n\n**Notes:**\n- Windows: uses `netstat -an | findstr LISTENING`\n- Linux/macOS: uses `ss -tlnp`\n- Useful for finding what's using a port".to_string(),

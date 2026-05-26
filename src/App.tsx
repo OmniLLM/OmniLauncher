@@ -606,7 +606,7 @@ export default function App() {
 
   const doAiQuery = useCallback(
     async (q: string) => {
-      if (!q.trim()) return;
+      if (!q.trim() || loading) return;
 
       const userTurn: ConversationTurn = { role: "user", content: q };
       const pendingAiTurn: ConversationTurn = {
@@ -646,7 +646,7 @@ export default function App() {
         setTimeout(() => focusInput(), 50);
       }
     },
-    [focusInput],
+    [focusInput, loading],
   );
 
   const handleQueryChange = useCallback(
@@ -856,7 +856,7 @@ export default function App() {
   const launcherHasContent =
     results.length > 0 || showSettings || showPluginManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
-  const panelHeight = isAiMode ? 560 : launcherHasContent ? 520 : 56;
+  const panelHeight = isAiMode ? 560 : launcherHasContent ? 520 : 88;
   const windowHeight = `${panelHeight}px`;
   const maxHeight = `${panelHeight}px`;
 
@@ -934,7 +934,7 @@ export default function App() {
                 letterSpacing: "0.03em",
               }}
             >
-              ✦ AI Chat
+              Omnilauncher AI Mode
             </span>
             <button
               onClick={handleNewConversation}

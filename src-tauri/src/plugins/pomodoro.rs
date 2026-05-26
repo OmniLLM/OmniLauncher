@@ -6,18 +6,15 @@
 ///   pomo status      — show current timer state
 ///   pomo stop        — cancel running timer
 ///
-/// State is persisted to ~/.config/omnilauncher/pomodoro.json
+/// State is persisted to ~/.omnilauncher/pomodoro.json
+use crate::path_config;
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
-use std::path::PathBuf;
 
 pub struct PomodoroPlugin;
 
-fn state_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("omnilauncher")
-        .join("pomodoro.json")
+fn state_path() -> std::path::PathBuf {
+    path_config::data_dir().join("pomodoro.json")
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]

@@ -1,4 +1,5 @@
 use crate::db;
+use crate::path_config;
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
@@ -8,24 +9,14 @@ pub struct SchedulerPlugin;
 
 // ─── DB helpers ──────────────────────────────────────────────────────────────
 
-fn config_dir() -> PathBuf {
-    if let Ok(base) = std::env::var("OMNILAUNCHER_CONFIG_DIR") {
-        return PathBuf::from(base);
-    }
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".config")
-        .join("omnilauncher")
-}
-
 fn db_path() -> PathBuf {
-    config_dir().join("omnilauncher.sqlite")
+    path_config::data_dir().join("omnilauncher.sqlite")
 }
 
 fn open_db() -> rusqlite::Result<Connection> {
-    let dir = config_dir();
+    let dir = path_config::data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| {
-        rusqlite::Error::InvalidPath(format!("Failed to create config dir {:?}: {}", dir, e).into())
+        rusqlite::Error::InvalidPath(format!("Failed to create data dir {:?}: {}", dir, e).into())
     })?;
     let conn = Connection::open(db_path())?;
     db::run_migrations(&conn)?;
@@ -234,7 +225,7 @@ fn unix_to_iso(t: i64) -> String {
 /// Launch a background tokio task that polls every 30s and fires due jobs.
 /// Call once at app startup from main.rs.
 pub fn start_scheduler() {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
             tick_scheduler();
@@ -617,6 +608,11 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_scheduler_does_not_require_current_tokio_runtime() {
+        start_scheduler();
+    }
 
     #[test]
     fn test_parse_interval() {

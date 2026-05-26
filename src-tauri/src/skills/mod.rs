@@ -1,3 +1,4 @@
+use crate::path_config;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -251,12 +252,9 @@ impl SkillManager {
         self.load_all();
     }
 
-    /// Returns `~/.config/omnilauncher/skills/`
+    /// Returns `~/.omnilauncher/skills/`
     pub fn skill_dir() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("omnilauncher")
-            .join("skills")
+        path_config::data_dir().join("skills")
     }
 
     /// Returns the bundled assets/skills directory (relative to the binary).

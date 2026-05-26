@@ -3,7 +3,7 @@
 /// Inspired by Sol (MIT) — watches a user scripts folder and surfaces any
 /// shell scripts inside it as first-class launcher commands.
 ///
-/// Drop a `.sh` script into ~/.config/omnilauncher/scripts/ and it immediately
+/// Drop a `.sh` script into ~/.omnilauncher/scripts/ and it immediately
 /// appears in the launcher.  Metadata is read from leading comments:
 ///
 ///   #!/usr/bin/env bash
@@ -14,7 +14,7 @@
 /// Usage:  type "scripts" or just "sc " to filter
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
-use dirs::config_dir;
+use crate::path_config;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
@@ -28,10 +28,7 @@ struct ScriptMeta {
 }
 
 fn scripts_dir() -> PathBuf {
-    config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("omnilauncher")
-        .join("scripts")
+    path_config::data_dir().join("scripts")
 }
 
 fn parse_meta(path: &PathBuf) -> Option<ScriptMeta> {
@@ -98,7 +95,7 @@ impl Plugin for ScriptRunnerPlugin {
     }
 
     fn description(&self) -> &str {
-        "Run scripts from ~/.config/omnilauncher/scripts/ (type 'sc ' to filter)"
+        "Run scripts from ~/.omnilauncher/scripts/ (type 'sc ' to filter)"
     }
 
     fn keyword(&self) -> Option<&str> {

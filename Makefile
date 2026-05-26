@@ -1,4 +1,4 @@
-.PHONY: help dev dev-debug prod prod-debug restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle stop-running stop-dev-server
+.PHONY: help dev dev-debug prod prod-debug restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle stop stop-running stop-dev-server
 
 SHELL := pwsh
 
@@ -81,6 +81,8 @@ check:
 
 test: stop-running
 	@cmd /c "cd /d src-tauri && set CARGO_TARGET_DIR=target\test&& cargo test -- --test-threads=1"
+
+stop: stop-running
 
 stop-running:
 	@cmd /c "taskkill /IM omnilauncher.exe /F /T >NUL 2>&1 & exit /b 0"

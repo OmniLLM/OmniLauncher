@@ -1,4 +1,5 @@
 use crate::db;
+use crate::path_config;
 use crate::plugins::url_opener::open_url_in_browser;
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
@@ -8,28 +9,16 @@ pub struct TodoPlugin;
 
 // ─── DB path ─────────────────────────────────────────────────────────────────
 
-fn config_dir() -> std::path::PathBuf {
-    // Allow tests to override the config directory via an env var so that
-    // parallel test runs don't share the same SQLite database.
-    if let Ok(base) = std::env::var("OMNILAUNCHER_CONFIG_DIR") {
-        return std::path::PathBuf::from(base);
-    }
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".config")
-        .join("omnilauncher")
-}
-
 fn db_path() -> std::path::PathBuf {
-    config_dir().join("omnilauncher.sqlite")
+    path_config::data_dir().join("omnilauncher.sqlite")
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
 fn open_db() -> rusqlite::Result<Connection> {
-    let dir = config_dir();
+    let dir = path_config::data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| {
-        rusqlite::Error::InvalidPath(format!("Failed to create config dir {:?}: {}", dir, e).into())
+        rusqlite::Error::InvalidPath(format!("Failed to create data dir {:?}: {}", dir, e).into())
     })?;
     // One-time rename: migrate todo.sqlite → omnilauncher.sqlite
     let old_db = dir.join("todo.sqlite");
@@ -387,7 +376,7 @@ tr.group-header td{{background:#252535;color:#6c7086;font-size:11px;font-weight:
     <div class="logo">✦</div>
     <div>
       <h1>OmniLauncher Todos</h1>
-      <div class="sub">~/.config/omnilauncher/omnilauncher.sqlite</div>
+      <div class="sub">~/.omnilauncher/omnilauncher.sqlite</div>
     </div>
   </header>
 
@@ -1078,7 +1067,7 @@ impl Plugin for TodoPlugin {
                 if text.contains('/') || text.contains('\\') || text.contains("..") {
                     return "Error: note key must not contain path separators".to_string();
                 }
-                let notes_dir = config_dir().join("notes");
+                let notes_dir = path_config::data_dir().join("notes");
                 let _ = std::fs::create_dir_all(&notes_dir);
                 let path = notes_dir.join(format!("{}.md", text));
                 match std::fs::write(&path, content) {
@@ -1090,7 +1079,7 @@ impl Plugin for TodoPlugin {
                 if text.is_empty() {
                     return "Error: need note key".to_string();
                 }
-                let path = config_dir().join("notes").join(format!("{}.md", text));
+                let path = path_config::data_dir().join("notes").join(format!("{}.md", text));
                 match std::fs::read_to_string(&path) {
                     Ok(c) => c,
                     Err(_) => format!("Note '{}' not found.", text),

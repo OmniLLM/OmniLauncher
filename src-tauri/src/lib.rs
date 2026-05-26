@@ -2,6 +2,7 @@ pub mod ai;
 pub mod db;
 pub mod guardrails;
 pub mod live_server;
+pub mod path_config;
 pub mod plugins;
 pub mod settings;
 pub mod skills;

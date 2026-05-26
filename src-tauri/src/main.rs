@@ -19,17 +19,12 @@ use tauri::{
     Emitter, LogicalPosition, LogicalSize, Manager, Position, Size,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 
 fn debug_log_path() -> PathBuf {
-    if cfg!(target_os = "windows") {
-        return std::env::temp_dir().join("omnilauncher.log");
-    }
-
     dirs::home_dir()
         .unwrap_or_default()
-        .join(".config")
-        .join("omnilauncher")
+        .join(".omnilauncher")
         .join("omnilauncher.log")
 }
 
@@ -79,6 +74,7 @@ pub struct AppState {
     pub ai_client: Mutex<AiClient>,
     pub settings: Arc<Mutex<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
+    pub ai_in_flight: Semaphore,
     pub skill_manager: Arc<Mutex<SkillManager>>,
     pub live_server: LiveServer,
     pub live_server_port: u16,
@@ -136,6 +132,7 @@ pub fn run() {
         ai_client: Mutex::new(ai_client),
         settings: Arc::new(Mutex::new(settings)),
         conversation: Arc::new(Mutex::new(ConversationContext::default())),
+        ai_in_flight: Semaphore::new(1),
         skill_manager: Arc::new(Mutex::new(skill_manager)),
         live_server,
         live_server_port,
@@ -174,6 +171,7 @@ pub fn run() {
                 TrayIconBuilder::new().tooltip("OmniLauncher — Ctrl+Shift+O to toggle");
 
             if let Some(img) = icon {
+                let _ = window.set_icon(img.clone());
                 tray_builder = tray_builder.icon(img);
             }
 
@@ -319,11 +317,19 @@ async fn search(
     Ok(pm.query_all(&query).await)
 }
 
+async fn try_start_ai_request(state: &AppState) -> Result<tokio::sync::SemaphorePermit<'_>, String> {
+    state
+        .ai_in_flight
+        .try_acquire()
+        .map_err(|_| "AI response is still in progress".to_string())
+}
+
 #[tauri::command]
 async fn ai_query(
     query: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<omnilauncher_lib::AiResponse, String> {
+    let _ai_request = try_start_ai_request(&state).await?;
     log::debug!("ai_query invoked with {} characters", query.len());
     // Add to conversation context
     {
@@ -898,6 +904,8 @@ async fn vision_analyze(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn spawn_external_command_reports_missing_command_failure() {
         assert!(!super::spawn_external_command(
@@ -905,6 +913,27 @@ mod tests {
             &[],
             "test missing command",
         ));
+    }
+
+    #[tokio::test]
+    async fn rejects_second_ai_request_while_one_is_in_progress() {
+        let state = AppState {
+            plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
+            ai_client: Mutex::new(AiClient::new(String::new(), String::new(), String::new())),
+            settings: Arc::new(Mutex::new(AppSettings::default())),
+            conversation: Arc::new(Mutex::new(ConversationContext::default())),
+            ai_in_flight: Semaphore::new(1),
+            skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+            live_server: LiveServer::new(),
+            live_server_port: 0,
+        };
+
+        let first = try_start_ai_request(&state).await.expect("first request starts");
+        let second = try_start_ai_request(&state).await;
+
+        assert_eq!(second.unwrap_err(), "AI response is still in progress");
+        drop(first);
+        assert!(try_start_ai_request(&state).await.is_ok());
     }
 }
 

@@ -81,6 +81,10 @@ export default function SearchBar({
         .omni-input-wrap:focus-within {
           box-shadow: 0 0 0 2px ${colors.accent}30, inset 0 0 0 1px ${colors.accent}55;
         }
+        @keyframes omni-tagline-fadein {
+          from { opacity: 0; transform: translateY(4px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
         @keyframes omni-hint-fadein {
           from { opacity: 0; transform: translateY(3px); }
           to   { opacity: 1; transform: translateY(0); }
@@ -93,6 +97,25 @@ export default function SearchBar({
           borderTop: isAiMode ? `1px solid ${colors.surface}` : "none",
         }}
       >
+        {!isAiMode && (
+          <div
+            style={{
+              padding: "12px 16px 0",
+              animation: "omni-tagline-fadein 200ms ease both",
+            }}
+          >
+            <div
+              style={{
+                color: colors.text,
+                fontSize: "13px",
+                fontWeight: 700,
+                letterSpacing: "0.02em",
+              }}
+            >
+              Omnilauncher: Your powerful Personal AI assisant
+            </div>
+          </div>
+        )}
         {/* ── Main input row ─────────────────────────────────────────── */}
         <div
           className="omni-input-wrap"
