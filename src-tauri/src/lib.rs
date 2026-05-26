@@ -58,8 +58,28 @@ pub fn create_plugin_manager() -> PluginManager {
     pm.register(Box::new(plugins::vision_analyze::VisionAnalyzePlugin));
 
     // Load external plugins: ~/.omnilauncher/plugins/ + any extra dirs from settings.plugin_dirs
+    // External plugins override built-ins: same name or same keyword → remove the built-in first.
     let settings = load_settings();
     for plugin in plugins::external::load_external_plugins_from(&settings.plugin_dirs) {
+        let name = plugin.manifest.name.clone();
+        let keyword = plugin.manifest.keyword.clone();
+
+        if pm.has_name(&name) {
+            log::info!(
+                "External plugin '{}' overrides built-in with same name — removing built-in",
+                name
+            );
+            pm.unregister_by_name(&name);
+        }
+        if let Some(ref kw) = keyword {
+            if pm.has_keyword(kw) {
+                log::info!(
+                    "External plugin '{}' has keyword '{}' that conflicts with a built-in — removing built-in",
+                    name, kw
+                );
+                pm.unregister_by_keyword(kw);
+            }
+        }
         pm.register(Box::new(plugin));
     }
 

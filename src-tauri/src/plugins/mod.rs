@@ -63,6 +63,33 @@ impl PluginManager {
         self.plugins.push(p);
     }
 
+    /// Returns true if any registered plugin has this exact name.
+    pub fn has_name(&self, name: &str) -> bool {
+        self.plugins.iter().any(|p| p.name() == name)
+    }
+
+    /// Returns true if any registered plugin has this exact keyword.
+    pub fn has_keyword(&self, kw: &str) -> bool {
+        self.plugins
+            .iter()
+            .any(|p| p.keyword().map_or(false, |k| k == kw))
+    }
+
+    /// Remove all plugins whose name matches. Returns the count removed.
+    pub fn unregister_by_name(&mut self, name: &str) -> usize {
+        let before = self.plugins.len();
+        self.plugins.retain(|p| p.name() != name);
+        before - self.plugins.len()
+    }
+
+    /// Remove all plugins whose keyword matches. Returns the count removed.
+    pub fn unregister_by_keyword(&mut self, kw: &str) -> usize {
+        let before = self.plugins.len();
+        self.plugins
+            .retain(|p| p.keyword().map_or(true, |k| k != kw));
+        before - self.plugins.len()
+    }
+
     pub async fn query_all(&self, raw: &str) -> Vec<QueryResult> {
         let q = Query {
             raw: raw.to_string(),
