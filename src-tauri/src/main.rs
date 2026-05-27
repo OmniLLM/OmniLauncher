@@ -236,6 +236,7 @@ pub fn run() {
             list_skills,
             reload_skills,
             install_skill,
+            delete_skill,
             set_window_geometry,
             install_plugin,
             update_plugin,
@@ -375,8 +376,8 @@ async fn execute_slash_command(
 ) -> Result<omnilauncher_lib::AiResponse, String> {
     log::debug!("execute_slash_command invoked with query={query}");
     let pm = state.plugin_manager.lock().await;
-    let skill_mgr = state.skill_manager.lock().await;
-    let response = Router::slash_command(&query, &pm, &skill_mgr).await;
+    let mut skill_mgr = state.skill_manager.lock().await;
+    let response = Router::slash_command(&query, &pm, &mut skill_mgr).await;
     Ok(response)
 }
 
@@ -831,6 +832,13 @@ async fn install_skill(
     } else {
         mgr.install_from_path(&source)
     }
+}
+
+#[tauri::command]
+async fn delete_skill(name: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    log::debug!("delete_skill invoked with name={name}");
+    let mut mgr = state.skill_manager.lock().await;
+    mgr.delete_skill(&name)
 }
 
 // ─── External plugin management commands ──────────────────────────────────────

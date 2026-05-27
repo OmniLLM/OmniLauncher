@@ -461,7 +461,7 @@ impl Router {
     pub async fn slash_command(
         input: &str,
         plugin_manager: &PluginManager,
-        skill_manager: &SkillManager,
+        skill_manager: &mut SkillManager,
     ) -> AiResponse {
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
         let cmd = parts[0];
@@ -1007,24 +1007,55 @@ impl Router {
                                 is_ai: false,
                             };
                         }
-                        // Note: skill_manager is &SkillManager (immutable) in this context.
-                        // Installation requires mutable access — instruct user to use the Tauri command.
-                        AiResponse {
-                            content: format!(
-                                "To install a skill, use the `install_skill` command programmatically or copy the SKILL.md file to:\n\n`{}`\n\nThen run `/skill reload`.",
-                                SkillManager::skill_dir().display()
-                            ),
-                            tools_used: vec![],
-                            results: vec![],
-                            is_ai: false,
+                        let result = if subarg.starts_with("http://") || subarg.starts_with("https://") {
+                            skill_manager.install_from_url(subarg)
+                        } else {
+                            skill_manager.install_from_path(subarg)
+                        };
+                        match result {
+                            Ok(msg) => AiResponse {
+                                content: format!("✓ {}", msg),
+                                tools_used: vec![],
+                                results: vec![],
+                                is_ai: false,
+                            },
+                            Err(e) => AiResponse {
+                                content: format!("✗ Install failed: {}", e),
+                                tools_used: vec![],
+                                results: vec![],
+                                is_ai: false,
+                            },
+                        }
+                    }
+                    "delete" | "remove" | "uninstall" => {
+                        if subarg.is_empty() {
+                            return AiResponse {
+                                content: "Usage: `/skill delete <name>`".to_string(),
+                                tools_used: vec![],
+                                results: vec![],
+                                is_ai: false,
+                            };
+                        }
+                        match skill_manager.delete_skill(subarg) {
+                            Ok(msg) => AiResponse {
+                                content: format!("✓ {}", msg),
+                                tools_used: vec![],
+                                results: vec![],
+                                is_ai: false,
+                            },
+                            Err(e) => AiResponse {
+                                content: format!("✗ {}", e),
+                                tools_used: vec![],
+                                results: vec![],
+                                is_ai: false,
+                            },
                         }
                     }
                     "reload" => {
-                        // reload requires &mut — instruct user to use Tauri command
+                        skill_manager.reload();
+                        let count = skill_manager.list_meta().len();
                         AiResponse {
-                            content: "Use the `reload_skills` Tauri command or restart the app to reload skills.\n\nSkills dir: `".to_string()
-                                + &SkillManager::skill_dir().display().to_string()
-                                + "`",
+                            content: format!("✓ Skills reloaded — {} skill(s) loaded.", count),
                             tools_used: vec![],
                             results: vec![],
                             is_ai: false,
@@ -1117,8 +1148,11 @@ const SKILL_HELP: &str = "\
 | `/skill view <name>` | Show full skill content |
 | `/skill install <url>` | Install skill from URL |
 | `/skill install <path>` | Install skill from local path |
+| `/skill delete <name>` | Delete an installed skill |
 | `/skill reload` | Hot-reload all skills |
 | `/skill help` | Show this help |
+
+**Tip:** Open the visual Skill Manager with `/skills` or `/sm` for a rich UI experience.
 
 **About Skills:**
 Skills are Markdown files (`SKILL.md`) with YAML frontmatter that inject behavior into the AI assistant.
@@ -1128,8 +1162,8 @@ When your query matches a skill's triggers, the skill's instructions are automat
 `~/.omnilauncher/skills/<skill-name>/SKILL.md`
 
 **Examples:**
-```
-/skill list                          → see all skills
+
+
 /skill view web-summarizer           → view skill details
 /skill install ~/my-skill/SKILL.md  → install local skill
 ```

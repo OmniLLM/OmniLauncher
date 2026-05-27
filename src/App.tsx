@@ -7,6 +7,7 @@ import SearchBar from "./components/SearchBar";
 import ResultList from "./components/ResultList";
 import SettingsPanel from "./components/SettingsPanel";
 import PluginManager from "./components/PluginManager";
+import SkillManager from "./components/SkillManager";
 
 interface QueryResult {
   id: string;
@@ -188,6 +189,13 @@ const SLASH_COMMANDS: SlashCommand[] = [
     examples: ["/plugins", "/pm"],
   },
   {
+    cmd: "/skills",
+    shortcut: "/sm",
+    description: "Open skill manager UI (install, view, delete skills)",
+    usage: "/skills",
+    examples: ["/skills", "/sm"],
+  },
+  {
     cmd: "/new",
     description: "Start a new AI conversation",
     usage: "/new",
@@ -227,6 +235,7 @@ export default function App() {
   const [aiModeEnabled, setAiModeEnabled] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showPluginManager, setShowPluginManager] = useState(false);
+  const [showSkillManager, setShowSkillManager] = useState(false);
   const [isHintBarExpanded, setIsHintBarExpanded] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("system");
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(
@@ -366,7 +375,7 @@ export default function App() {
 
   // Browser-level fallback for focus restore (useful in dev/web context)
   useEffect(() => {
-    const shouldFocusLauncherInput = () => !showSettings && !showPluginManager;
+    const shouldFocusLauncherInput = () => !showSettings && !showPluginManager && !showSkillManager;
 
     const restoreFocus = () => {
       if (!shouldFocusLauncherInput()) return;
@@ -520,6 +529,13 @@ export default function App() {
 
       if (value.trimStart().toLowerCase() === "/plugins" || value.trimStart().toLowerCase() === "/pm") {
         setShowPluginManager(true);
+        setResults([]);
+        setQuery("");
+        return;
+      }
+
+      if (value.trimStart().toLowerCase() === "/skills" || value.trimStart().toLowerCase() === "/sm") {
+        setShowSkillManager(true);
         setResults([]);
         setQuery("");
         return;
@@ -688,6 +704,7 @@ export default function App() {
         setQuery("");
         setResults([]);
         setShowPluginManager(false);
+        setShowSkillManager(false);
       }
 
       if (
@@ -716,7 +733,7 @@ export default function App() {
 
   // ── Layout geometry ────────────────────────────────────────────────────────
   const launcherHasContent =
-    results.length > 0 || showSettings || showPluginManager;
+    results.length > 0 || showSettings || showPluginManager || showSkillManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
   const panelHeight = isAiMode
     ? 560
@@ -913,10 +930,19 @@ export default function App() {
           />
         )}
 
+        {/* ── SKILL MANAGER panel ──────────────────────────────────────── */}
+        {showSkillManager && !isAiMode && !showSettings && !showPluginManager && (
+          <SkillManager
+            colors={colors}
+            onClose={() => setShowSkillManager(false)}
+          />
+        )}
+
         {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
         {!isAiMode &&
           !showSettings &&
           !showPluginManager &&
+          !showSkillManager &&
           results.length > 0 && (
             <ResultList
               results={results}

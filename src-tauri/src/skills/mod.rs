@@ -252,6 +252,19 @@ impl SkillManager {
         self.load_all();
     }
 
+    /// Delete a skill by name (removes its directory from user skills dir).
+    pub fn delete_skill(&mut self, name: &str) -> Result<String, String> {
+        let skill_dir = Self::skill_dir().join(name);
+        if skill_dir.exists() {
+            std::fs::remove_dir_all(&skill_dir)
+                .map_err(|e| format!("Failed to delete skill '{}': {}", name, e))?;
+            self.skills.retain(|s| s.meta.name != name);
+            Ok(format!("Deleted skill: {}", name))
+        } else {
+            Err(format!("Skill '{}' not found in user skills directory.", name))
+        }
+    }
+
     /// Returns `~/.omnilauncher/skills/`
     pub fn skill_dir() -> PathBuf {
         path_config::data_dir().join("skills")
