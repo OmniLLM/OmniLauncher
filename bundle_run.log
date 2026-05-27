@@ -1,6 +1,0 @@
-npm run build
-
-> omnilauncher@2.0.0 build
-> tsc && vite build
-
-make: *** [build-frontend] 错误 1
