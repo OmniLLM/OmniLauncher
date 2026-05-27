@@ -26,14 +26,12 @@ interface SkillManagerProps {
 
 export default function SkillManager({ colors, onClose }: SkillManagerProps) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [expandedSkills, setExpandedSkills] = useState<Record<string, boolean>>({});
   const [source, setSource] = useState("");
-  const [selectedSkill, setSelectedSkill] = useState<SkillInfo | null>(null);
-  const [filter, setFilter] = useState("");
   const [status, setStatus] = useState<{
     type: "idle" | "loading" | "success" | "error";
     message: string;
   }>({ type: "idle", message: "" });
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     invoke<SkillInfo[]>("list_skills")
@@ -45,13 +43,26 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
     refresh();
   }, [refresh]);
 
+  // Auto-expand newly installed skills
+  useEffect(() => {
+    setExpandedSkills((current) => {
+      const next = { ...current };
+      for (const skill of skills) {
+        if (next[skill.name] === undefined) {
+          next[skill.name] = false;
+        }
+      }
+      return next;
+    });
+  }, [skills]);
+
   const handleInstall = async () => {
     const trimmed = source.trim();
     if (!trimmed) return;
     setStatus({ type: "loading", message: "Installing…" });
     try {
-      const msg = await invoke<string>("install_skill", { source: trimmed });
-      setStatus({ type: "success", message: `✓ ${msg}` });
+      const message = await invoke<string>("install_skill", { source: trimmed });
+      setStatus({ type: "success", message: `✓ ${message}` });
       setSource("");
       refresh();
     } catch (e) {
@@ -60,12 +71,10 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
   };
 
   const handleDelete = async (name: string) => {
-    setConfirmDelete(null);
-    setStatus({ type: "loading", message: `Deleting "${name}"…` });
+    setStatus({ type: "loading", message: `Removing skill "${name}"…` });
     try {
-      const msg = await invoke<string>("delete_skill", { name });
-      setStatus({ type: "success", message: `✓ ${msg}` });
-      if (selectedSkill?.name === name) setSelectedSkill(null);
+      const message = await invoke<string>("delete_skill", { name });
+      setStatus({ type: "success", message: `✓ ${message}` });
       refresh();
     } catch (e) {
       setStatus({ type: "error", message: `✗ ${e}` });
@@ -83,33 +92,31 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
     }
   };
 
-  const filteredSkills = skills.filter(
-    (s) =>
-      !filter ||
-      s.name.toLowerCase().includes(filter.toLowerCase()) ||
-      s.description.toLowerCase().includes(filter.toLowerCase()) ||
-      s.tags.some((t) => t.toLowerCase().includes(filter.toLowerCase())),
-  );
+  const toggleSkill = (name: string) => {
+    setExpandedSkills((current) => ({
+      ...current,
+      [name]: !current[name],
+    }));
+  };
 
   const statusColor =
     status.type === "success"
-      ? "#4ade80"
+      ? "#a6e3a1"
       : status.type === "error"
-        ? "#f87171"
-        : status.type === "loading"
-          ? colors.accent
-          : colors.sub;
+        ? "#f38ba8"
+        : colors.sub;
 
   return (
     <div
       style={{
+        flex: 1,
         display: "flex",
         flexDirection: "column",
-        height: "100%",
-        backgroundColor: colors.bg,
-        color: colors.text,
-        fontFamily: "inherit",
-        overflow: "hidden",
+        padding: "14px 16px 10px",
+        gap: "12px",
+        overflowY: "auto",
+        scrollbarWidth: "thin",
+        scrollbarColor: `${colors.surface2} transparent`,
       }}
     >
       {/* ── Header ── */}
@@ -118,44 +125,50 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "12px 16px 10px",
-          borderBottom: `1px solid ${colors.surface2}`,
-          flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 18 }}>🧠</span>
-          <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: 0.3 }}>
-            Skill Manager
-          </span>
+        <span
+          style={{
+            fontSize: "13px",
+            fontWeight: 700,
+            color: colors.accent,
+            letterSpacing: "0.04em",
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+          }}
+        >
+          🧠 Skill Manager
           <span
             style={{
-              background: colors.surface2,
+              fontSize: "11px",
+              fontWeight: 500,
               color: colors.sub,
-              borderRadius: 10,
-              fontSize: 11,
+              border: `1px solid ${colors.surface2}`,
+              borderRadius: "999px",
               padding: "1px 7px",
-              fontWeight: 600,
             }}
           >
-            {skills.length}
+            {skills.length} skill{skills.length === 1 ? "" : "s"}
           </span>
-        </div>
-        <div style={{ display: "flex", gap: 6 }}>
+        </span>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
           <button
             onClick={handleReload}
-            title="Reload all skills"
+            disabled={status.type === "loading"}
+            title="Hot-reload all skills"
             style={{
-              background: colors.surface,
+              background: "none",
               border: `1px solid ${colors.surface2}`,
-              borderRadius: 6,
-              color: colors.sub,
-              cursor: "pointer",
-              fontSize: 12,
+              borderRadius: "8px",
               padding: "4px 10px",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
+              color: colors.text,
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
+              opacity: status.type === "loading" ? 0.5 : 1,
+              transition: "opacity 150ms",
             }}
           >
             ↻ Reload
@@ -163,473 +176,336 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
           <button
             onClick={onClose}
             style={{
-              background: "transparent",
+              background: "none",
               border: "none",
-              color: colors.sub,
               cursor: "pointer",
-              fontSize: 18,
+              color: colors.sub,
+              fontSize: "16px",
               lineHeight: 1,
               padding: "2px 4px",
             }}
+            title="Close"
           >
             ×
           </button>
         </div>
       </div>
 
-      {/* ── Install bar ── */}
-      <div
-        style={{
-          padding: "10px 16px",
-          borderBottom: `1px solid ${colors.surface2}`,
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleInstall()}
-            placeholder="Install from URL or local path  (e.g. https://…/SKILL.md  or  ~/my-skill/SKILL.md)"
-            style={{
-              flex: 1,
-              background: colors.surface,
-              border: `1px solid ${colors.surface2}`,
-              borderRadius: 7,
-              color: colors.text,
-              fontSize: 12,
-              outline: "none",
-              padding: "7px 12px",
-            }}
-          />
-          <button
-            onClick={handleInstall}
-            disabled={!source.trim() || status.type === "loading"}
-            style={{
-              background:
-                source.trim() && status.type !== "loading"
-                  ? colors.accent
-                  : colors.surface2,
-              border: "none",
-              borderRadius: 7,
-              color:
-                source.trim() && status.type !== "loading"
-                  ? "#fff"
-                  : colors.sub,
-              cursor:
-                source.trim() && status.type !== "loading"
-                  ? "pointer"
-                  : "default",
-              fontSize: 12,
-              fontWeight: 600,
-              padding: "7px 16px",
-              transition: "background 0.15s",
-              whiteSpace: "nowrap",
-            }}
-          >
-            + Install
-          </button>
-        </div>
-        {status.type !== "idle" && (
-          <div
-            style={{
-              color: statusColor,
-              fontSize: 12,
-              marginTop: 6,
-              fontStyle: status.type === "loading" ? "italic" : undefined,
-            }}
-          >
-            {status.message}
-          </div>
-        )}
-      </div>
-
-      {/* ── Body: list + detail ── */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        {/* Skill list */}
-        <div
+      {/* ── Install row ── */}
+      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+        <input
+          type="text"
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleInstall()}
+          placeholder="URL or local path to SKILL.md…"
           style={{
-            width: 220,
-            borderRight: `1px solid ${colors.surface2}`,
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-            flexShrink: 0,
+            flex: 1,
+            minWidth: "180px",
+            background: colors.surface,
+            border: `1px solid ${colors.surface2}`,
+            borderRadius: "8px",
+            padding: "7px 12px",
+            color: colors.text,
+            fontSize: "13px",
+            outline: "none",
+          }}
+        />
+        <button
+          onClick={handleInstall}
+          disabled={status.type === "loading" || !source.trim()}
+          style={{
+            background: colors.accent,
+            border: "none",
+            borderRadius: "8px",
+            padding: "7px 14px",
+            color: "#FFFFFF",
+            fontSize: "13px",
+            fontWeight: 600,
+            cursor: source.trim() ? "pointer" : "default",
+            opacity: source.trim() ? 1 : 0.5,
+            transition: "opacity 150ms",
           }}
         >
-          {/* Filter */}
+          Install
+        </button>
+      </div>
+
+      {/* ── Status message ── */}
+      {status.type !== "idle" && (
+        <div
+          style={{
+            fontSize: "12px",
+            color: statusColor,
+            minHeight: "18px",
+          }}
+        >
+          {status.message}
+        </div>
+      )}
+
+      {/* ── Skill list ── */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "6px",
+        }}
+      >
+        {skills.length === 0 ? (
           <div
             style={{
-              padding: "8px 10px",
-              borderBottom: `1px solid ${colors.surface2}`,
+              fontSize: "13px",
+              color: colors.sub,
+              textAlign: "center",
+              padding: "18px 0",
             }}
           >
-            <input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="🔍 Filter skills…"
-              style={{
-                width: "100%",
-                background: colors.surface,
-                border: `1px solid ${colors.surface2}`,
-                borderRadius: 5,
-                color: colors.text,
-                fontSize: 12,
-                outline: "none",
-                padding: "5px 8px",
-                boxSizing: "border-box",
-              }}
-            />
+            No skills installed yet.
+            <br />
+            <span style={{ fontSize: "12px", opacity: 0.7 }}>
+              Paste a URL or local path above to install one.
+            </span>
           </div>
-
-          {/* List */}
-          <div style={{ overflowY: "auto", flex: 1 }}>
-            {filteredSkills.length === 0 ? (
+        ) : (
+          skills.map((skill) => {
+            const expanded = expandedSkills[skill.name] ?? false;
+            return (
               <div
+                key={skill.name}
                 style={{
-                  color: colors.sub,
-                  fontSize: 12,
-                  padding: "20px 14px",
-                  textAlign: "center",
+                  background: colors.surface,
+                  borderRadius: "10px",
+                  border: `1px solid ${colors.surface2}`,
+                  overflow: "hidden",
                 }}
               >
-                {filter ? "No matching skills" : "No skills installed"}
-              </div>
-            ) : (
-              filteredSkills.map((skill) => (
+                {/* ── Skill row ── */}
                 <div
-                  key={skill.name}
-                  onClick={() => setSelectedSkill(skill)}
+                  onClick={() => toggleSkill(skill.name)}
                   style={{
-                    padding: "9px 12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    padding: "10px 12px",
                     cursor: "pointer",
-                    background:
-                      selectedSkill?.name === skill.name
-                        ? colors.surface2
-                        : "transparent",
-                    borderLeft:
-                      selectedSkill?.name === skill.name
-                        ? `3px solid ${colors.accent}`
-                        : "3px solid transparent",
-                    transition: "background 0.1s",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (selectedSkill?.name !== skill.name)
-                      (e.currentTarget as HTMLDivElement).style.background =
-                        colors.surface;
-                  }}
-                  onMouseLeave={(e) => {
-                    if (selectedSkill?.name !== skill.name)
-                      (e.currentTarget as HTMLDivElement).style.background =
-                        "transparent";
                   }}
                 >
-                  <div
-                    style={{
-                      fontWeight: 600,
-                      fontSize: 13,
-                      color: colors.text,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
+                  {/* Expand toggle */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSkill(skill.name);
                     }}
+                    aria-label={expanded ? "Collapse skill" : "Expand skill"}
+                    style={{
+                      width: "26px",
+                      height: "26px",
+                      borderRadius: "6px",
+                      border: `1px solid ${colors.surface2}`,
+                      background: colors.bg,
+                      color: colors.text,
+                      cursor: "pointer",
+                      flexShrink: 0,
+                      fontSize: "12px",
+                    }}
+                    title={expanded ? "Collapse" : "Expand details"}
                   >
-                    {skill.name}
-                  </div>
-                  {skill.version && (
+                    {expanded ? "▾" : "▸"}
+                  </button>
+
+                  {/* Skill info */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div
                       style={{
-                        fontSize: 10,
-                        color: colors.sub,
-                        marginTop: 1,
-                      }}
-                    >
-                      v{skill.version}
-                    </div>
-                  )}
-                  {skill.tags.length > 0 && (
-                    <div
-                      style={{
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        color: colors.text,
                         display: "flex",
-                        gap: 3,
                         flexWrap: "wrap",
-                        marginTop: 4,
+                        alignItems: "center",
+                        gap: "6px",
                       }}
                     >
+                      {/* SKILL badge */}
+                      <span
+                        style={{
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          letterSpacing: "0.04em",
+                          color: colors.accent,
+                          border: `1px solid ${colors.accent}55`,
+                          borderRadius: "999px",
+                          padding: "1px 6px",
+                        }}
+                      >
+                        SKILL
+                      </span>
+
+                      <span>🧠</span>
+                      <span>{skill.name}</span>
+
+                      {skill.version && (
+                        <span style={{ color: colors.sub, fontWeight: 400 }}>
+                          v{skill.version}
+                        </span>
+                      )}
+
+                      {/* Tags */}
                       {skill.tags.slice(0, 3).map((tag) => (
                         <span
                           key={tag}
                           style={{
-                            background: colors.accentDim,
+                            fontSize: "10px",
+                            background: `${colors.accent}22`,
+                            border: `1px solid ${colors.accent}44`,
+                            borderRadius: "999px",
+                            padding: "1px 6px",
                             color: colors.accent,
-                            borderRadius: 4,
-                            fontSize: 9,
-                            padding: "1px 5px",
-                            fontWeight: 600,
-                            letterSpacing: 0.2,
                           }}
                         >
                           {tag}
                         </span>
                       ))}
                     </div>
-                  )}
+
+                    {/* Description */}
+                    {skill.description && (
+                      <div
+                        style={{
+                          fontSize: "12px",
+                          color: colors.sub,
+                          marginTop: "2px",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {skill.description}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Delete button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(skill.name);
+                    }}
+                    disabled={status.type === "loading"}
+                    title="Remove skill"
+                    style={{
+                      background: "none",
+                      border: `1px solid ${colors.surface2}`,
+                      borderRadius: "6px",
+                      padding: "4px 10px",
+                      color: colors.sub,
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                      transition: "color 150ms, border-color 150ms",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = "#f38ba8";
+                      e.currentTarget.style.borderColor = "#f38ba8";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = colors.sub;
+                      e.currentTarget.style.borderColor = colors.surface2;
+                    }}
+                  >
+                    Remove
+                  </button>
                 </div>
-              ))
-            )}
-          </div>
-        </div>
 
-        {/* Detail pane */}
-        <div style={{ flex: 1, overflow: "auto", padding: "16px 18px" }}>
-          {selectedSkill ? (
-            <SkillDetail
-              skill={selectedSkill}
-              colors={colors}
-              onDelete={() => setConfirmDelete(selectedSkill.name)}
-            />
-          ) : (
-            <EmptyState colors={colors} skillCount={skills.length} />
-          )}
-        </div>
+                {/* ── Expanded detail ── */}
+                {expanded && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "8px",
+                      padding: "0 12px 12px 48px",
+                      borderTop: `1px solid ${colors.surface2}`,
+                      paddingTop: "10px",
+                      marginLeft: "24px",
+                      borderLeft: `1px solid ${colors.surface2}`,
+                    }}
+                  >
+                    {/* Triggers */}
+                    {skill.triggers.length > 0 && (
+                      <DetailRow label="Triggers" colors={colors}>
+                        <div style={{ display: "flex", gap: "5px", flexWrap: "wrap" }}>
+                          {skill.triggers.map((t) => (
+                            <span
+                              key={t}
+                              style={{
+                                background: colors.bg,
+                                border: `1px solid ${colors.surface2}`,
+                                borderRadius: "5px",
+                                fontSize: "11px",
+                                padding: "2px 7px",
+                                color: colors.text,
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </DetailRow>
+                    )}
+
+                    {/* Tools hint */}
+                    {skill.tools_hint.length > 0 && (
+                      <DetailRow label="Tools" colors={colors}>
+                        <div style={{ display: "flex", gap: "5px", flexWrap: "wrap" }}>
+                          {skill.tools_hint.map((t) => (
+                            <span
+                              key={t}
+                              style={{
+                                background: `${colors.accent}15`,
+                                border: `1px solid ${colors.accent}44`,
+                                borderRadius: "5px",
+                                fontSize: "11px",
+                                padding: "2px 7px",
+                                color: colors.accent,
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </DetailRow>
+                    )}
+
+                    {/* Path */}
+                    <DetailRow label="Path" colors={colors}>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          color: colors.sub,
+                          fontFamily: "monospace",
+                          wordBreak: "break-all",
+                        }}
+                      >
+                        {skill.path}
+                      </span>
+                    </DetailRow>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
-
-      {/* ── Confirm delete modal ── */}
-      {confirmDelete && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background: "rgba(0,0,0,0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 100,
-          }}
-          onClick={() => setConfirmDelete(null)}
-        >
-          <div
-            style={{
-              background: colors.surface,
-              border: `1px solid ${colors.surface2}`,
-              borderRadius: 10,
-              padding: "22px 26px",
-              minWidth: 280,
-              textAlign: "center",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ fontSize: 28, marginBottom: 10 }}>🗑️</div>
-            <div
-              style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}
-            >
-              Delete Skill?
-            </div>
-            <div
-              style={{
-                color: colors.sub,
-                fontSize: 12,
-                marginBottom: 18,
-                lineHeight: 1.5,
-              }}
-            >
-              This will permanently remove{" "}
-              <strong style={{ color: colors.text }}>{confirmDelete}</strong>{" "}
-              from your skills directory.
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-              <button
-                onClick={() => setConfirmDelete(null)}
-                style={{
-                  background: colors.surface2,
-                  border: "none",
-                  borderRadius: 6,
-                  color: colors.text,
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  padding: "7px 18px",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleDelete(confirmDelete)}
-                style={{
-                  background: "#ef4444",
-                  border: "none",
-                  borderRadius: 6,
-                  color: "#fff",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  padding: "7px 18px",
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-// ─── Skill detail ─────────────────────────────────────────────────────────────
-
-function SkillDetail({
-  skill,
-  colors,
-  onDelete,
-}: {
-  skill: SkillInfo;
-  colors: SkillManagerProps["colors"];
-  onDelete: () => void;
-}) {
-  return (
-    <div>
-      {/* Title row */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          gap: 12,
-          marginBottom: 14,
-        }}
-      >
-        <div>
-          <div
-            style={{ fontSize: 18, fontWeight: 800, letterSpacing: -0.3 }}
-          >
-            {skill.name}
-          </div>
-          {skill.version && (
-            <div style={{ fontSize: 11, color: colors.sub, marginTop: 2 }}>
-              v{skill.version}
-            </div>
-          )}
-        </div>
-        <button
-          onClick={onDelete}
-          title="Delete skill"
-          style={{
-            background: "transparent",
-            border: `1px solid #ef4444`,
-            borderRadius: 6,
-            color: "#ef4444",
-            cursor: "pointer",
-            fontSize: 12,
-            fontWeight: 600,
-            padding: "5px 12px",
-            flexShrink: 0,
-          }}
-        >
-          🗑 Delete
-        </button>
-      </div>
-
-      {/* Description */}
-      {skill.description && (
-        <p
-          style={{
-            color: colors.text,
-            fontSize: 13,
-            lineHeight: 1.6,
-            margin: "0 0 16px",
-          }}
-        >
-          {skill.description}
-        </p>
-      )}
-
-      {/* Tags */}
-      {skill.tags.length > 0 && (
-        <DetailRow label="Tags" colors={colors}>
-          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-            {skill.tags.map((tag) => (
-              <span
-                key={tag}
-                style={{
-                  background: colors.accentDim,
-                  color: colors.accent,
-                  borderRadius: 5,
-                  fontSize: 11,
-                  padding: "2px 8px",
-                  fontWeight: 600,
-                }}
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        </DetailRow>
-      )}
-
-      {/* Triggers */}
-      {skill.triggers.length > 0 && (
-        <DetailRow label="Triggers" colors={colors}>
-          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-            {skill.triggers.map((t) => (
-              <span
-                key={t}
-                style={{
-                  background: colors.surface2,
-                  color: colors.sub,
-                  borderRadius: 5,
-                  fontSize: 11,
-                  padding: "2px 8px",
-                  fontFamily: "monospace",
-                }}
-              >
-                {t}
-              </span>
-            ))}
-          </div>
-        </DetailRow>
-      )}
-
-      {/* Tools hint */}
-      {skill.tools_hint.length > 0 && (
-        <DetailRow label="Tools" colors={colors}>
-          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-            {skill.tools_hint.map((t) => (
-              <span
-                key={t}
-                style={{
-                  background: colors.surface,
-                  border: `1px solid ${colors.surface2}`,
-                  color: colors.text,
-                  borderRadius: 5,
-                  fontSize: 11,
-                  padding: "2px 8px",
-                  fontFamily: "monospace",
-                }}
-              >
-                {t}
-              </span>
-            ))}
-          </div>
-        </DetailRow>
-      )}
-
-      {/* Path */}
-      <DetailRow label="Path" colors={colors}>
-        <span
-          style={{
-            color: colors.sub,
-            fontSize: 11,
-            fontFamily: "monospace",
-            wordBreak: "break-all",
-          }}
-        >
-          {skill.path}
-        </span>
-      </DetailRow>
-    </div>
-  );
-}
+// ── Detail row ────────────────────────────────────────────────────────────────
 
 function DetailRow({
   label,
@@ -641,66 +517,20 @@ function DetailRow({
   colors: SkillManagerProps["colors"];
 }) {
   return (
-    <div style={{ marginBottom: 14 }}>
+    <div>
       <div
         style={{
           color: colors.sub,
-          fontSize: 10,
+          fontSize: "10px",
           fontWeight: 700,
-          letterSpacing: 0.8,
+          letterSpacing: "0.05em",
           textTransform: "uppercase",
-          marginBottom: 6,
+          marginBottom: "4px",
         }}
       >
         {label}
       </div>
       {children}
-    </div>
-  );
-}
-
-function EmptyState({
-  colors,
-  skillCount,
-}: {
-  colors: SkillManagerProps["colors"];
-  skillCount: number;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        height: "100%",
-        color: colors.sub,
-        textAlign: "center",
-        padding: 24,
-      }}
-    >
-      <div style={{ fontSize: 36, marginBottom: 12 }}>🧠</div>
-      {skillCount === 0 ? (
-        <>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
-            No skills installed
-          </div>
-          <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-            Install a skill from a URL or local path above.
-            <br />
-            Skills dir: <code>~/.omnilauncher/skills/</code>
-          </div>
-        </>
-      ) : (
-        <>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
-            Select a skill to view details
-          </div>
-          <div style={{ fontSize: 12 }}>
-            {skillCount} skill{skillCount !== 1 ? "s" : ""} installed
-          </div>
-        </>
-      )}
     </div>
   );
 }
