@@ -718,10 +718,19 @@ export default function App() {
           active.tagName === "SELECT");
 
       if (e.key === "Escape") {
-        setQuery("");
-        setResults([]);
-        setShowPluginManager(false);
-        setShowSkillManager(false);
+        if (
+          query === "" &&
+          !showPluginManager &&
+          !showSkillManager
+        ) {
+          // Already clean — hide the window
+          getCurrentWebviewWindow().hide().catch(() => {});
+        } else {
+          setQuery("");
+          setResults([]);
+          setShowPluginManager(false);
+          setShowSkillManager(false);
+        }
       }
 
       if (
@@ -746,7 +755,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [focusInput]);
+  }, [focusInput, query, showPluginManager, showSkillManager]);
 
   // ── Layout geometry ────────────────────────────────────────────────────────
   const launcherHasContent =

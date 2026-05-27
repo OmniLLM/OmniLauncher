@@ -140,6 +140,17 @@
   box-sizing: border-box;
 }
 
+/* Smooth theme transitions */
+.launcher,
+body,
+.chat-msg__ai-bubble,
+.chat-msg__user-bubble,
+.chat-header,
+.chat-input,
+.result-item {
+  transition: background-color 220ms ease, color 220ms ease, border-color 220ms ease, box-shadow 220ms ease;
+}
+
 body {
   background: var(--bg);
   overflow: hidden;

@@ -34,10 +34,18 @@ export default function ResultList({
 }: Props) {
   const [selected, setSelected] = useState(0);
   const [hovered, setHovered] = useState(-1);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; item: QueryResult } | null>(null);
 
   useEffect(() => {
     setSelected(0);
   }, [results]);
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const handler = () => setCtxMenu(null);
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [ctxMenu]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -96,6 +104,7 @@ export default function ResultList({
           <div
             key={r.id}
             onClick={() => onExecute(r)}
+            onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, item: r }); }}
             onMouseEnter={() => {
               setHovered(i);
               setSelected(i);
@@ -194,6 +203,46 @@ export default function ResultList({
           </div>
         );
       })}
+      {ctxMenu && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed",
+            top: ctxMenu.y,
+            left: ctxMenu.x,
+            background: "#16233B",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: 8,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+            zIndex: 1000,
+            minWidth: 140,
+            overflow: "hidden",
+            animation: "omni-fade-in 120ms ease both",
+          }}
+        >
+          {[
+            { label: "Open", action: () => { onExecute(ctxMenu.item); setCtxMenu(null); } },
+            { label: "Copy Title", action: () => { navigator.clipboard.writeText(ctxMenu.item.title).catch(() => {}); setCtxMenu(null); } },
+            ...(ctxMenu.item.subtitle ? [{ label: "Copy Subtitle", action: () => { navigator.clipboard.writeText(ctxMenu.item.subtitle!).catch(() => {}); setCtxMenu(null); } }] : []),
+          ].map(({ label, action }) => (
+            <div
+              key={label}
+              onClick={action}
+              style={{
+                padding: "8px 14px",
+                fontSize: 13,
+                color: "#e8eaf6",
+                cursor: "pointer",
+                transition: "background 100ms",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(94,129,244,0.15)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              {label}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
