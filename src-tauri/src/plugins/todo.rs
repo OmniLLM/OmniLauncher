@@ -431,7 +431,7 @@ tr.group-header td{{background:#252535;color:#6c7086;font-size:11px;font-weight:
 <script>
 let RAW = [{json_rows}];
 const TODAY = '{today}';
-const DATA_URL = '/todo/data';
+const DATA_URL = '/dashboard/todos/data';
 const PRI_LABEL = {{1:'🔴 Urgent',2:'🟠 High',3:'🟡 Normal',4:'🔵 Low'}};
 const PRI_CLASS = {{1:'pri-1',2:'pri-2',3:'pri-3',4:'pri-4'}};
 const STATUS_LABEL = {{todo:'⬜ Todo',in_progress:'🟦 In Progress',blocked:'⛔ Blocked',done:'✅ Done'}};
@@ -727,7 +727,7 @@ render();
 }
 
 fn todo_live_url() -> &'static str {
-    "http://127.0.0.1:1421/todo"
+    "http://127.0.0.1:1421/dashboard/todos"
 }
 
 pub fn todo_live_data_json() -> String {

@@ -124,16 +124,6 @@ pub fn run() {
             live_server_port
         );
         live_server_task
-            .register_route("/todo", || {
-                LiveResponse::html(omnilauncher_lib::plugins::todo::todo_live_html())
-            })
-            .await;
-        live_server_task
-            .register_route("/todo/data", || {
-                LiveResponse::json(omnilauncher_lib::plugins::todo::todo_live_data_json())
-            })
-            .await;
-        live_server_task
             .register_route("/dashboard", || {
                 LiveResponse::html(omnilauncher_lib::dashboard::index_html())
             })
@@ -841,7 +831,9 @@ async fn execute_result(
         result.title
     );
     let action_data = if result.id == "todo:view" {
-        state.live_server.url(state.live_server_port, "/todo")
+        state
+            .live_server
+            .url(state.live_server_port, "/dashboard/todos")
     } else {
         result.action_data.clone()
     };
