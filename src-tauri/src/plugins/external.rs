@@ -48,11 +48,21 @@ impl ExternalPlugin {
     /// Spawn the entry executable, send `input` on stdin, and collect stdout.
     async fn call(&self, input: &str) -> Option<String> {
         let entry = self.entry_path();
-        let mut child = Command::new(&entry)
+        let mut cmd = build_interpreter_command(&entry);
+        let mut child = cmd
+            .current_dir(&self.dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
+            .map_err(|e| {
+                log::warn!(
+                    "External plugin '{}' failed to spawn {}: {e}",
+                    self.manifest.name,
+                    entry.display()
+                );
+                e
+            })
             .ok()?;
 
         // Write request on stdin
@@ -258,6 +268,48 @@ pub fn discover_plugins_in_repo(repo_dir: &Path) -> Vec<(PathBuf, PluginManifest
 }
 
 // ─── Platform helpers ─────────────────────────────────────────────────────────
+
+/// Build a `Command` that runs the entry script via the right interpreter.
+///
+/// Windows cannot directly execute `.ps1`, `.py`, `.sh`, or `.js` files via
+/// `CreateProcess`, so we detect the extension and prepend the matching
+/// interpreter. Native `.exe`/`.cmd`/`.bat` (and any unknown extension) fall
+/// through to a direct spawn.
+fn build_interpreter_command(entry: &Path) -> Command {
+    let ext = entry
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+
+    match ext.as_deref() {
+        Some("ps1") => {
+            let mut c = Command::new("powershell.exe");
+            c.arg("-NoProfile")
+                .arg("-ExecutionPolicy")
+                .arg("Bypass")
+                .arg("-File")
+                .arg(entry);
+            c
+        }
+        Some("py") => {
+            let exe = if cfg!(windows) { "python.exe" } else { "python3" };
+            let mut c = Command::new(exe);
+            c.arg(entry);
+            c
+        }
+        Some("js") => {
+            let mut c = Command::new("node");
+            c.arg(entry);
+            c
+        }
+        Some("sh") if cfg!(windows) => {
+            let mut c = Command::new("bash");
+            c.arg(entry);
+            c
+        }
+        _ => Command::new(entry),
+    }
+}
 
 /// Return the entry filename for the current platform.
 /// On Windows: uses `entry_windows` if set, falls back to `entry`.
