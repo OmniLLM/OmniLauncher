@@ -1,5 +1,65 @@
 use serde::{Deserialize, Serialize};
 
+/// A single GitHub server connection (github.com or GHE instance).
+///
+/// Token resolution order:
+///   1. `token` field (if set explicitly)
+///   2. `gh auth token --hostname <hostname>` (gh CLI credential store)
+///
+/// `hostname` examples: "github.com", "github.mycompany.com"
+/// `api_base` is auto-derived from hostname unless overridden:
+///   - "github.com" → "https://api.github.com"
+///   - other       → "https://<hostname>/api/v3"
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GitHubServer {
+    pub hostname: String,
+    /// Optional explicit API base URL override.
+    #[serde(default)]
+    pub api_base: String,
+    /// Optional explicit token (skips gh CLI lookup when set).
+    #[serde(default)]
+    pub token: String,
+    /// Organizations/owners to show in dashboard and default AI queries.
+    #[serde(default)]
+    pub orgs: Vec<String>,
+}
+
+impl GitHubServer {
+    pub fn effective_api_base(&self) -> String {
+        if !self.api_base.is_empty() {
+            return self.api_base.trim_end_matches('/').to_string();
+        }
+        if self.hostname == "github.com" || self.hostname.is_empty() {
+            "https://api.github.com".to_string()
+        } else {
+            format!("https://{}/api/v3", self.hostname)
+        }
+    }
+
+    /// Resolve a bearer token: explicit field first, then `gh auth token --hostname`.
+    pub fn resolve_token(&self) -> Option<String> {
+        if !self.token.is_empty() {
+            return Some(self.token.clone());
+        }
+        let hostname = if self.hostname.is_empty() {
+            "github.com"
+        } else {
+            &self.hostname
+        };
+        let output = std::process::Command::new("gh")
+            .args(["auth", "token", "--hostname", hostname])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let tok = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !tok.is_empty() {
+                return Some(tok);
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub ai_base_url: String,
@@ -15,15 +75,18 @@ pub struct AppSettings {
     /// `~/.omnilauncher/plugins/`.  Each entry is an absolute path string.
     #[serde(default)]
     pub plugin_dirs: Vec<String>,
-    /// GitHub personal access token (classic or fine-grained).
+    /// GitHub server connections. Supports multiple servers (github.com + GHE).
+    /// Each entry can have its own hostname, orgs, and optional explicit token.
+    /// Tokens are resolved via `gh auth token --hostname` when not set explicitly.
     #[serde(default)]
+    pub github_servers: Vec<GitHubServer>,
+
+    // ── legacy single-server fields (migrated on first load) ──────────────────
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub github_token: String,
-    /// GitHub API server base URL. Leave empty for github.com ("https://api.github.com").
-    /// For GitHub Enterprise set to e.g. "https://github.example.com/api/v3".
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub github_server: String,
-    /// GitHub organisations/owners to show in the dashboard (comma-separated or as array).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub github_orgs: Vec<String>,
 }
 
@@ -38,6 +101,7 @@ impl Default for AppSettings {
             max_results: 10,
             background_url: String::new(),
             plugin_dirs: vec![],
+            github_servers: vec![],
             github_token: String::new(),
             github_server: String::new(),
             github_orgs: vec![],
@@ -54,7 +118,31 @@ pub fn load_settings() -> AppSettings {
     let path = settings_path();
     if path.exists() {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(s) = serde_json::from_str(&content) {
+            if let Ok(mut s) = serde_json::from_str::<AppSettings>(&content) {
+                // Migrate legacy single-server fields into github_servers
+                if s.github_servers.is_empty()
+                    && (!s.github_token.is_empty()
+                        || !s.github_server.is_empty()
+                        || !s.github_orgs.is_empty())
+                {
+                    let hostname = if s.github_server.is_empty() {
+                        "github.com".to_string()
+                    } else {
+                        // strip scheme + /api/v3 to get hostname
+                        s.github_server
+                            .trim_start_matches("https://")
+                            .trim_start_matches("http://")
+                            .trim_end_matches("/api/v3")
+                            .trim_end_matches('/')
+                            .to_string()
+                    };
+                    s.github_servers.push(GitHubServer {
+                        hostname,
+                        api_base: String::new(),
+                        token: s.github_token.clone(),
+                        orgs: s.github_orgs.clone(),
+                    });
+                }
                 return s;
             }
         }
@@ -74,3 +162,4 @@ pub fn save_settings(settings: &AppSettings) -> bool {
         Err(_) => false,
     }
 }
+
