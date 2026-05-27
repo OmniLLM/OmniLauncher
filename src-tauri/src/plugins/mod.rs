@@ -29,6 +29,11 @@ pub trait Plugin: Send + Sync {
     async fn execute_tool(&self, _args: serde_json::Value) -> String {
         String::new()
     }
+    /// Called when the user picks a result that has `action_type: "plugin_execute"`.
+    /// Returns `Some(output)` if handled, `None` if the plugin doesn't support it.
+    async fn execute_action(&self, _id: &str, _action_data: &str) -> Option<String> {
+        None
+    }
 }
 
 pub struct PluginManager {
@@ -152,6 +157,21 @@ impl PluginManager {
             }
         }
         "Tool not found".to_string()
+    }
+
+    /// Dispatch a `plugin_execute` callback to the named plugin.
+    pub async fn execute_action(
+        &self,
+        plugin_name: &str,
+        id: &str,
+        action_data: &str,
+    ) -> Option<String> {
+        for p in &self.plugins {
+            if p.name() == plugin_name {
+                return p.execute_action(id, action_data).await;
+            }
+        }
+        None
     }
 }
 

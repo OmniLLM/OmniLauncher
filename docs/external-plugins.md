@@ -114,10 +114,11 @@ Expected **stdout** response:
 
 | Value | Behaviour |
 |-------|-----------|
-| `shell` | Run `action_data` as a shell command |
+| `shell` | Run `action_data` as a shell command (Windows: `cmd /C start "" <data>`) |
 | `url` | Open `action_data` as a URL in the default browser |
 | `open` | Open `action_data` with `xdg-open` / `open` / Explorer |
 | `copy` | Copy `action_data` to the clipboard |
+| `plugin_execute` | Re-invoke this plugin with `op=execute`; the plugin performs the action itself and returns `{"output": "..."}`. Use this when your action can't be expressed as a single shell/URL string (e.g. calling a Win32 API). |
 
 ---
 

@@ -847,6 +847,43 @@ async fn execute_result(
     }
 
     let success = match result.action_type.as_str() {
+        "plugin_execute" => {
+            // Routing tag is encoded as `<plugin_name>::<original_id>` on the
+            // result `id` by ExternalPlugin so we can call back into the right
+            // plugin via op=execute.
+            let (plugin_name, inner_id) = match result.id.split_once("::") {
+                Some((name, id)) => (name.to_string(), id.to_string()),
+                None => {
+                    log::warn!(
+                        "plugin_execute result id={} missing `<plugin>::` routing prefix",
+                        result.id
+                    );
+                    return Ok(false);
+                }
+            };
+            let pm = state.plugin_manager.lock().await;
+            match pm
+                .execute_action(&plugin_name, &inner_id, &action_data)
+                .await
+            {
+                Some(output) => {
+                    log::info!(
+                        "plugin_execute '{}' (id={}) returned: {}",
+                        plugin_name,
+                        inner_id,
+                        output
+                    );
+                    true
+                }
+                None => {
+                    log::warn!(
+                        "plugin_execute target plugin '{}' did not handle the request",
+                        plugin_name
+                    );
+                    false
+                }
+            }
+        }
         "url" | "open_url" => {
             log::info!("opening url: {}", action_data);
             #[cfg(target_os = "linux")]

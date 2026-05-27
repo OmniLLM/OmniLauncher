@@ -13,6 +13,51 @@ fn ensure_ext_plugins_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Remove a directory tree, retrying on Windows after clearing read-only
+/// attributes. Git pack files inside `.git/objects/pack` are written with the
+/// read-only bit set, which causes `std::fs::remove_dir_all` to fail with
+/// "Access is denied" on Windows. We walk the tree once to strip read-only
+/// flags and then retry the removal.
+fn force_remove_dir_all(path: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(first_err) => {
+            #[cfg(windows)]
+            {
+                if clear_readonly_recursive(path).is_ok() {
+                    if let Ok(()) = std::fs::remove_dir_all(path) {
+                        return Ok(());
+                    }
+                }
+            }
+            // Brief retry to handle transient file-handle holds (e.g. AV scanners).
+            for _ in 0..3 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if std::fs::remove_dir_all(path).is_ok() {
+                    return Ok(());
+                }
+            }
+            Err(first_err)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn clear_readonly_recursive(path: &std::path::Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(path)?;
+    let mut perms = meta.permissions();
+    if perms.readonly() {
+        perms.set_readonly(false);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+    if meta.file_type().is_dir() && !meta.file_type().is_symlink() {
+        for entry in std::fs::read_dir(path)?.flatten() {
+            let _ = clear_readonly_recursive(&entry.path());
+        }
+    }
+    Ok(())
+}
+
 fn plugin_storage_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("OMNILAUNCHER_PLUGIN_BASE_DIR") {
         let path = PathBuf::from(dir);
@@ -214,10 +259,23 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
     let dest = base_dir.join(&dir_name);
 
     if dest.exists() {
-        return Err(format!(
-            "Plugin directory '{}' already exists. Remove it first with remove_plugin.",
-            dir_name
-        ));
+        // If the existing directory has no discoverable plugins (an orphan from
+        // a failed previous install), clean it up automatically so the user can
+        // retry without manual intervention.
+        let is_orphan = discover_plugins_in_repo(&dest).is_empty();
+        if is_orphan {
+            force_remove_dir_all(&dest).map_err(|e| {
+                format!(
+                    "Plugin directory '{}' already exists and could not be cleaned up: {e}",
+                    dir_name
+                )
+            })?;
+        } else {
+            return Err(format!(
+                "Plugin directory '{}' already exists. Remove it first with remove_plugin.",
+                dir_name
+            ));
+        }
     }
 
     let is_remote = source.starts_with("http://")
@@ -415,7 +473,7 @@ pub async fn update_plugin_collection(
 fn install_staged_plugin(dest: &PathBuf) -> Result<String, String> {
     let discovered = discover_plugins_in_repo(dest);
     if discovered.is_empty() {
-        let _ = std::fs::remove_dir_all(dest);
+        let _ = force_remove_dir_all(dest);
         return Err(
             "No valid plugin.json found in the plugin directory or its immediate subdirectories."
                 .to_string(),
@@ -459,12 +517,18 @@ pub fn list_plugins() -> Vec<serde_json::Value> {
             let path = entry.path();
             if path.is_dir() {
                 let discovered = discover_plugins_in_repo(&path);
-                if discovered.is_empty() {
-                    continue;
-                }
+                let is_orphan = discovered.is_empty();
 
-                let (collection_name, collection_key) =
-                    infer_collection_identity(&path, &base, discovered.len());
+                let (collection_name, collection_key) = if is_orphan {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    (name.clone(), name)
+                } else {
+                    infer_collection_identity(&path, &base, discovered.len())
+                };
                 let collection_source = legacy_split_collection_source(&collection_key);
 
                 let mut repo = serde_json::json!({
@@ -476,6 +540,7 @@ pub fn list_plugins() -> Vec<serde_json::Value> {
                     "collection_name": collection_name,
                     "collection_key": collection_key,
                     "collection_source": collection_source,
+                    "is_orphan": is_orphan,
                     "plugins": []
                 });
 
@@ -540,6 +605,7 @@ pub async fn remove_plugin(name: String) -> Result<(), String> {
     }
 
     std::fs::remove_dir_all(&target)
+        .or_else(|_| force_remove_dir_all(&target))
         .map_err(|e| format!("Failed to remove plugin directory '{}': {e}", name))?;
 
     log::info!("Removed external plugin '{}'", name);

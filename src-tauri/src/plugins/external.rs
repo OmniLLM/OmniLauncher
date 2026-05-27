@@ -118,7 +118,17 @@ impl Plugin for ExternalPlugin {
                             arr.iter()
                                 .filter_map(|item| {
                                     Some(QueryResult {
-                                        id: item["id"].as_str()?.to_string(),
+                                        id: {
+                                            let raw_id = item["id"].as_str()?.to_string();
+                                            // For plugin_execute callbacks we need to
+                                            // route back to this plugin, so prefix the
+                                            // id with `<plugin_name>::` as a routing tag.
+                                            if item["action_type"].as_str() == Some("plugin_execute") {
+                                                format!("{}::{}", self.manifest.name, raw_id)
+                                            } else {
+                                                raw_id
+                                            }
+                                        },
                                         title: item["title"].as_str()?.to_string(),
                                         subtitle: item["subtitle"].as_str().map(|s| s.to_string()),
                                         icon: item["icon"]
@@ -187,6 +197,36 @@ impl Plugin for ExternalPlugin {
                     self.manifest.name
                 );
                 String::new()
+            }
+        }
+    }
+
+    async fn execute_action(&self, id: &str, action_data: &str) -> Option<String> {
+        let request = serde_json::json!({
+            "op": "execute",
+            "id": id,
+            "action_data": action_data,
+        });
+        let input = request.to_string();
+
+        match timeout(Duration::from_secs(10), self.call(&input)).await {
+            Ok(Some(output)) => match serde_json::from_str::<serde_json::Value>(&output) {
+                Ok(val) => Some(val["output"].as_str().unwrap_or("").to_string()),
+                Err(_) => Some(output),
+            },
+            Ok(None) => {
+                log::warn!(
+                    "External plugin '{}' execute_action failed",
+                    self.manifest.name
+                );
+                None
+            }
+            Err(_) => {
+                log::warn!(
+                    "External plugin '{}' execute_action timed out (10 s)",
+                    self.manifest.name
+                );
+                None
             }
         }
     }
@@ -275,6 +315,28 @@ pub fn discover_plugins_in_repo(repo_dir: &Path) -> Vec<(PathBuf, PluginManifest
 /// `CreateProcess`, so we detect the extension and prepend the matching
 /// interpreter. Native `.exe`/`.cmd`/`.bat` (and any unknown extension) fall
 /// through to a direct spawn.
+#[cfg(windows)]
+fn powershell_executable() -> &'static str {
+    // Prefer PowerShell 7 (`pwsh.exe`) when available: it defaults to UTF-8
+    // for source files and stdio, which avoids parse failures on .ps1 files
+    // that contain emoji/non-ASCII characters without a UTF-8 BOM (a common
+    // case in user-authored plugins). Fall back to Windows PowerShell 5.1.
+    use std::sync::OnceLock;
+    static EXE: OnceLock<&'static str> = OnceLock::new();
+    EXE.get_or_init(|| {
+        let found = std::process::Command::new("where")
+            .arg("pwsh.exe")
+            .output()
+            .map(|o| o.status.success() && !o.stdout.is_empty())
+            .unwrap_or(false);
+        if found {
+            "pwsh.exe"
+        } else {
+            "powershell.exe"
+        }
+    })
+}
+
 fn build_interpreter_command(entry: &Path) -> Command {
     let ext = entry
         .extension()
@@ -283,12 +345,24 @@ fn build_interpreter_command(entry: &Path) -> Command {
 
     match ext.as_deref() {
         Some("ps1") => {
-            let mut c = Command::new("powershell.exe");
+            #[cfg(windows)]
+            let exe = powershell_executable();
+            #[cfg(not(windows))]
+            let exe = "pwsh";
+            let mut c = Command::new(exe);
             c.arg("-NoProfile")
                 .arg("-ExecutionPolicy")
                 .arg("Bypass")
-                .arg("-File")
-                .arg(entry);
+                .arg("-OutputFormat")
+                .arg("Text")
+                .arg("-Command")
+                .arg(format!(
+                    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+                     [Console]::InputEncoding=[System.Text.Encoding]::UTF8; \
+                     $OutputEncoding=[System.Text.Encoding]::UTF8; \
+                     & '{}'",
+                    entry.to_string_lossy().replace('\'', "''")
+                ));
             c
         }
         Some("py") => {
