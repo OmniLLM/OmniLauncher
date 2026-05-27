@@ -38,7 +38,15 @@ const BG_PRESETS = [
   { label: "Custom URL…", value: "__custom__" },
 ];
 
-const inputStyle: React.CSSProperties = {
+const TABS = [
+  { id: "ai", label: "AI", icon: "🤖" },
+  { id: "appearance", label: "Appearance", icon: "🎨" },
+  { id: "general", label: "General", icon: "⚙️" },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+const baseInputStyle: React.CSSProperties = {
   width: "100%",
   background: "rgba(255,255,255,0.06)",
   border: "1px solid rgba(255,255,255,0.12)",
@@ -48,19 +56,22 @@ const inputStyle: React.CSSProperties = {
   fontSize: 13,
   outline: "none",
   boxSizing: "border-box",
+  transition: "border-color 0.15s, box-shadow 0.15s",
 };
 
-const labelStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: "#8892b0",
-  marginBottom: 4,
-  display: "block",
+const focusedInputStyle: React.CSSProperties = {
+  ...baseInputStyle,
+  borderColor: "rgba(94,129,244,0.6)",
+  boxShadow: "0 0 0 2px rgba(94,129,244,0.4)",
 };
 
 export default function SettingsWindow() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<TabId>("ai");
+  const [saveHover, setSaveHover] = useState(false);
+  const [focusedField, setFocusedField] = useState<string | null>(null);
 
   const currentBgUrl = settings?.background_url ?? "";
   const isCustomBg =
@@ -154,6 +165,14 @@ export default function SettingsWindow() {
     }
   };
 
+  const inputStyle = (field: string): React.CSSProperties =>
+    focusedField === field ? focusedInputStyle : baseInputStyle;
+
+  const fProps = (field: string) => ({
+    onFocus: () => setFocusedField(field),
+    onBlur: () => setFocusedField(null),
+  });
+
   if (loading || !settings) {
     return (
       <div
@@ -162,7 +181,7 @@ export default function SettingsWindow() {
           alignItems: "center",
           justifyContent: "center",
           height: "100vh",
-          background: "#0b1220",
+          background: "#0d1117",
           color: "#8892b0",
           fontFamily: "'Aptos Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif",
         }}
@@ -172,273 +191,360 @@ export default function SettingsWindow() {
     );
   }
 
+  const sectionHeaderStyle: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: "0.08em",
+    color: "#5E81F4",
+    textTransform: "uppercase",
+    marginBottom: 10,
+  };
+
+  const cardStyle: React.CSSProperties = {
+    background: "rgba(255,255,255,0.03)",
+    border: "1px solid rgba(255,255,255,0.07)",
+    borderRadius: 10,
+    padding: "4px 0",
+    marginBottom: 20,
+  };
+
+  const rowStyle = (last = false): React.CSSProperties => ({
+    display: "grid",
+    gridTemplateColumns: "120px 1fr",
+    alignItems: "center",
+    gap: 12,
+    padding: "10px 16px",
+    borderBottom: last ? "none" : "1px solid rgba(255,255,255,0.05)",
+  });
+
+  const rowLabelStyle: React.CSSProperties = {
+    fontSize: 13,
+    color: "#8892b0",
+  };
+
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "column",
         height: "100vh",
-        background: "#0b1220",
+        background: "#0d1117",
         color: "#e8eaf6",
         fontFamily: "'Aptos Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif",
+        overflow: "hidden",
       }}
     >
-      {/* Title bar */}
+      {/* Title bar — full width */}
       <div
+        data-tauri-drag-region
         style={{
-          padding: "16px 20px 0",
-          flexShrink: 0,
+          height: 44,
           display: "flex",
           alignItems: "center",
+          padding: "0 20px",
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
+          flexShrink: 0,
           justifyContent: "space-between",
         }}
       >
-        <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.04em", color: "#e8eaf6" }}>
-          ⚙ Settings
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#e8eaf6" }}>
+          ⚙&nbsp;&nbsp;Preferences
         </span>
         <button
           onClick={() => getCurrentWindow().close()}
-          style={{ background: "none", border: "none", color: "#8892b0", fontSize: 16, cursor: "pointer" }}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#8892b0",
+            fontSize: 16,
+            cursor: "pointer",
+            lineHeight: 1,
+          }}
         >
           ✕
         </button>
       </div>
 
-      {/* Scrollable form */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: "20px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 24,
-        }}
-      >
-        {/* AI Section */}
-        <Section title="AI">
-          <label>
-            <span style={labelStyle}>Provider URL</span>
-            <input
-              style={inputStyle}
-              value={settings.ai_base_url}
-              onChange={(e) => setSettings((s) => s && { ...s, ai_base_url: e.target.value })}
-            />
-          </label>
-
-          <label>
-            <span style={labelStyle}>API Key</span>
-            <input
-              style={inputStyle}
-              type="password"
-              value={settings.ai_api_key}
-              onChange={(e) => setSettings((s) => s && { ...s, ai_api_key: e.target.value })}
-              placeholder="(optional)"
-            />
-          </label>
-
-          <div ref={dropdownRef} style={{ position: "relative" }}>
-            <span style={labelStyle}>
-              Model
-              {modelsLoading && <span style={{ color: "#5E81F4" }}> (loading…)</span>}
-              {modelsError && <span style={{ color: "#f87171" }}> ⚠</span>}
-            </span>
-            <input
-              ref={modelInputRef}
-              style={inputStyle}
-              value={modelFilter}
-              onChange={(e) => {
-                setModelFilter(e.target.value);
-                setSettings((s) => s && { ...s, ai_model: e.target.value });
-                setShowModelDropdown(true);
-              }}
-              onFocus={() => setShowModelDropdown(true)}
-              placeholder="Type to filter models…"
-            />
-            {showModelDropdown && filteredModels.length > 0 && (
-              <div
-                style={{
-                  position: "absolute",
-                  zIndex: 100,
-                  left: 0,
-                  right: 0,
-                  top: "calc(100% + 2px)",
-                  background: "#16233B",
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  borderRadius: 6,
-                  maxHeight: 180,
-                  overflowY: "auto",
-                }}
-              >
-                {filteredModels.map((m) => (
-                  <div
-                    key={m}
-                    onClick={() => handleModelSelect(m)}
-                    style={{
-                      padding: "7px 10px",
-                      fontSize: 13,
-                      cursor: "pointer",
-                      color: m === settings.ai_model ? "#5E81F4" : "#e8eaf6",
-                      background: m === settings.ai_model ? "rgba(94,129,244,0.1)" : "transparent",
-                    }}
-                    onMouseEnter={(e) => ((e.target as HTMLDivElement).style.background = "rgba(255,255,255,0.06)")}
-                    onMouseLeave={(e) =>
-                      ((e.target as HTMLDivElement).style.background =
-                        m === settings.ai_model ? "rgba(94,129,244,0.1)" : "transparent")
-                    }
-                  >
-                    {m}
-                  </div>
-                ))}
-              </div>
-            )}
-            {showModelDropdown && !modelsLoading && filteredModels.length === 0 && models.length > 0 && (
-              <div
-                style={{
-                  position: "absolute",
-                  zIndex: 100,
-                  left: 0,
-                  right: 0,
-                  top: "calc(100% + 2px)",
-                  background: "#16233B",
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  borderRadius: 6,
-                  padding: "7px 10px",
-                  fontSize: 13,
-                  color: "#8892b0",
-                }}
-              >
-                No matches
-              </div>
-            )}
-          </div>
-        </Section>
-
-        {/* Appearance Section */}
-        <Section title="Appearance">
-          <label>
-            <span style={labelStyle}>Theme</span>
-            <select
-              style={{ ...inputStyle, cursor: "pointer" }}
-              value={settings.theme}
-              onChange={(e) => setSettings((s) => s && { ...s, theme: e.target.value })}
-            >
-              <option value="system">System (Follow OS)</option>
-              <option value="dark">Dark (Battle Blue)</option>
-              <option value="light">Light (Catppuccin Latte)</option>
-            </select>
-          </label>
-
-          <div>
-            <span style={labelStyle}>Background Image</span>
-            <select
-              style={{ ...inputStyle, cursor: "pointer" }}
-              value={bgSelectValue}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (val !== "__custom__") {
-                  setSettings((s) => s && { ...s, background_url: val });
-                }
-              }}
-            >
-              {BG_PRESETS.map((p) => (
-                <option key={p.label} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-            {(bgSelectValue === "__custom__" || isCustomBg) && (
-              <input
-                style={{ ...inputStyle, marginTop: 6 }}
-                value={currentBgUrl}
-                onChange={(e) => setSettings((s) => s && { ...s, background_url: e.target.value })}
-                placeholder="https://example.com/image.jpg"
-              />
-            )}
-          </div>
-        </Section>
-
-        {/* General Section */}
-        <Section title="General">
-          <div>
-            <span style={labelStyle}>Hotkey</span>
-            <div
-              style={{
-                ...inputStyle,
-                color: "#8892b0",
-                cursor: "default",
-                userSelect: "none",
-              }}
-            >
-              {settings.hotkey}
-            </div>
-          </div>
-
-          <label>
-            <span style={labelStyle}>Max Results</span>
-            <input
-              style={inputStyle}
-              type="number"
-              min={1}
-              max={50}
-              value={settings.max_results}
-              onChange={(e) =>
-                setSettings((s) => s && { ...s, max_results: parseInt(e.target.value) || 10 })
-              }
-            />
-          </label>
-        </Section>
-
-        {/* Save button */}
-        <button
-          onClick={handleSave}
+      {/* Body: sidebar + content */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        {/* Left sidebar */}
+        <div
           style={{
-            padding: "10px 20px",
-            background: saved ? "rgba(94,129,244,0.2)" : "#5E81F4",
-            color: saved ? "#5E81F4" : "#fff",
-            border: saved ? "1px solid #5E81F4" : "none",
-            borderRadius: 8,
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: "pointer",
-            transition: "all 0.2s",
-            alignSelf: "flex-start",
+            width: 140,
+            flexShrink: 0,
+            background: "rgba(255,255,255,0.03)",
+            borderRight: "1px solid rgba(255,255,255,0.06)",
+            padding: "12px 8px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
           }}
         >
-          {saved ? "✓ Saved" : "Save Settings"}
-        </button>
-      </div>
-    </div>
-  );
-}
+          {TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "10px 14px",
+                  borderRadius: 6,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  border: "none",
+                  background: isActive ? "rgba(94,129,244,0.15)" : "transparent",
+                  color: isActive ? "#e8eaf6" : "#8892b0",
+                  borderLeft: isActive ? "2px solid #5E81F4" : "2px solid transparent",
+                  transition: "all 0.15s",
+                  textAlign: "left",
+                  width: "100%",
+                  fontFamily: "inherit",
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.05)";
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+                }}
+              >
+                <span>{tab.icon}</span>
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 700,
-          letterSpacing: "0.1em",
-          color: "#5E81F4",
-          textTransform: "uppercase",
-          marginBottom: 12,
-        }}
-      >
-        {title}
-      </div>
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-          background: "rgba(255,255,255,0.03)",
-          borderRadius: 10,
-          padding: "14px 16px",
-          border: "1px solid rgba(255,255,255,0.07)",
-        }}
-      >
-        {children}
+        {/* Right content pane */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* Scrollable area */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
+
+            {activeTab === "ai" && (
+              <div>
+                <div style={sectionHeaderStyle}>AI Provider</div>
+                <div style={cardStyle}>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Provider URL</span>
+                    <input
+                      style={inputStyle("ai_base_url")}
+                      value={settings.ai_base_url}
+                      onChange={(e) => setSettings((s) => s && { ...s, ai_base_url: e.target.value })}
+                      {...fProps("ai_base_url")}
+                    />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>API Key</span>
+                    <input
+                      style={inputStyle("ai_api_key")}
+                      type="password"
+                      value={settings.ai_api_key}
+                      onChange={(e) => setSettings((s) => s && { ...s, ai_api_key: e.target.value })}
+                      placeholder="(optional)"
+                      {...fProps("ai_api_key")}
+                    />
+                  </div>
+                  <div ref={dropdownRef} style={{ ...rowStyle(true), position: "relative" }}>
+                    <span style={rowLabelStyle}>
+                      Model
+                      {modelsLoading && <span style={{ color: "#5E81F4" }}> (loading…)</span>}
+                      {modelsError && <span style={{ color: "#f87171" }}> ⚠</span>}
+                    </span>
+                    <div style={{ position: "relative", flex: 1 }}>
+                      <input
+                        ref={modelInputRef}
+                        style={inputStyle("ai_model")}
+                        value={modelFilter}
+                        onChange={(e) => {
+                          setModelFilter(e.target.value);
+                          setSettings((s) => s && { ...s, ai_model: e.target.value });
+                          setShowModelDropdown(true);
+                        }}
+                        onFocus={() => { setFocusedField("ai_model"); setShowModelDropdown(true); }}
+                        onBlur={() => setFocusedField(null)}
+                        placeholder="Type to filter models…"
+                      />
+                      {showModelDropdown && filteredModels.length > 0 && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            zIndex: 100,
+                            left: 0,
+                            right: 0,
+                            top: "calc(100% + 2px)",
+                            background: "#16233B",
+                            border: "1px solid rgba(255,255,255,0.12)",
+                            borderRadius: 6,
+                            maxHeight: 180,
+                            overflowY: "auto",
+                          }}
+                        >
+                          {filteredModels.map((m) => (
+                            <div
+                              key={m}
+                              onClick={() => handleModelSelect(m)}
+                              style={{
+                                padding: "7px 10px",
+                                fontSize: 13,
+                                cursor: "pointer",
+                                color: m === settings.ai_model ? "#5E81F4" : "#e8eaf6",
+                                background: m === settings.ai_model ? "rgba(94,129,244,0.1)" : "transparent",
+                              }}
+                              onMouseEnter={(e) => ((e.target as HTMLDivElement).style.background = "rgba(255,255,255,0.06)")}
+                              onMouseLeave={(e) =>
+                                ((e.target as HTMLDivElement).style.background =
+                                  m === settings.ai_model ? "rgba(94,129,244,0.1)" : "transparent")
+                              }
+                            >
+                              {m}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {showModelDropdown && !modelsLoading && filteredModels.length === 0 && models.length > 0 && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            zIndex: 100,
+                            left: 0,
+                            right: 0,
+                            top: "calc(100% + 2px)",
+                            background: "#16233B",
+                            border: "1px solid rgba(255,255,255,0.12)",
+                            borderRadius: 6,
+                            padding: "7px 10px",
+                            fontSize: 13,
+                            color: "#8892b0",
+                          }}
+                        >
+                          No matches
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "appearance" && (
+              <div>
+                <div style={sectionHeaderStyle}>Appearance</div>
+                <div style={cardStyle}>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Theme</span>
+                    <select
+                      style={{ ...inputStyle("theme"), cursor: "pointer" }}
+                      value={settings.theme}
+                      onChange={(e) => setSettings((s) => s && { ...s, theme: e.target.value })}
+                      {...fProps("theme")}
+                    >
+                      <option value="system">System (Follow OS)</option>
+                      <option value="dark">Dark (Battle Blue)</option>
+                      <option value="light">Light (Catppuccin Latte)</option>
+                    </select>
+                  </div>
+                  <div style={rowStyle(!isCustomBg && bgSelectValue !== "__custom__")}>
+                    <span style={rowLabelStyle}>Background</span>
+                    <select
+                      style={{ ...inputStyle("bg_select"), cursor: "pointer" }}
+                      value={bgSelectValue}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val !== "__custom__") {
+                          setSettings((s) => s && { ...s, background_url: val });
+                        }
+                      }}
+                      {...fProps("bg_select")}
+                    >
+                      {BG_PRESETS.map((p) => (
+                        <option key={p.label} value={p.value}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {(bgSelectValue === "__custom__" || isCustomBg) && (
+                    <div style={rowStyle(true)}>
+                      <span style={rowLabelStyle}>Image URL</span>
+                      <input
+                        style={inputStyle("bg_url")}
+                        value={currentBgUrl}
+                        onChange={(e) => setSettings((s) => s && { ...s, background_url: e.target.value })}
+                        placeholder="https://example.com/image.jpg"
+                        {...fProps("bg_url")}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === "general" && (
+              <div>
+                <div style={sectionHeaderStyle}>General</div>
+                <div style={cardStyle}>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Hotkey</span>
+                    <div
+                      style={{
+                        ...baseInputStyle,
+                        color: "#8892b0",
+                        cursor: "default",
+                        userSelect: "none",
+                      }}
+                    >
+                      {settings.hotkey}
+                    </div>
+                  </div>
+                  <div style={rowStyle(true)}>
+                    <span style={rowLabelStyle}>Max Results</span>
+                    <input
+                      style={inputStyle("max_results")}
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={settings.max_results}
+                      onChange={(e) =>
+                        setSettings((s) => s && { ...s, max_results: parseInt(e.target.value) || 10 })
+                      }
+                      {...fProps("max_results")}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Save button — fixed at bottom of right pane */}
+          <div style={{ padding: "12px 28px", flexShrink: 0, borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+            <button
+              onClick={handleSave}
+              onMouseEnter={() => setSaveHover(true)}
+              onMouseLeave={() => setSaveHover(false)}
+              style={{
+                width: "100%",
+                height: 36,
+                background: saved
+                  ? "rgba(94,129,244,0.2)"
+                  : saveHover
+                  ? "#6B8FF5"
+                  : "#5E81F4",
+                color: saved ? "#5E81F4" : "#fff",
+                border: saved ? "1px solid #5E81F4" : "none",
+                borderRadius: 8,
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: "pointer",
+                transition: "all 0.2s",
+                fontFamily: "inherit",
+              }}
+            >
+              {saved ? "✓ Saved" : "Save Settings"}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
