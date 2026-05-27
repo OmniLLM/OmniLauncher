@@ -862,7 +862,7 @@ export default function App() {
         )}
 
         {/* ── AI MODE: scrollable chat history ─────────────────────────── */}
-        {isAiMode && (
+        {isAiMode && !showSkillManager && (
           <div
             ref={chatScrollRef}
             style={{
