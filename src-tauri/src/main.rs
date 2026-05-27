@@ -71,10 +71,10 @@ fn init_debug_logging(enable_debug: bool) {
 
 pub struct AppState {
     pub plugin_manager: Arc<Mutex<omnilauncher_lib::PluginManager>>,
-    pub ai_client: Mutex<AiClient>,
+    pub ai_client: Arc<Mutex<AiClient>>,
     pub settings: Arc<Mutex<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
-    pub ai_in_flight: Semaphore,
+    pub ai_in_flight: Arc<Semaphore>,
     pub skill_manager: Arc<Mutex<SkillManager>>,
     pub live_server: LiveServer,
     pub live_server_port: u16,
@@ -129,10 +129,10 @@ pub fn run() {
 
     let state = AppState {
         plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
-        ai_client: Mutex::new(ai_client),
+        ai_client: Arc::new(Mutex::new(ai_client)),
         settings: Arc::new(Mutex::new(settings)),
         conversation: Arc::new(Mutex::new(ConversationContext::default())),
-        ai_in_flight: Semaphore::new(1),
+        ai_in_flight: Arc::new(Semaphore::new(1)),
         skill_manager: Arc::new(Mutex::new(skill_manager)),
         live_server,
         live_server_port,
@@ -326,44 +326,79 @@ async fn search(
     Ok(pm.query_all(&query).await)
 }
 
-async fn try_start_ai_request(
-    state: &AppState,
-) -> Result<tokio::sync::SemaphorePermit<'_>, String> {
-    state
-        .ai_in_flight
-        .try_acquire()
-        .map_err(|_| "AI response is still in progress".to_string())
-}
-
 #[tauri::command]
 async fn ai_query(
     query: String,
     state: tauri::State<'_, AppState>,
-) -> Result<omnilauncher_lib::AiResponse, String> {
-    let _ai_request = try_start_ai_request(&state).await?;
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    // Try to acquire permit (fail fast if AI already in flight)
+    let permit = state
+        .ai_in_flight
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| "AI response is still in progress".to_string())?;
+
     log::debug!("ai_query invoked with {} characters", query.len());
-    // Add to conversation context
+
+    // Add user message to conversation context
     {
         let mut ctx = state.conversation.lock().await;
         ctx.add_user(&query);
     }
 
-    let pm = state.plugin_manager.lock().await;
-    let client = state.ai_client.lock().await;
-    let ctx = state.conversation.lock().await;
-    let skill_mgr = state.skill_manager.lock().await;
-    // Always use AI route in chat mode (bypass NL detection)
-    let response = Router::ai_route(&query, &pm, &client, &ctx, &skill_mgr).await;
-    drop(ctx);
-    drop(skill_mgr);
+    // Clone Arcs for the spawned task
+    let pm = state.plugin_manager.clone();
+    let ai_client = state.ai_client.clone();
+    let conversation = state.conversation.clone();
+    let skill_mgr = state.skill_manager.clone();
 
-    // Add assistant response to context
-    {
-        let mut ctx = state.conversation.lock().await;
-        ctx.add_assistant(&response.content);
-    }
+    tauri::async_runtime::spawn(async move {
+        // Keep permit alive for duration of task
+        let _permit = permit;
 
-    Ok(response)
+        let (progress_tx, mut progress_rx) =
+            tokio::sync::mpsc::unbounded_channel::<String>();
+
+        // Spawn a task to forward tool-call events to the window
+        let win_for_progress = window.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut iteration = 0u32;
+            while let Some(tool_name) = progress_rx.recv().await {
+                iteration += 1;
+                let _ = win_for_progress.emit(
+                    "omnilauncher://ai-tool-call",
+                    serde_json::json!({ "tool": tool_name, "iteration": iteration }),
+                );
+            }
+        });
+
+        let response = {
+            let pm_lock = pm.lock().await;
+            let client = ai_client.lock().await;
+            let ctx = conversation.lock().await;
+            let skill_lock = skill_mgr.lock().await;
+            Router::ai_route(
+                &query,
+                &pm_lock,
+                &client,
+                &ctx,
+                &skill_lock,
+                Some(progress_tx),
+            )
+            .await
+        };
+
+        // Add assistant response to context
+        {
+            let mut ctx = conversation.lock().await;
+            ctx.add_assistant(&response.content);
+        }
+
+        let _ = window.emit("omnilauncher://ai-done", &response);
+    });
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1029,25 +1064,28 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_second_ai_request_while_one_is_in_progress() {
+        let sem = Arc::new(Semaphore::new(1));
         let state = AppState {
             plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
-            ai_client: Mutex::new(AiClient::new(String::new(), String::new(), String::new())),
+            ai_client: Arc::new(Mutex::new(AiClient::new(String::new(), String::new(), String::new()))),
             settings: Arc::new(Mutex::new(AppSettings::default())),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
-            ai_in_flight: Semaphore::new(1),
+            ai_in_flight: sem.clone(),
             skill_manager: Arc::new(Mutex::new(SkillManager::new())),
             live_server: LiveServer::new(),
             live_server_port: 0,
         };
 
-        let first = try_start_ai_request(&state)
-            .await
+        let first = state
+            .ai_in_flight
+            .clone()
+            .try_acquire_owned()
             .expect("first request starts");
-        let second = try_start_ai_request(&state).await;
+        let second = state.ai_in_flight.clone().try_acquire_owned();
 
-        assert_eq!(second.unwrap_err(), "AI response is still in progress");
+        assert!(second.is_err(), "AI response is still in progress");
         drop(first);
-        assert!(try_start_ai_request(&state).await.is_ok());
+        assert!(state.ai_in_flight.clone().try_acquire_owned().is_ok());
     }
 }
 

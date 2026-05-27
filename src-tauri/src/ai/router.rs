@@ -151,6 +151,7 @@ impl Router {
         ai_client: &AiClient,
         context: &ConversationContext,
         skill_manager: &SkillManager,
+        progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> AiResponse {
         match Self::decide(input) {
             RouteDecision::Local => {
@@ -164,7 +165,7 @@ impl Router {
             }
             RouteDecision::Ai => {
                 let prompt = Self::strip_ai_prefix(input);
-                Self::ai_route(prompt, plugin_manager, ai_client, context, skill_manager).await
+                Self::ai_route(prompt, plugin_manager, ai_client, context, skill_manager, progress_tx).await
             }
         }
     }
@@ -175,6 +176,7 @@ impl Router {
         ai_client: &AiClient,
         context: &ConversationContext,
         skill_manager: &SkillManager,
+        progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> AiResponse {
         if is_skill_inventory_query(query) {
             return skill_inventory_response(skill_manager);
@@ -297,6 +299,9 @@ impl Router {
 
                         for tc in &tool_calls {
                             all_tools_used.push(tc.function.name.clone());
+                            if let Some(ref tx) = progress_tx {
+                                let _ = tx.send(tc.function.name.clone());
+                            }
                             let args: serde_json::Value =
                                 serde_json::from_str(&tc.function.arguments).unwrap_or_default();
                             let result = plugin_manager.execute_tool(&tc.function.name, args).await;

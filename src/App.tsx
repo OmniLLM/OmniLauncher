@@ -405,19 +405,69 @@ export default function App() {
       setLoading(true);
       setResults([]);
 
-      try {
-        const res = await invoke<AiResponse>("ai_query", { query: q });
+      // Set up event listeners BEFORE invoking
+      const unlisteners: (() => void)[] = [];
+
+      const cleanup = () => {
+        unlisteners.forEach((fn) => fn());
+        unlisteners.length = 0;
+      };
+
+      listen<{ tool: string; iteration: number }>(
+        "omnilauncher://ai-tool-call",
+        (event) => {
+          const toolName = event.payload.tool;
+          setConversationHistory((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant" && last.isStreaming) {
+              next[next.length - 1] = {
+                ...last,
+                content: `🔧 Calling **${toolName}**…`,
+                tools_used: [...(last.tools_used ?? []), toolName],
+              };
+            }
+            return next;
+          });
+        }
+      ).then((fn) => unlisteners.push(fn));
+
+      listen<AiResponse>("omnilauncher://ai-done", (event) => {
+        cleanup();
         setConversationHistory((prev) => {
           const next = [...prev];
           next[next.length - 1] = {
             role: "assistant",
-            content: res.content,
-            tools_used: res.tools_used,
+            content: event.payload.content,
+            tools_used: event.payload.tools_used,
             isStreaming: false,
           };
           return next;
         });
+        setLoading(false);
+        setTimeout(() => focusInput(), 50);
+      }).then((fn) => unlisteners.push(fn));
+
+      listen<string>("omnilauncher://ai-error", (event) => {
+        cleanup();
+        setConversationHistory((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = {
+            role: "assistant",
+            content: `Error: ${event.payload}`,
+            isStreaming: false,
+          };
+          return next;
+        });
+        setLoading(false);
+        setTimeout(() => focusInput(), 50);
+      }).then((fn) => unlisteners.push(fn));
+
+      // Fire and forget — returns immediately
+      try {
+        await invoke("ai_query", { query: q });
       } catch (e) {
+        cleanup();
         setConversationHistory((prev) => {
           const next = [...prev];
           next[next.length - 1] = {
@@ -427,7 +477,6 @@ export default function App() {
           };
           return next;
         });
-      } finally {
         setLoading(false);
         setTimeout(() => focusInput(), 50);
       }
