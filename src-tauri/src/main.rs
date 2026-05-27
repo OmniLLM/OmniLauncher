@@ -141,7 +141,12 @@ pub fn run() {
         plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
         ai_client: Arc::new(Mutex::new(ai_client)),
         settings: Arc::new(Mutex::new(settings)),
-        conversation: Arc::new(Mutex::new(ConversationContext::default())),
+        conversation: Arc::new(Mutex::new({
+            let mut ctx = ConversationContext::default();
+            // Re-hydrate from SQLite so follow-up questions survive restarts.
+            ctx.messages = omnilauncher_lib::db::conversation::load_recent(20);
+            ctx
+        })),
         ai_in_flight: Arc::new(Semaphore::new(1)),
         skill_manager: Arc::new(Mutex::new(skill_manager)),
         live_server,
@@ -374,6 +379,7 @@ async fn ai_query(
         let mut ctx = state.conversation.lock().await;
         ctx.add_user(&query);
     }
+    omnilauncher_lib::db::conversation::save_turn("user", &query);
 
     // Clone Arcs for the spawned task
     let pm = state.plugin_manager.clone();
@@ -439,6 +445,7 @@ async fn ai_query(
             let mut ctx = conversation.lock().await;
             ctx.add_assistant(&response.content);
         }
+        omnilauncher_lib::db::conversation::save_turn("assistant", &response.content);
 
         let _ = window.emit("omnilauncher://ai-done", &response);
     });
@@ -451,6 +458,12 @@ async fn clear_conversation(state: tauri::State<'_, AppState>) -> Result<bool, S
     log::debug!("clear_conversation invoked");
     let mut ctx = state.conversation.lock().await;
     ctx.clear();
+    // Also wipe the persisted history so a restart starts fresh.
+    if let Ok(conn) = rusqlite::Connection::open(
+        omnilauncher_lib::path_config::data_dir().join("omnilauncher.sqlite"),
+    ) {
+        let _ = conn.execute("DELETE FROM conversation_messages", []);
+    }
     Ok(true)
 }
 

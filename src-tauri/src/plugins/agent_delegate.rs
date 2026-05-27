@@ -14,6 +14,11 @@ struct SubTask {
 
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 const MAX_TIMEOUT_SECS: u64 = 600;
+const ALLOWED_AGENTS: &[&str] = &["claude", "codex", "omnicode", "opencode"];
+
+fn is_allowed_agent(name: &str) -> bool {
+    ALLOWED_AGENTS.iter().any(|a| *a == name)
+}
 
 fn build_prompt(prompt: &str, context: Option<&str>) -> String {
     match context {
@@ -224,6 +229,14 @@ impl Plugin for AgentDelegatePlugin {
         if let Some(tasks_val) = args.get("tasks") {
             if let Ok(tasks) = serde_json::from_value::<Vec<SubTask>>(tasks_val.clone()) {
                 if !tasks.is_empty() {
+                    if let Some(bad) =
+                        tasks.iter().find(|t| !is_allowed_agent(&t.agent_name))
+                    {
+                        return format!(
+                            "Error: agent_name '{}' is not in the allowed list {:?}",
+                            bad.agent_name, ALLOWED_AGENTS
+                        );
+                    }
                     return self.run_parallel_tasks(tasks, timeout_secs).await;
                 }
             }
@@ -237,6 +250,13 @@ impl Plugin for AgentDelegatePlugin {
         if agent_name.is_empty() || prompt_raw.is_empty() {
             return "Both agent_name and prompt are required (or provide a tasks array)"
                 .to_string();
+        }
+
+        if !is_allowed_agent(&agent_name) {
+            return format!(
+                "Error: agent_name '{}' is not in the allowed list {:?}",
+                agent_name, ALLOWED_AGENTS
+            );
         }
 
         let prompt = build_prompt(&prompt_raw, context.as_deref());

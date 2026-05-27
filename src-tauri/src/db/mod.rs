@@ -9,6 +9,8 @@
 /// databases that were created by older code and already have those columns.
 use rusqlite::{Connection, Result};
 
+pub mod conversation;
+
 /// A single migration: a version number and the SQL to execute.
 pub struct Migration {
     pub version: u32,
@@ -34,6 +36,10 @@ pub fn migrations() -> Vec<Migration> {
         Migration {
             version: 4,
             sql: include_str!("../../migrations/004_scheduled_jobs.sql"),
+        },
+        Migration {
+            version: 5,
+            sql: include_str!("../../migrations/005_conversation_history.sql"),
         },
     ]
 }

@@ -1,3 +1,4 @@
+use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 
@@ -47,6 +48,10 @@ impl Plugin for FileReadPlugin {
             return "Error: no path provided".to_string();
         }
 
+        if let GuardrailAction::Deny(reason) = Guardrails::check_file_read(path) {
+            return format!("Error: guardrail denied file_read: {}", reason);
+        }
+
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => return format!("Error reading file: {}", e),
@@ -56,12 +61,14 @@ impl Plugin for FileReadPlugin {
         let end = args["end_line"].as_u64().unwrap_or(0) as usize;
 
         let lines: Vec<&str> = content.lines().collect();
-        let start_idx = (start - 1).min(lines.len());
+        let total_lines = lines.len();
+        let start_idx = (start - 1).min(total_lines);
         let end_idx = if end > 0 {
-            end.min(lines.len())
+            end.min(total_lines)
         } else {
-            lines.len()
+            total_lines
         };
+        let returned_lines = end_idx.saturating_sub(start_idx);
 
         let selected: Vec<String> = lines[start_idx..end_idx]
             .iter()
@@ -70,11 +77,21 @@ impl Plugin for FileReadPlugin {
             .collect();
 
         let result = selected.join("\n");
-        if result.len() > 8000 {
+        const MAX_BYTES: usize = 8000;
+        if result.len() > MAX_BYTES {
+            // Truncate on a char boundary to avoid splitting multi-byte UTF-8.
+            let mut cut = MAX_BYTES;
+            while cut > 0 && !result.is_char_boundary(cut) {
+                cut -= 1;
+            }
             format!(
-                "{}\n... (truncated, {} total lines)",
-                &result[..8000],
-                lines.len()
+                "{}\n[TRUNCATED] showed {} bytes of {} (lines {}..{} of {}); call file_read again with start_line/end_line to fetch more.",
+                &result[..cut],
+                cut,
+                result.len(),
+                start_idx + 1,
+                start_idx + returned_lines,
+                total_lines
             )
         } else {
             result

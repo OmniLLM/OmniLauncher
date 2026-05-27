@@ -1,3 +1,4 @@
+use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 
@@ -48,6 +49,10 @@ impl Plugin for FileWritePlugin {
 
         if path.is_empty() {
             return "Error: no path provided".to_string();
+        }
+
+        if let GuardrailAction::Deny(reason) = Guardrails::check_file_write(path) {
+            return format!("Error: guardrail denied file_write: {}", reason);
         }
 
         let file_path = std::path::Path::new(path);

@@ -1,3 +1,4 @@
+use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 
@@ -52,6 +53,10 @@ impl Plugin for HttpClientPlugin {
             return "Error: no URL provided".to_string();
         }
 
+        if let GuardrailAction::Deny(reason) = Guardrails::check_url(url) {
+            return format!("Error: guardrail denied http_request: {}", reason);
+        }
+
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -98,8 +103,18 @@ impl Plugin for HttpClientPlugin {
 
                 match resp.text().await {
                     Ok(text) => {
-                        let body_str = if text.len() > 6000 {
-                            format!("{}\n... (truncated)", &text[..6000])
+                        let total = text.len();
+                        let body_str = if total > 6000 {
+                            let mut cut = 6000;
+                            while cut > 0 && !text.is_char_boundary(cut) {
+                                cut -= 1;
+                            }
+                            format!(
+                                "{}\n[TRUNCATED] showed {} of {} bytes; the response was larger than the tool body limit.",
+                                &text[..cut],
+                                cut,
+                                total
+                            )
                         } else {
                             text
                         };
