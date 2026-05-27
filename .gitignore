@@ -21,6 +21,12 @@ docs/superpowers/
 # Playwright MCP debug artifacts
 .playwright-mcp/
 
+# Runtime state accidentally written into repo cwd
+.config/
+
+# Stray debug dump
+dump.txt
+
 # Root screenshot PNGs
 omnilauncher-*.png
 *.log
