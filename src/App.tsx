@@ -1305,6 +1305,7 @@ export default function App() {
         <div
           style={{
             flexShrink: 0,
+            paddingBottom: "2px",
             transform: isCompactMode ? "translateY(-18px)" : undefined,
           }}
         >

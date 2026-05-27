@@ -239,15 +239,8 @@ export default function SearchBar({
             width: compact ? "min(94%, 820px)" : "100%",
             margin: compact ? "0 auto" : undefined,
             gap: "10px",
-            border: isAiMode
-              ? `1px solid ${colors.surface2}`
-              : compact
-                ? `1px solid ${colors.surface2}`
-                : "none",
-            borderBottom:
-              !compact && !isAiMode && value
-                ? `1px solid ${colors.surface}`
-                : undefined,
+            boxSizing: "border-box",
+            border: `1px solid ${colors.surface2}`,
             background: isAiMode ? `${colors.surface}80` : colors.bg,
             backdropFilter: isAiMode ? "blur(10px)" : undefined,
             WebkitBackdropFilter: isAiMode ? "blur(10px)" : undefined,

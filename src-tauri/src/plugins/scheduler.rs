@@ -2,6 +2,7 @@ use crate::db;
 use crate::path_config;
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
+use chrono::{Datelike, Local, TimeZone, Timelike};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
@@ -88,26 +89,37 @@ fn now_unix() -> i64 {
 
 /// Minimal cron parser: "min hour dom month dow"
 /// Returns next fire time as Unix seconds, or None on parse error.
+/// Cron fields are interpreted in the user's **local** time zone.
 fn next_cron_time(expr: &str, from_secs: i64) -> Option<i64> {
     let fields: Vec<&str> = expr.split_whitespace().collect();
     if fields.len() != 5 {
         return None;
     }
-    let (min_f, hour_f, _dom_f, _mon_f, _dow_f) =
+    let (min_f, hour_f, dom_f, mon_f, dow_f) =
         (fields[0], fields[1], fields[2], fields[3], fields[4]);
 
-    // Very simple: we only support */N and * for now.
-    // Advance by 1 minute each step up to 366*24*60 minutes.
-    let from = from_secs + 60; // at least 1 minute from now
-    let mut t = from - (from % 60); // round to minute boundary
+    // Start at the next whole minute in local time, at least 60s from now.
+    let start = Local.timestamp_opt(from_secs + 60, 0).single()?;
+    let mut t = start
+        .with_second(0)?
+        .with_nanosecond(0)?;
 
     for _ in 0..(366 * 24 * 60) {
-        let min = (t % 3600) / 60;
-        let hour = (t % 86400) / 3600;
-        if field_matches(min_f, min as u32) && field_matches(hour_f, hour as u32) {
-            return Some(t);
+        let min = t.minute();
+        let hour = t.hour();
+        let dom = t.day();
+        // chrono: Mon=1..Sun=7; cron: Sun=0..Sat=6 (also accepts 7 for Sun)
+        let dow = t.weekday().num_days_from_sunday();
+        let mon = t.month();
+        if field_matches(min_f, min)
+            && field_matches(hour_f, hour)
+            && field_matches(dom_f, dom)
+            && field_matches(mon_f, mon)
+            && (field_matches(dow_f, dow) || (dow == 0 && field_matches(dow_f, 7)))
+        {
+            return Some(t.timestamp());
         }
-        t += 60;
+        t += chrono::Duration::minutes(1);
     }
     None
 }
@@ -264,6 +276,12 @@ fn run_job(id: i64, label: &str, command: &str, schedule: &Schedule) {
     let sched = schedule.clone();
 
     tokio::spawn(async move {
+        #[cfg(windows)]
+        let output = tokio::process::Command::new("cmd")
+            .args(["/C", &cmd])
+            .output()
+            .await;
+        #[cfg(not(windows))]
         let output = tokio::process::Command::new("sh")
             .args(["-c", &cmd])
             .output()
@@ -308,15 +326,21 @@ fn send_notification(title: &str, body: &str) {
     }
     #[cfg(target_os = "windows")]
     {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        // Build a PowerShell script and pass it via -EncodedCommand (UTF-16LE base64)
+        // so we don't have to escape quotes / `<` / `=` / `$` in the title or body.
+        let script = "Add-Type -AssemblyName System.Windows.Forms | Out-Null; \
+             [System.Windows.Forms.MessageBox]::Show($env:OL_NOTIFY_BODY, $env:OL_NOTIFY_TITLE) | Out-Null";
+        let utf16: Vec<u16> = script.encode_utf16().collect();
+        let mut bytes = Vec::with_capacity(utf16.len() * 2);
+        for u in utf16 {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        let encoded = STANDARD.encode(&bytes);
         let _ = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "[System.Windows.Forms.MessageBox]::Show('{}', 'OmniLauncher: {}')",
-                    body, title
-                ),
-            ])
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", &encoded])
+            .env("OL_NOTIFY_TITLE", format!("OmniLauncher: {}", title))
+            .env("OL_NOTIFY_BODY", body)
             .spawn();
     }
 }
