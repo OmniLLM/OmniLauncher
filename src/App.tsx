@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { renderMarkdown } from "./utils/markdown";
+import { isAiPrefix } from "./utils/aiPrefix";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -98,11 +99,6 @@ function pluginManagerResult(): QueryResult {
     action_type: "open_plugin_manager",
     action_data: "",
   };
-}
-
-export function isAiPrefix(input: string): boolean {
-  const t = input.trim();
-  return t.startsWith("?") || t.toLowerCase().startsWith("ai ");
 }
 
 /**
