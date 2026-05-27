@@ -401,7 +401,9 @@ async fn ai_query(
             }
         });
 
-        let response = {
+        // Run the agent loop and catch panics so the frontend always gets a
+        // terminal event (ai-done or ai-error) instead of spinning forever.
+        let routed = std::panic::AssertUnwindSafe(async {
             let pm_lock = pm.lock().await;
             let client = ai_client.lock().await;
             let ctx = conversation.lock().await;
@@ -415,6 +417,21 @@ async fn ai_query(
                 Some(progress_tx),
             )
             .await
+        });
+        let response = match futures_util::FutureExt::catch_unwind(routed).await {
+            Ok(resp) => resp,
+            Err(panic) => {
+                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else if let Some(s) = panic.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "AI task panicked".to_string()
+                };
+                log::error!("ai_query task panicked: {msg}");
+                let _ = window.emit("omnilauncher://ai-error", msg);
+                return;
+            }
         };
 
         // Add assistant response to context

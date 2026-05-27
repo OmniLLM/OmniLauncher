@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default permissions for OmniLauncher","local":true,"windows":["*"],"permissions":["core:default","core:event:default","core:event:allow-listen","core:event:allow-unlisten","core:event:allow-emit","core:event:allow-emit-to","core:window:default","core:webview:default"]}}

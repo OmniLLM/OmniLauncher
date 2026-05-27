@@ -48,21 +48,22 @@ type TabId = (typeof TABS)[number]["id"];
 
 const baseInputStyle: React.CSSProperties = {
   width: "100%",
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 6,
-  color: "#e8eaf6",
-  padding: "7px 10px",
+  background: "var(--surface)",
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  color: "var(--text)",
+  padding: "8px 10px",
   fontSize: 13,
   outline: "none",
   boxSizing: "border-box",
   transition: "border-color 0.15s, box-shadow 0.15s",
+  fontFamily: "inherit",
 };
 
 const focusedInputStyle: React.CSSProperties = {
   ...baseInputStyle,
-  borderColor: "rgba(94,129,244,0.6)",
-  boxShadow: "0 0 0 2px rgba(94,129,244,0.4)",
+  borderColor: "var(--accent)",
+  boxShadow: "0 0 0 2px var(--accent-dim)",
 };
 
 interface Props {
@@ -184,10 +185,10 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          height: "100vh",
-          background: "#0d1117",
-          color: "#8892b0",
-          fontFamily: "'Aptos Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif",
+          height: "100%",
+          background: "transparent",
+          color: "var(--sub)",
+          fontFamily: "inherit",
         }}
       >
         Loading settings…
@@ -199,15 +200,15 @@ export default function SettingsWindow({ onClose }: Props = {}) {
     fontSize: 11,
     fontWeight: 700,
     letterSpacing: "0.08em",
-    color: "#5E81F4",
+    color: "var(--accent)",
     textTransform: "uppercase",
     marginBottom: 10,
   };
 
   const cardStyle: React.CSSProperties = {
-    background: "rgba(255,255,255,0.03)",
-    border: "1px solid rgba(255,255,255,0.07)",
-    borderRadius: 10,
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
     padding: "4px 0",
     marginBottom: 20,
   };
@@ -218,12 +219,12 @@ export default function SettingsWindow({ onClose }: Props = {}) {
     alignItems: "center",
     gap: 12,
     padding: "10px 16px",
-    borderBottom: last ? "none" : "1px solid rgba(255,255,255,0.05)",
+    borderBottom: last ? "none" : "1px solid var(--border)",
   });
 
   const rowLabelStyle: React.CSSProperties = {
     fontSize: 13,
-    color: "#8892b0",
+    color: "var(--sub)",
   };
 
   return (
@@ -231,10 +232,10 @@ export default function SettingsWindow({ onClose }: Props = {}) {
       style={{
         display: "flex",
         flexDirection: "column",
-        height: "100vh",
-        background: "#0d1117",
-        color: "#e8eaf6",
-        fontFamily: "'Aptos Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif",
+        height: "100%",
+        background: "transparent",
+        color: "var(--text)",
+        fontFamily: "inherit",
         overflow: "hidden",
       }}
     >
@@ -246,12 +247,12 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           display: "flex",
           alignItems: "center",
           padding: "0 20px",
-          borderBottom: "1px solid rgba(255,255,255,0.06)",
+          borderBottom: "1px solid var(--border)",
           flexShrink: 0,
           justifyContent: "space-between",
         }}
       >
-        <span style={{ fontSize: 14, fontWeight: 600, color: "#e8eaf6" }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>
           ⚙&nbsp;&nbsp;Preferences
         </span>
         <button
@@ -259,7 +260,7 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           style={{
             background: "none",
             border: "none",
-            color: "#8892b0",
+            color: "var(--sub)",
             fontSize: 16,
             cursor: "pointer",
             lineHeight: 1,
@@ -276,8 +277,8 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           style={{
             width: 140,
             flexShrink: 0,
-            background: "rgba(255,255,255,0.03)",
-            borderRight: "1px solid rgba(255,255,255,0.06)",
+            background: "var(--bg-elevated)",
+            borderRight: "1px solid var(--border)",
             padding: "12px 8px",
             display: "flex",
             flexDirection: "column",
@@ -299,16 +300,19 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                   fontSize: 13,
                   cursor: "pointer",
                   border: "none",
-                  background: isActive ? "rgba(94,129,244,0.15)" : "transparent",
-                  color: isActive ? "#e8eaf6" : "#8892b0",
-                  borderLeft: isActive ? "2px solid #5E81F4" : "2px solid transparent",
+                  background: isActive ? "var(--accent-dim)" : "transparent",
+                  color: isActive ? "var(--text)" : "var(--sub)",
+                  borderLeft: isActive ? "2px solid var(--accent)" : "2px solid transparent",
+                  borderTop: "none",
+                  borderRight: "none",
+                  borderBottom: "none",
                   transition: "all 0.15s",
                   textAlign: "left",
                   width: "100%",
                   fontFamily: "inherit",
                 }}
                 onMouseEnter={(e) => {
-                  if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.05)";
+                  if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "var(--accent-hover)";
                 }}
                 onMouseLeave={(e) => {
                   if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "transparent";
@@ -353,10 +357,10 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                   <div ref={dropdownRef} style={{ ...rowStyle(true), position: "relative" }}>
                     <span style={rowLabelStyle}>
                       Model
-                      {modelsLoading && <span style={{ color: "#5E81F4" }}> (loading…)</span>}
-                      {modelsError && <span style={{ color: "#f87171" }}> ⚠</span>}
+                      {modelsLoading && <span style={{ color: "var(--accent)" }}> (loading…)</span>}
+                      {modelsError && <span style={{ color: "var(--error)" }}> ⚠</span>}
                     </span>
-                    <div style={{ position: "relative", flex: 1 }}>
+                    <div style={{ position: "relative", width: "100%" }}>
                       <input
                         ref={modelInputRef}
                         style={inputStyle("ai_model")}
@@ -378,9 +382,9 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                             left: 0,
                             right: 0,
                             top: "calc(100% + 2px)",
-                            background: "#16233B",
-                            border: "1px solid rgba(255,255,255,0.12)",
-                            borderRadius: 6,
+                            background: "var(--surface)",
+                            border: "1px solid var(--border)",
+                            borderRadius: 8,
                             maxHeight: 180,
                             overflowY: "auto",
                           }}
@@ -393,13 +397,13 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                                 padding: "7px 10px",
                                 fontSize: 13,
                                 cursor: "pointer",
-                                color: m === settings.ai_model ? "#5E81F4" : "#e8eaf6",
-                                background: m === settings.ai_model ? "rgba(94,129,244,0.1)" : "transparent",
+                                color: m === settings.ai_model ? "var(--accent)" : "var(--text)",
+                                background: m === settings.ai_model ? "var(--accent-dim)" : "transparent",
                               }}
-                              onMouseEnter={(e) => ((e.target as HTMLDivElement).style.background = "rgba(255,255,255,0.06)")}
+                              onMouseEnter={(e) => ((e.target as HTMLDivElement).style.background = "var(--accent-hover)")}
                               onMouseLeave={(e) =>
                                 ((e.target as HTMLDivElement).style.background =
-                                  m === settings.ai_model ? "rgba(94,129,244,0.1)" : "transparent")
+                                  m === settings.ai_model ? "var(--accent-dim)" : "transparent")
                               }
                             >
                               {m}
@@ -415,12 +419,12 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                             left: 0,
                             right: 0,
                             top: "calc(100% + 2px)",
-                            background: "#16233B",
-                            border: "1px solid rgba(255,255,255,0.12)",
-                            borderRadius: 6,
-                            padding: "7px 10px",
+                            background: "var(--surface)",
+                            border: "1px solid var(--border)",
+                            borderRadius: 8,
+                            padding: "8px 10px",
                             fontSize: 13,
-                            color: "#8892b0",
+                            color: "var(--sub)",
                           }}
                         >
                           No matches
@@ -494,7 +498,7 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                     <div
                       style={{
                         ...baseInputStyle,
-                        color: "#8892b0",
+                        color: "var(--sub)",
                         cursor: "default",
                         userSelect: "none",
                       }}
@@ -522,27 +526,26 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           </div>
 
           {/* Save button — fixed at bottom of right pane */}
-          <div style={{ padding: "12px 28px", flexShrink: 0, borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+          <div style={{ padding: "12px 28px", flexShrink: 0, borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button
               onClick={handleSave}
               onMouseEnter={() => setSaveHover(true)}
               onMouseLeave={() => setSaveHover(false)}
               style={{
-                width: "100%",
-                height: 36,
+                height: 32,
+                padding: "0 18px",
                 background: saved
-                  ? "rgba(94,129,244,0.2)"
-                  : saveHover
-                  ? "#6B8FF5"
-                  : "#5E81F4",
-                color: saved ? "#5E81F4" : "#fff",
-                border: saved ? "1px solid #5E81F4" : "none",
+                  ? "var(--accent-dim)"
+                  : "var(--accent)",
+                color: saved ? "var(--accent)" : "var(--user-bubble-text)",
+                border: saved ? "1px solid var(--accent)" : "1px solid transparent",
                 borderRadius: 8,
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: 600,
                 cursor: "pointer",
-                transition: "all 0.2s",
+                transition: "all 0.15s",
                 fontFamily: "inherit",
+                opacity: saveHover && !saved ? 0.9 : 1,
               }}
             >
               {saved ? "✓ Saved" : "Save Settings"}

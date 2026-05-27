@@ -429,7 +429,8 @@ export default function App() {
       setLoading(true);
       setResults([]);
 
-      // Set up event listeners BEFORE invoking
+      // Register listeners FIRST and await registration so we never miss
+      // the ai-done / ai-error event that the backend may emit promptly.
       const unlisteners: (() => void)[] = [];
 
       const cleanup = () => {
@@ -437,72 +438,62 @@ export default function App() {
         unlisteners.length = 0;
       };
 
-      listen<{ tool: string; iteration: number }>(
-        "omnilauncher://ai-tool-call",
-        (event) => {
-          const toolName = event.payload.tool;
-          setConversationHistory((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant" && last.isStreaming) {
-              next[next.length - 1] = {
-                ...last,
-                content: `🔧 Calling **${toolName}**…`,
-                tools_used: [...(last.tools_used ?? []), toolName],
-              };
-            }
-            return next;
-          });
-        }
-      ).then((fn) => unlisteners.push(fn));
-
-      listen<AiResponse>("omnilauncher://ai-done", (event) => {
+      const finish = (content: string, tools_used?: string[]) => {
         cleanup();
         setConversationHistory((prev) => {
           const next = [...prev];
-          next[next.length - 1] = {
-            role: "assistant",
-            content: event.payload.content,
-            tools_used: event.payload.tools_used,
-            isStreaming: false,
-          };
+          const last = next[next.length - 1];
+          if (last?.role === "assistant" && last.isStreaming) {
+            next[next.length - 1] = {
+              role: "assistant",
+              content,
+              tools_used,
+              isStreaming: false,
+            };
+          }
           return next;
         });
         setLoading(false);
         setTimeout(() => focusInput(), 50);
-      }).then((fn) => unlisteners.push(fn));
+      };
 
-      listen<string>("omnilauncher://ai-error", (event) => {
-        cleanup();
-        setConversationHistory((prev) => {
-          const next = [...prev];
-          next[next.length - 1] = {
-            role: "assistant",
-            content: `Error: ${event.payload}`,
-            isStreaming: false,
-          };
-          return next;
-        });
-        setLoading(false);
-        setTimeout(() => focusInput(), 50);
-      }).then((fn) => unlisteners.push(fn));
+      try {
+        const [unToolCall, unDone, unError] = await Promise.all([
+          listen<{ tool: string; iteration: number }>(
+            "omnilauncher://ai-tool-call",
+            (event) => {
+              const toolName = event.payload.tool;
+              setConversationHistory((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last?.role === "assistant" && last.isStreaming) {
+                  next[next.length - 1] = {
+                    ...last,
+                    content: `🔧 Calling **${toolName}**…`,
+                    tools_used: [...(last.tools_used ?? []), toolName],
+                  };
+                }
+                return next;
+              });
+            },
+          ),
+          listen<AiResponse>("omnilauncher://ai-done", (event) => {
+            finish(event.payload.content, event.payload.tools_used);
+          }),
+          listen<string>("omnilauncher://ai-error", (event) => {
+            finish(`Error: ${event.payload}`);
+          }),
+        ]);
+        unlisteners.push(unToolCall, unDone, unError);
+      } catch (e) {
+        finish(`Error: ${e}`);
+        return;
+      }
 
-      // Fire and forget — returns immediately
       try {
         await invoke("ai_query", { query: q });
       } catch (e) {
-        cleanup();
-        setConversationHistory((prev) => {
-          const next = [...prev];
-          next[next.length - 1] = {
-            role: "assistant",
-            content: `Error: ${e}`,
-            isStreaming: false,
-          };
-          return next;
-        });
-        setLoading(false);
-        setTimeout(() => focusInput(), 50);
+        finish(`Error: ${e}`);
       }
     },
     [focusInput, loading],
@@ -833,8 +824,9 @@ export default function App() {
         : isHintBarExpanded
           ? 320
           : compactHeight;
-  const windowHeight = `${panelHeight}px`;
-  const maxHeight = `${panelHeight}px`;
+  const effectiveHeight = showSettings ? 560 : panelHeight;
+  const windowHeight = `${effectiveHeight}px`;
+  const maxHeight = `${effectiveHeight}px`;
   const shellFont =
     "'Aptos Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif";
 
@@ -845,7 +837,6 @@ export default function App() {
       panelMode: isPanelMode && !showSettings,
     }).catch(() => {});
   }, [panelHeight, isAiMode, isPanelMode, showSettings]);
-
   return (
     <>
       {/* Global keyframe animations injected once */}
