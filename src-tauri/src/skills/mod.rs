@@ -106,28 +106,65 @@ fn parse_list(val: &str, list_re: &Regex) -> Vec<String> {
 
 fn normalize_skill_url(url: &str) -> String {
     let trimmed = url.trim();
-    if let Some(path) = trimmed.strip_prefix("https://github.com/") {
-        let parts: Vec<&str> = path.split('/').collect();
-        if parts.len() >= 5 && parts[2] == "blob" {
-            return format!(
-                "https://raw.githubusercontent.com/{}/{}/{}/{}",
-                parts[0],
-                parts[1],
-                parts[3],
-                parts[4..].join("/")
-            );
-        }
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return trimmed.to_string();
+    }
 
-        if parts.len() >= 5 && parts[2] == "tree" {
-            let skill_path = parts[4..].join("/").trim_end_matches('/').to_string();
-            let suffix = if skill_path.ends_with("SKILL.md") {
-                skill_path
-            } else {
-                format!("{}/SKILL.md", skill_path)
-            };
+    let parts: Vec<&str> = trimmed.split('/').collect();
+    if parts.len() >= 7 {
+        let domain = parts[2];
+        let owner = parts[3];
+        let repo = parts[4];
+        let action = parts[5];
+        let branch = parts[6];
+        let path_parts = &parts[7..];
+
+        if domain.to_lowercase() == "github.com" {
+            if action == "blob" {
+                return format!(
+                    "https://raw.githubusercontent.com/{}/{}/{}/{}",
+                    owner,
+                    repo,
+                    branch,
+                    path_parts.join("/")
+                );
+            } else if action == "tree" {
+                let mut path = path_parts.join("/");
+                if !path.ends_with("SKILL.md") {
+                    if path.is_empty() {
+                        path = "SKILL.md".to_string();
+                    } else if path.ends_with('/') {
+                        path = format!("{}SKILL.md", path);
+                    } else {
+                        path = format!("{}/SKILL.md", path);
+                    }
+                }
+                return format!(
+                    "https://raw.githubusercontent.com/{}/{}/{}/{}",
+                    owner, repo, branch, path
+                );
+            }
+        } else if action == "blob" || action == "tree" {
+            // Enterprise or self-hosted GitHub with similar URL structure
+            let mut path = path_parts.join("/");
+            if action == "tree" && !path.ends_with("SKILL.md") {
+                if path.is_empty() {
+                    path = "SKILL.md".to_string();
+                } else if path.ends_with('/') {
+                    path = format!("{}SKILL.md", path);
+                } else {
+                    path = format!("{}/SKILL.md", path);
+                }
+            }
+            let scheme = parts[0].trim_end_matches(':');
             return format!(
-                "https://raw.githubusercontent.com/{}/{}/{}/{}",
-                parts[0], parts[1], parts[3], suffix
+                "{}://{}/{}/{}/raw/{}/{}",
+                scheme,
+                domain,
+                owner,
+                repo,
+                branch,
+                path
             );
         }
     }
@@ -434,6 +471,24 @@ When the user asks to summarize a URL, do the following.
         assert_eq!(
             normalize_skill_url(url),
             "https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn test_normalize_enterprise_github_tree_skill_url() {
+        let url = "https://ghostshub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills/jira";
+        assert_eq!(
+            normalize_skill_url(url),
+            "https://ghostshub.example.com/cloud-foundations/cloudbot/raw/dev/backend/skills/jira/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn test_normalize_enterprise_github_blob_skill_url() {
+        let url = "https://ghostshub.example.com/cloud-foundations/cloudbot/blob/dev/backend/skills/jira/SKILL.md";
+        assert_eq!(
+            normalize_skill_url(url),
+            "https://ghostshub.example.com/cloud-foundations/cloudbot/raw/dev/backend/skills/jira/SKILL.md"
         );
     }
 

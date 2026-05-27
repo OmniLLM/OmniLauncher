@@ -296,8 +296,8 @@ fn generate_html(items: &[TodoItem]) -> String {
 <title>OmniLauncher Todos</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:#1e1e2e;color:#cdd6f4;font-family:'Inter','Segoe UI',system-ui,sans-serif;min-height:100vh;padding:36px 20px}}
-.container{{max-width:1200px;margin:0 auto}}
+body{{background:#1e1e2e;color:#cdd6f4;font-family:'Inter','Segoe UI',system-ui,sans-serif;min-height:100vh;padding:0}}
+.container{{max-width:1400px;margin:0 auto;padding:36px 32px 60px}}
 header{{display:flex;align-items:center;gap:14px;margin-bottom:28px}}
 .logo{{font-size:26px}}
 h1{{font-size:21px;font-weight:700;color:#cba6f7}}

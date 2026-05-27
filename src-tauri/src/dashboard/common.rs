@@ -93,6 +93,15 @@ const LAYOUT: &str = r##"<!doctype html>
     padding: 12px 32px;
     display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
   }
+  .nav-container {
+    max-width: 1400px;
+    width: 100%;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
   nav.topbar .brand { font-weight: 700; font-size: 15px; letter-spacing: 0.01em; }
   nav.topbar .brand .accent { color: var(--accent); }
   nav.topbar .links { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -120,7 +129,7 @@ const LAYOUT: &str = r##"<!doctype html>
     100% { box-shadow: 0 0 0 0 rgba(97,208,154,0); }
   }
 
-  main { padding: 24px 32px 60px; }
+  main { max-width: 1400px; margin: 0 auto; padding: 24px 32px 60px; }
   h1.page-title { font-size: 22px; margin: 0 0 24px; font-weight: 700; }
 
   .grid-stats { display: grid; gap: 14px;
@@ -251,15 +260,17 @@ const LAYOUT: &str = r##"<!doctype html>
 </head>
 <body>
   <nav class="topbar">
-    <div class="brand"><span class="accent">Omni</span>Launcher</div>
-    <div class="links">
-      <a href="/dashboard"              data-key="index"        >Overview</a>
-      <a href="/dashboard/todos"        data-key="todos"        >Todos</a>
-      <a href="/dashboard/conversation" data-key="conversation" >AI Conversation</a>
-      <a href="/dashboard/jobs"         data-key="jobs"         >Scheduler</a>
-      <a href="/dashboard/tables"       data-key="tables"       >Database</a>
+    <div class="nav-container">
+      <div class="brand"><span class="accent">Omni</span>Launcher</div>
+      <div class="links">
+        <a href="/dashboard"              data-key="index"        >Overview</a>
+        <a href="/dashboard/todos"        data-key="todos"        >Todos</a>
+        <a href="/dashboard/conversation" data-key="conversation" >AI Conversation</a>
+        <a href="/dashboard/jobs"         data-key="jobs"         >Scheduler</a>
+        <a href="/dashboard/tables"       data-key="tables"       >Database</a>
+      </div>
+      <div class="right"><span class="pulse"></span>Live · <span id="generated">—</span></div>
     </div>
-    <div class="right"><span class="pulse"></span>Live · <span id="generated">—</span></div>
   </nav>
 
   <main>
