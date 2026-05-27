@@ -277,10 +277,30 @@ fn run_job(id: i64, label: &str, command: &str, schedule: &Schedule) {
 
     tokio::spawn(async move {
         #[cfg(windows)]
-        let output = tokio::process::Command::new("cmd")
-            .args(["/C", &cmd])
-            .output()
-            .await;
+        let output = {
+            // Write the command to a temp .cmd file and run it via cmd /C.
+            // This avoids fragile nested-quote handling when the command itself
+            // contains things like `powershell -Command "..."`, and lets the
+            // user's command be interpreted as a normal Windows batch line.
+            let mut path = std::env::temp_dir();
+            path.push(format!(
+                "omnilauncher_job_{}_{}.cmd",
+                id,
+                now_unix()
+            ));
+            let write_res = std::fs::write(&path, format!("@echo off\r\n{}\r\n", cmd));
+            let result = match write_res {
+                Ok(()) => {
+                    tokio::process::Command::new("cmd")
+                        .args(["/C", path.to_str().unwrap_or("")])
+                        .output()
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+            let _ = std::fs::remove_file(&path);
+            result
+        };
         #[cfg(not(windows))]
         let output = tokio::process::Command::new("sh")
             .args(["-c", &cmd])
@@ -289,8 +309,8 @@ fn run_job(id: i64, label: &str, command: &str, schedule: &Schedule) {
 
         let result_msg = match output {
             Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let stderr = String::from_utf8_lossy(&out.stderr);
+                let stdout = strip_clixml(&String::from_utf8_lossy(&out.stdout));
+                let stderr = strip_clixml(&String::from_utf8_lossy(&out.stderr));
                 if out.status.success() {
                     format!("✅ {}: {}", label, stdout.trim())
                 } else {
@@ -304,6 +324,18 @@ fn run_job(id: i64, label: &str, command: &str, schedule: &Schedule) {
         send_notification(&label, &result_msg);
         record_run(id, &sched);
     });
+}
+
+// Strip PowerShell CLIXML banner/payload from captured stdout/stderr.
+// When PS is invoked from cmd, it emits "#< CLIXML\n<Objs ...>...</Objs>" on stderr.
+fn strip_clixml(s: &str) -> String {
+    s.lines()
+        .filter(|line| {
+            let t = line.trim();
+            !t.starts_with("#< CLIXML") && !t.starts_with("<Objs ") && !t.starts_with("<Obj ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn send_notification(title: &str, body: &str) {
@@ -341,6 +373,9 @@ fn send_notification(title: &str, body: &str) {
             .args(["-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", &encoded])
             .env("OL_NOTIFY_TITLE", format!("OmniLauncher: {}", title))
             .env("OL_NOTIFY_BODY", body)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn();
     }
 }
@@ -833,5 +868,42 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].action_type, "sched_add");
         assert!(results[0].action_data.contains("cron:0 9 * * *"));
+    }
+
+    #[tokio::test]
+    async fn test_tick_runs_due_job_and_records() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", dir.path().to_str().unwrap());
+
+        // Use a cmd-compatible echo on Windows, sh echo elsewhere.
+        #[cfg(windows)]
+        let cmd = "echo hello";
+        #[cfg(not(windows))]
+        let cmd = "echo hello";
+
+        let id = add_job("Smoke Test", &Schedule::Interval(1), cmd).unwrap();
+
+        // Backdate next_run so the tick considers the job due immediately.
+        {
+            let conn = open_db().unwrap();
+            let past = unix_to_iso(now_unix() - 5);
+            conn.execute(
+                "UPDATE scheduled_jobs SET next_run = ?1 WHERE id = ?2",
+                params![past, id],
+            )
+            .unwrap();
+        }
+
+        tick_scheduler();
+
+        // run_job spawns the command on tokio; wait for completion + record_run.
+        for _ in 0..50 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+            let jobs = list_jobs();
+            if jobs.iter().any(|j| j.id == id && j.run_count > 0) {
+                return; // success
+            }
+        }
+        panic!("scheduled job never recorded a run within 10s");
     }
 }
