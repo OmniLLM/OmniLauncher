@@ -239,6 +239,7 @@ pub fn run() {
             delete_skill,
             update_skill,
             set_window_geometry,
+            open_settings_window,
             install_plugin,
             update_plugin,
             update_plugin_collection,
@@ -314,6 +315,52 @@ async fn sync_window_geometry(
             .map_err(|e| e.to_string())?;
         Ok(true)
     }
+}
+
+#[tauri::command]
+async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    // If settings window already open, focus it and return
+    if let Some(existing) = app.get_webview_window("settings") {
+        existing.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let main_window = app
+        .get_webview_window("main")
+        .ok_or("main window not found")?;
+
+    // Center relative to main window
+    let (wx, wy) = main_window
+        .outer_position()
+        .map(|p| (p.x as f64, p.y as f64))
+        .unwrap_or((0.0, 0.0));
+    let (mw, _mh) = main_window
+        .outer_size()
+        .map(|s| (s.width as f64, s.height as f64))
+        .unwrap_or((640.0, 400.0));
+
+    let win_width = 620.0_f64;
+    let win_height = 540.0_f64;
+    let win_x = wx + (mw - win_width) / 2.0;
+    let win_y = wy - 60.0; // slightly above center
+
+    let settings_win = tauri::WebviewWindowBuilder::new(
+        &app,
+        "settings",
+        tauri::WebviewUrl::App("index.html?settings=1".into()),
+    )
+    .title("OmniLauncher Settings")
+    .inner_size(win_width, win_height)
+    .position(win_x, win_y)
+    .resizable(true)
+    .decorations(true)
+    .always_on_top(true)
+    .center()
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    settings_win.show().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SearchBar from "./components/SearchBar";
 import ResultList from "./components/ResultList";
-import SettingsPanel from "./components/SettingsPanel";
+import SettingsWindow from "./components/SettingsWindow";
 import PluginManager from "./components/PluginManager";
 import SkillManager from "./components/SkillManager";
 
@@ -222,11 +222,16 @@ const HELP_RESULTS: QueryResult[] = SLASH_COMMANDS.map((command) => ({
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  // Detect settings window mode via URL param
+  const isSettingsWindow = new URLSearchParams(window.location.search).has("settings");
+  if (isSettingsWindow) {
+    return <SettingsWindow />;
+  }
+
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<QueryResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [aiModeEnabled, setAiModeEnabled] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [showPluginManager, setShowPluginManager] = useState(false);
   const [showSkillManager, setShowSkillManager] = useState(false);
   const [isHintBarExpanded, setIsHintBarExpanded] = useState(false);
@@ -265,6 +270,16 @@ export default function App() {
         if (s.background_url) setBackgroundUrl(s.background_url);
       })
       .catch(() => {});
+  }, []);
+
+  // Listen for settings changes from the standalone settings window
+  useEffect(() => {
+    const unlisten = listen<AppSettings>("omnilauncher://settings-saved", (e) => {
+      setTheme(parseThemeMode(e.payload.theme));
+      setBackgroundUrl(e.payload.background_url ?? "");
+      setSettings(e.payload);
+    });
+    return () => { unlisten.then(fn => fn()); };
   }, []);
 
   useEffect(() => {
@@ -368,7 +383,7 @@ export default function App() {
 
   // Browser-level fallback for focus restore (useful in dev/web context)
   useEffect(() => {
-    const shouldFocusLauncherInput = () => !showSettings && !showPluginManager && !showSkillManager;
+    const shouldFocusLauncherInput = () => !showPluginManager && !showSkillManager;
 
     const restoreFocus = () => {
       if (!shouldFocusLauncherInput()) return;
@@ -388,7 +403,7 @@ export default function App() {
       window.removeEventListener("focus", restoreFocus);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [focusInput, showSettings, showPluginManager]);
+  }, [focusInput, showPluginManager]);
 
   const doAiQuery = useCallback(
     async (q: string) => {
@@ -726,7 +741,7 @@ export default function App() {
 
       if (e.key === "," && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        setShowSettings((s) => !s);
+        invoke("open_settings_window").catch(() => {});
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -735,7 +750,7 @@ export default function App() {
 
   // ── Layout geometry ────────────────────────────────────────────────────────
   const launcherHasContent =
-    results.length > 0 || showSettings || showPluginManager || showSkillManager;
+    results.length > 0 || showPluginManager || showSkillManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
   const isPanelMode = showPluginManager || showSkillManager;
   const screenHeight = typeof window !== "undefined" ? window.screen.height : 1080;
@@ -871,7 +886,7 @@ export default function App() {
         )}
 
         {/* ── AI MODE: scrollable chat history ─────────────────────────── */}
-        {isAiMode && !showSkillManager && !showSettings && (
+        {isAiMode && !showSkillManager && (
           <div
             ref={chatScrollRef}
             style={{
@@ -920,19 +935,8 @@ export default function App() {
           </div>
         )}
 
-        {/* ── SETTINGS panel ───────────────────────────────────────────── */}
-        {showSettings && !isAiMode && (
-          <SettingsPanel
-            theme={theme}
-            onThemeChange={setTheme}
-            onBackgroundChange={setBackgroundUrl}
-            onClose={() => setShowSettings(false)}
-            initialSettings={settings}
-          />
-        )}
-
         {/* ── PLUGIN MANAGER panel ─────────────────────────────────────── */}
-        {showPluginManager && !isAiMode && !showSettings && (
+        {showPluginManager && !isAiMode && (
           <PluginManager
             colors={colors}
             onClose={() => setShowPluginManager(false)}
@@ -940,7 +944,7 @@ export default function App() {
         )}
 
         {/* ── SKILL MANAGER panel ──────────────────────────────────────── */}
-        {showSkillManager && !showSettings && (
+        {showSkillManager && (
           <SkillManager
             colors={colors}
             onClose={() => setShowSkillManager(false)}
@@ -949,7 +953,6 @@ export default function App() {
 
         {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
         {!isAiMode &&
-          !showSettings &&
           !showPluginManager &&
           !showSkillManager &&
           results.length > 0 && (
@@ -985,7 +988,7 @@ export default function App() {
             isAiMode={isAiMode}
             loading={loading}
             colors={colors}
-            onSettingsClick={() => setShowSettings((s) => !s)}
+            onSettingsClick={() => invoke("open_settings_window").catch(() => {})}
             showHintBar={
               !isAiMode && (isHelpHintQuery(query) || query.trim() === "")
             }
