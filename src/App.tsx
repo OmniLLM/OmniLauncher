@@ -223,12 +223,6 @@ const HELP_RESULTS: QueryResult[] = SLASH_COMMANDS.map((command) => ({
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  // Detect settings window mode via URL param
-  const isSettingsWindow = new URLSearchParams(window.location.search).has("settings");
-  if (isSettingsWindow) {
-    return <SettingsWindow />;
-  }
-
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<QueryResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -262,6 +256,7 @@ export default function App() {
   });
   const [showCheatSheet, setShowCheatSheet] = useState(false);
   const [exportToast, setExportToast] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   const resolvedTheme: ResolvedTheme =
     theme === "system" ? systemTheme : theme;
@@ -291,6 +286,7 @@ export default function App() {
       setTheme(parseThemeMode(e.payload.theme));
       setBackgroundUrl(e.payload.background_url ?? "");
       setSettings(e.payload);
+      setShowSettings(false);
     });
     return () => { unlisten.then(fn => fn()); };
   }, []);
@@ -775,7 +771,7 @@ export default function App() {
 
       if (e.key === "," && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        invoke("open_settings_window").catch(() => {});
+        setShowSettings(true);
       }
 
       if (e.key === "F1") {
@@ -844,11 +840,11 @@ export default function App() {
 
   useEffect(() => {
     invoke("set_window_geometry", {
-      height: panelHeight,
-      aiMode: isAiMode,
-      panelMode: isPanelMode,
+      height: showSettings ? 560 : panelHeight,
+      aiMode: isAiMode && !showSettings,
+      panelMode: isPanelMode && !showSettings,
     }).catch(() => {});
-  }, [panelHeight, isAiMode, isPanelMode]);
+  }, [panelHeight, isAiMode, isPanelMode, showSettings]);
 
   return (
     <>
@@ -910,6 +906,10 @@ export default function App() {
           outline: isAiMode ? `1.5px solid ${colors.accent}33` : "none",
         }}
       >
+        {showSettings && (
+          <SettingsWindow onClose={() => setShowSettings(false)} />
+        )}
+        {!showSettings && (<>
         {/* ── AI MODE: top bar ─────────────────────────────────────────── */}
         {isAiMode && (
           <div
@@ -1064,7 +1064,7 @@ export default function App() {
             isAiMode={isAiMode}
             loading={loading}
             colors={colors}
-            onSettingsClick={() => invoke("open_settings_window").catch(() => {})}
+            onSettingsClick={() => setShowSettings(true)}
             showHintBar={
               !isAiMode && (isHelpHintQuery(query) || query.trim() === "")
             }
@@ -1079,6 +1079,7 @@ export default function App() {
             }}
           />
         </div>
+        </>)}
       </div>
 
       {exportToast && (

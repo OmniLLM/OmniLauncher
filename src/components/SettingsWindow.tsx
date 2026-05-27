@@ -65,7 +65,11 @@ const focusedInputStyle: React.CSSProperties = {
   boxShadow: "0 0 0 2px rgba(94,129,244,0.4)",
 };
 
-export default function SettingsWindow() {
+interface Props {
+  onClose?: () => void;
+}
+
+export default function SettingsWindow({ onClose }: Props = {}) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -251,7 +255,7 @@ export default function SettingsWindow() {
           ⚙&nbsp;&nbsp;Preferences
         </span>
         <button
-          onClick={() => getCurrentWindow().close()}
+          onClick={() => onClose?.()}
           style={{
             background: "none",
             border: "none",
