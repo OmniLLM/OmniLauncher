@@ -480,11 +480,9 @@ pub fn list_plugins() -> Vec<serde_json::Value> {
                 });
 
                 if let serde_json::Value::Object(ref mut map) = repo {
-                    if let Some(git_meta) = inspect_git_repo(&path) {
-                        if let serde_json::Value::Object(meta) = git_meta {
-                            for (key, value) in meta {
-                                map.insert(key, value);
-                            }
+                    if let Some(serde_json::Value::Object(meta)) = inspect_git_repo(&path) {
+                        for (key, value) in meta {
+                            map.insert(key, value);
                         }
                     }
 

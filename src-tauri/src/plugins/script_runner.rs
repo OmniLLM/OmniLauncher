@@ -33,11 +33,11 @@ fn scripts_dir() -> PathBuf {
 
 /// Build the shell command string to run `path` with the right interpreter.
 /// - .ps1          → powershell -NoProfile -File <path>  (Windows)
-///                   pwsh -NoProfile -File <path>        (Linux/macOS — PowerShell Core)
+///   pwsh -NoProfile -File <path>        (Linux/macOS — PowerShell Core)
 /// - .bat / .cmd   → cmd /C <path>                       (Windows only; skipped on others)
 /// - .py           → python3 <path>  (Linux/macOS) | python <path> (Windows)
 /// - .sh / .bash   → bash <path>
-fn shell_run_cmd(path: &PathBuf) -> String {
+fn shell_run_cmd(path: &std::path::Path) -> String {
     let p = path.display().to_string();
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "ps1" => {

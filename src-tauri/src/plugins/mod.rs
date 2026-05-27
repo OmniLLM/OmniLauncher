@@ -98,7 +98,7 @@ impl PluginManager {
     pub fn has_keyword(&self, kw: &str) -> bool {
         self.plugins
             .iter()
-            .any(|p| p.keyword().map_or(false, |k| k == kw))
+            .any(|p| p.keyword() == Some(kw))
     }
 
     /// Remove all plugins whose name matches. Returns the count removed.
@@ -112,7 +112,7 @@ impl PluginManager {
     pub fn unregister_by_keyword(&mut self, kw: &str) -> usize {
         let before = self.plugins.len();
         self.plugins
-            .retain(|p| p.keyword().map_or(true, |k| k != kw));
+            .retain(|p| p.keyword() != Some(kw));
         before - self.plugins.len()
     }
 
@@ -126,7 +126,7 @@ impl PluginManager {
         let futures = self
             .plugins
             .iter()
-            .filter(|p| p.keyword().map_or(true, |kw| keyword_matches(raw, kw)))
+            .filter(|p| p.keyword().is_none_or(|kw| keyword_matches(raw, kw)))
             .map(|p| p.query(&q));
         let mut results: Vec<QueryResult> = futures_util::future::join_all(futures)
             .await

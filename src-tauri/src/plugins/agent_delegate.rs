@@ -29,7 +29,7 @@ fn build_prompt(prompt: &str, context: Option<&str>) -> String {
 /// - Windows: npm-installed CLIs live as `.cmd` wrappers in `%APPDATA%\npm\`
 /// - Linux: common install prefix `~/.npm-global/bin/`
 /// - macOS: common Homebrew / npm prefix `~/.npm-global/bin/` or `/usr/local/bin/`
-/// Falls back to bare name if the known path doesn't exist (PATH lookup).
+///   Falls back to bare name if the known path doesn't exist (PATH lookup).
 fn resolve_agent_bin(agent_name: &str) -> String {
     #[cfg(target_os = "windows")]
     {
@@ -142,7 +142,7 @@ impl Plugin for AgentDelegatePlugin {
                 return vec![];
             }
 
-            let resolved = resolve_agent_bin(&agent_name);
+            let resolved = resolve_agent_bin(agent_name);
             let shell_cmd = if cfg!(target_os = "windows") {
                 format!("\"{}\" -p \"{}\"", resolved, prompt.replace('"', "\\\""))
             } else {

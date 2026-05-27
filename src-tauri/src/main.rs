@@ -279,9 +279,7 @@ async fn sync_window_geometry(
         let monitor_x = monitor_position.x as f64 / scale_factor;
         let monitor_y = monitor_position.y as f64 / scale_factor;
 
-        let window_width = if panel_mode {
-            monitor_width * 0.5
-        } else if ai_mode {
+        let window_width = if panel_mode || ai_mode {
             monitor_width * 0.5
         } else {
             monitor_width / 3.0

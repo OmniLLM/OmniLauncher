@@ -671,7 +671,7 @@ impl Plugin for EmojiPickerPlugin {
             return format!("No emojis found matching '{}'", query);
         }
         let mut results = results;
-        results.sort_by(|a, b| b.0.cmp(&a.0));
+        results.sort_by_key(|x| std::cmp::Reverse(x.0));
         results.truncate(12);
         results
             .into_iter()
