@@ -46,8 +46,19 @@ export default function ResultList({
     e.stopPropagation();
     setFavorites((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+        try {
+          const stored = localStorage.getItem("omni-favorite-items");
+          const all: QueryResult[] = stored ? JSON.parse(stored) : [];
+          const item = results.find(r => r.id === id);
+          if (item && !all.find(r => r.id === id)) {
+            localStorage.setItem("omni-favorite-items", JSON.stringify([...all, item]));
+          }
+        } catch {}
+      }
       try { localStorage.setItem("omni-favorites", JSON.stringify([...next])); } catch {}
       return next;
     });
@@ -86,15 +97,30 @@ export default function ResultList({
 
   function highlight(text: string, q: string): string {
     if (!q) return text;
+    // First try exact substring match (faster, better looking)
     const idx = text.toLowerCase().indexOf(q.toLowerCase());
-    if (idx === -1) return text;
-    return (
-      text.slice(0, idx) +
-      "<mark>" +
-      text.slice(idx, idx + q.length) +
-      "</mark>" +
-      text.slice(idx + q.length)
-    );
+    if (idx !== -1) {
+      return (
+        text.slice(0, idx) +
+        "<mark>" + text.slice(idx, idx + q.length) + "</mark>" +
+        text.slice(idx + q.length)
+      );
+    }
+    // Fuzzy: highlight individual matched chars
+    const lower = text.toLowerCase();
+    const qLower = q.toLowerCase();
+    let qi = 0;
+    let result = "";
+    for (let i = 0; i < text.length; i++) {
+      if (qi < qLower.length && lower[i] === qLower[qi]) {
+        result += "<mark>" + text[i] + "</mark>";
+        qi++;
+      } else {
+        result += text[i];
+      }
+    }
+    if (qi === qLower.length) return result;
+    return text;
   }
 
   // Keyboard shortcut labels for first 9 results
@@ -104,139 +130,178 @@ export default function ResultList({
   }
 
   return (
-    <div
-      style={{
-        overflowY: "auto",
-        maxHeight: "400px",
-        scrollbarWidth: "thin",
-        scrollbarColor: `${colors.surface2} transparent`,
-      }}
-    >
-      {results.map((r, i) => {
-        const isSelected = i === selected;
-        const isHovered = i === hovered;
-        const highlighted = isSelected || isHovered;
+    <>
+      <div
+        style={{
+          overflowY: "auto",
+          maxHeight: "400px",
+          scrollbarWidth: "thin",
+          scrollbarColor: `${colors.surface2} transparent`,
+        }}
+      >
+        {results.map((r, i) => {
+          const isSelected = i === selected;
+          const isHovered = i === hovered;
+          const highlighted = isSelected || isHovered;
 
-        return (
-          <div
-            key={r.id}
-            onClick={() => onExecute(r)}
-            onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, item: r }); }}
-            onMouseEnter={() => {
-              setHovered(i);
-              setSelected(i);
-            }}
-            onMouseLeave={() => setHovered(-1)}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
-              padding: "8px 14px",
-              cursor: "pointer",
-              transition: "background 150ms ease, transform 120ms ease",
-              background: highlighted ? `${colors.surface}CC` : "transparent",
-              transform: highlighted ? "translateX(2px)" : "translateX(0)",
-              borderLeft: isSelected
-                ? `3px solid ${colors.accent}`
-                : "3px solid transparent",
-              // Staggered fade-in
-              animation: `omni-fade-in 180ms ease both`,
-              animationDelay: `${i * 25}ms`,
-            }}
-          >
-            {/* Icon */}
-            <span
-              style={{
-                fontSize: "18px",
-                width: "22px",
-                textAlign: "center",
-                flexShrink: 0,
-                lineHeight: 1,
-              }}
-            >
-              {r.icon || "📄"}
-            </span>
-
-            {/* Title + subtitle */}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  fontSize: "14px",
-                  fontWeight: 500,
-                  color: isSelected ? colors.accent : colors.text,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  transition: "color 150ms",
-                }}
-                dangerouslySetInnerHTML={{ __html: highlight(r.title, query) }}
-              />
-              {r.subtitle && (
-                <FormattedSubtitle
-                  text={r.subtitle}
-                  color={colors.sub}
-                />
-              )}
-            </div>
-
-            {/* Right-side: keyboard hint + action badge */}
+          return (
             <div
+              key={r.id}
+              onClick={() => onExecute(r)}
+              onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, item: r }); }}
+              onMouseEnter={() => {
+                setHovered(i);
+                setSelected(i);
+              }}
+              onMouseLeave={() => setHovered(-1)}
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: "8px",
-                flexShrink: 0,
+                gap: "12px",
+                padding: "8px 14px",
+                cursor: "pointer",
+                transition: "background 150ms ease, transform 120ms ease",
+                background: highlighted ? `${colors.surface}CC` : "transparent",
+                transform: highlighted ? "translateX(2px)" : "translateX(0)",
+                borderLeft: isSelected
+                  ? `3px solid ${colors.accent}`
+                  : "3px solid transparent",
+                // Staggered fade-in
+                animation: `omni-fade-in 180ms ease both`,
+                animationDelay: `${i * 25}ms`,
               }}
             >
-              <button
-                onClick={(e) => toggleFavorite(r.id, e)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  fontSize: "13px",
-                  opacity: favorites.has(r.id) ? 1 : (isHovered || isSelected) ? 0.35 : 0,
-                  color: favorites.has(r.id) ? "#f5c842" : colors.sub,
-                  padding: "0 2px",
-                  transition: "opacity 150ms, color 150ms",
-                  flexShrink: 0,
-                }}
-                title={favorites.has(r.id) ? "Remove favorite" : "Add favorite"}
-              >
-                ★
-              </button>
-              {kbdHint(i) && (
-                <span
-                  style={{
-                    fontSize: "10px",
-                    color: colors.sub,
-                    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                    opacity: 0.55,
-                  }}
-                >
-                  {kbdHint(i)}
-                </span>
-              )}
+              {/* Icon */}
               <span
                 style={{
-                  fontSize: "11px",
-                  color: isSelected ? colors.accent : colors.sub,
-                  background: isSelected ? `${colors.accent}18` : "transparent",
-                  padding: "2px 7px",
-                  borderRadius: "5px",
-                  fontWeight: 500,
-                  transition: "color 150ms, background 150ms",
-                  border: isSelected
-                    ? `1px solid ${colors.accent}33`
-                    : "1px solid transparent",
+                  fontSize: "18px",
+                  width: "22px",
+                  textAlign: "center",
+                  flexShrink: 0,
+                  lineHeight: 1,
                 }}
               >
-                {ACTION_BADGE[r.action_type] ?? "↵"}
+                {r.icon || "📄"}
               </span>
+
+              {/* Title + subtitle */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: "14px",
+                    fontWeight: 500,
+                    color: isSelected ? colors.accent : colors.text,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    transition: "color 150ms",
+                  }}
+                  dangerouslySetInnerHTML={{ __html: highlight(r.title, query) }}
+                />
+                {r.subtitle && (
+                  <FormattedSubtitle
+                    text={r.subtitle}
+                    color={colors.sub}
+                  />
+                )}
+              </div>
+
+              {/* Right-side: keyboard hint + action badge */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  flexShrink: 0,
+                }}
+              >
+                <button
+                  onClick={(e) => toggleFavorite(r.id, e)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    fontSize: "13px",
+                    opacity: favorites.has(r.id) ? 1 : (isHovered || isSelected) ? 0.35 : 0,
+                    color: favorites.has(r.id) ? "#f5c842" : colors.sub,
+                    padding: "0 2px",
+                    transition: "opacity 150ms, color 150ms",
+                    flexShrink: 0,
+                  }}
+                  title={favorites.has(r.id) ? "Remove favorite" : "Add favorite"}
+                >
+                  ★
+                </button>
+                {kbdHint(i) && (
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      color: colors.sub,
+                      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                      opacity: 0.55,
+                    }}
+                  >
+                    {kbdHint(i)}
+                  </span>
+                )}
+                <span
+                  style={{
+                    fontSize: "11px",
+                    color: isSelected ? colors.accent : colors.sub,
+                    background: isSelected ? `${colors.accent}18` : "transparent",
+                    padding: "2px 7px",
+                    borderRadius: "5px",
+                    fontWeight: 500,
+                    transition: "color 150ms, background 150ms",
+                    border: isSelected
+                      ? `1px solid ${colors.accent}33`
+                      : "1px solid transparent",
+                  }}
+                >
+                  {ACTION_BADGE[r.action_type] ?? "↵"}
+                </span>
+              </div>
             </div>
+          );
+        })}
+      </div>
+
+      {/* Preview panel for selected item */}
+      {results[selected] && (results[selected].subtitle || results[selected].action_data) && (
+        <div style={{
+          borderTop: `1px solid rgba(255,255,255,0.06)`,
+          padding: "8px 14px",
+          fontSize: 12,
+          color: colors.sub,
+          background: `${colors.surface}44`,
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 8,
+          minHeight: 32,
+          maxHeight: 72,
+          overflow: "hidden",
+        }}>
+          <span style={{ opacity: 0.5, flexShrink: 0, marginTop: 1 }}>
+            {results[selected].icon || "📄"}
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, color: colors.text, marginBottom: 2, fontSize: 12 }}>
+              {results[selected].title}
+            </div>
+            {results[selected].subtitle && (
+              <div style={{ opacity: 0.8, wordBreak: "break-all", lineHeight: 1.4 }}>
+                {results[selected].subtitle}
+              </div>
+            )}
+            {!results[selected].subtitle && results[selected].action_data && (
+              <div style={{ opacity: 0.6, fontFamily: "monospace", wordBreak: "break-all" }}>
+                {results[selected].action_data}
+              </div>
+            )}
           </div>
-        );
-      })}
+        </div>
+      )}
+
       {ctxMenu && (
         <div
           onMouseDown={(e) => e.stopPropagation()}
@@ -277,6 +342,6 @@ export default function ResultList({
           ))}
         </div>
       )}
-    </div>
+    </>
   );
 }

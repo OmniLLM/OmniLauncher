@@ -21,6 +21,16 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tokio::sync::{Mutex, Semaphore};
 
+fn window_pos_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let mut p = std::path::PathBuf::from(home);
+    p.push(".config");
+    p.push("omnilauncher");
+    let _ = std::fs::create_dir_all(&p);
+    p.push("window-pos.json");
+    p
+}
+
 fn debug_log_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_default()
@@ -154,6 +164,18 @@ pub fn run() {
             // Center the initial window before the frontend performs its first resize.
             let _ = window.center();
 
+            // Restore saved window position
+            let pos_path = window_pos_path();
+            if let Ok(data) = std::fs::read_to_string(&pos_path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                    if let (Some(x), Some(y)) = (val["x"].as_i64(), val["y"].as_i64()) {
+                        let _ = window.set_position(tauri::Position::Physical(
+                            tauri::PhysicalPosition { x: x as i32, y: y as i32 }
+                        ));
+                    }
+                }
+            }
+
             // ── System tray icon ──────────────────────────────────────────
             let icon = Image::from_path(
                 app.path()
@@ -246,6 +268,7 @@ pub fn run() {
             list_plugins,
             remove_plugin,
             vision_analyze,
+            save_window_position,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -259,6 +282,13 @@ async fn set_window_geometry(
     panel_mode: Option<bool>,
 ) -> Result<bool, String> {
     sync_window_geometry(&window, height, ai_mode, panel_mode.unwrap_or(false)).await
+}
+
+#[tauri::command]
+async fn save_window_position(x: i32, y: i32) -> Result<(), String> {
+    let path = window_pos_path();
+    let json = format!("{{\"x\":{},\"y\":{}}}", x, y);
+    std::fs::write(&path, json).map_err(|e| e.to_string())
 }
 
 async fn sync_window_geometry(

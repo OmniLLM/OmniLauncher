@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SearchBar from "./components/SearchBar";
 import ResultList from "./components/ResultList";
+import FavoritesList from "./components/FavoritesList";
 import SettingsWindow from "./components/SettingsWindow";
 import PluginManager from "./components/PluginManager";
 import SkillManager from "./components/SkillManager";
@@ -252,6 +253,15 @@ export default function App() {
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1);
   const inputHistoryRef = useRef<string[]>([]);
+
+  const [favorites, setFavorites] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem("omni-favorites");
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
+  const [showCheatSheet, setShowCheatSheet] = useState(false);
+  const [exportToast, setExportToast] = useState(false);
 
   const resolvedTheme: ResolvedTheme =
     theme === "system" ? systemTheme : theme;
@@ -732,6 +742,7 @@ export default function App() {
           active.tagName === "SELECT");
 
       if (e.key === "Escape") {
+        if (showCheatSheet) { setShowCheatSheet(false); return; }
         if (
           query === "" &&
           !showPluginManager &&
@@ -767,6 +778,25 @@ export default function App() {
         invoke("open_settings_window").catch(() => {});
       }
 
+      if (e.key === "F1") {
+        e.preventDefault();
+        setShowCheatSheet((prev) => !prev);
+      }
+
+      if (e.key === "s" && (e.metaKey || e.ctrlKey) && isAiMode && conversationHistory.length > 0) {
+        e.preventDefault();
+        const md = conversationHistory.map(turn => {
+          const role = turn.role === "user" ? "**You**" : "**AI**";
+          const tools = turn.tools_used?.length
+            ? `\n> Tools: ${turn.tools_used.join(", ")}\n`
+            : "";
+          return `${role}\n${tools}${turn.content}`;
+        }).join("\n\n---\n\n");
+        navigator.clipboard.writeText(md).catch(() => {});
+        setExportToast(true);
+        setTimeout(() => setExportToast(false), 2000);
+      }
+
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setAiModeEnabled((prev) => !prev);
@@ -777,9 +807,20 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [focusInput, query, showPluginManager, showSkillManager]);
+  }, [focusInput, query, showPluginManager, showSkillManager, showCheatSheet, isAiMode, conversationHistory]);
 
   // ── Layout geometry ────────────────────────────────────────────────────────
+  useEffect(() => {
+    let saveTimer: ReturnType<typeof setTimeout>;
+    const unlisten = getCurrentWebviewWindow().onMoved(({ payload }) => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        invoke("save_window_position", { x: payload.x, y: payload.y }).catch(() => {});
+      }, 500);
+    });
+    return () => { clearTimeout(saveTimer); unlisten.then(fn => fn()); };
+  }, []);
+
   const launcherHasContent =
     results.length > 0 || showPluginManager || showSkillManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
@@ -983,17 +1024,21 @@ export default function App() {
         )}
 
         {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
-        {!isAiMode &&
-          !showPluginManager &&
-          !showSkillManager &&
-          results.length > 0 && (
-            <ResultList
-              results={results}
-              query={query}
-              onExecute={handleExecute}
-              colors={colors}
-            />
-          )}
+        {!isAiMode && !showPluginManager && !showSkillManager && (
+          <>
+            {query.trim() === "" && favorites.length > 0 && (
+              <FavoritesList
+                favoriteIds={favorites}
+                onExecute={handleExecute}
+                colors={colors}
+                onFavoritesChange={setFavorites}
+              />
+            )}
+            {results.length > 0 && (
+              <ResultList results={results} query={query} onExecute={handleExecute} colors={colors} />
+            )}
+          </>
+        )}
 
         {/* ── AI MODE: slash command suggestions overlay ────────────────── */}
         {isAiMode && results.length > 0 && isSlashPrefix(query) && (
@@ -1035,11 +1080,83 @@ export default function App() {
           />
         </div>
       </div>
+
+      {exportToast && (
+        <div style={{
+          position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)",
+          background: "#1a2d4a", border: "1px solid rgba(94,129,244,0.4)",
+          borderRadius: 8, padding: "8px 16px",
+          fontSize: 12, color: "#5E81F4", fontWeight: 600,
+          zIndex: 9998, animation: "omni-fade-in 150ms ease both",
+          pointerEvents: "none",
+        }}>
+          ✓ Conversation copied to clipboard
+        </div>
+      )}
+
+      {showCheatSheet && (
+        <div
+          onClick={() => setShowCheatSheet(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            background: "rgba(0,0,0,0.7)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            animation: "omni-fade-in 150ms ease both",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#0d1117",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 14,
+              padding: "20px 28px",
+              minWidth: 320,
+              boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#e8eaf6", marginBottom: 16, letterSpacing: "0.04em" }}>
+              ⌨ Keyboard Shortcuts
+            </div>
+            {[
+              ["Ctrl+K", "Toggle AI mode"],
+              ["Ctrl+,", "Open Settings"],
+              ["F1", "Show/hide this help"],
+              ["Escape", "Clear / Hide window"],
+              ["↑ / ↓", "Navigate results"],
+              ["↑ (empty)", "Browse input history"],
+              ["Enter", "Execute selected"],
+              ["Ctrl+Enter", "Force AI query"],
+              ["?", "Toggle AI mode (key)"],
+              ["/help", "Show all commands"],
+              ["/new", "New AI conversation"],
+              ["/plugins", "Plugin manager"],
+              ["/skills", "Skill manager"],
+              ["Right-click", "Context menu on result"],
+              ["★ (hover)", "Favorite a result"],
+            ].map(([key, desc]) => (
+              <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                <kbd style={{
+                  fontFamily: "monospace", fontSize: 11,
+                  background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  borderRadius: 5, padding: "2px 8px",
+                  color: "#5E81F4",
+                }}>{key}</kbd>
+                <span style={{ fontSize: 12, color: "#8892b0", marginLeft: 16 }}>{desc}</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 11, color: "#4a5568", marginTop: 12, textAlign: "center" }}>
+              Press F1 or click outside to close
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
 
-// ─── Chat bubble sub-component ─────────────────────────────────────────────
+// ─── Chat bubble sub-component
 
 function toolIcon(tool: string): string {
   if (tool.startsWith("🎯")) return "";
