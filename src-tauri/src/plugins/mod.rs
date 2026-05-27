@@ -121,16 +121,18 @@ impl PluginManager {
             raw: raw.to_string(),
             terms: raw.split_whitespace().map(String::from).collect(),
         };
-        let mut results = vec![];
-        for plugin in &self.plugins {
-            if let Some(kw) = plugin.keyword() {
-                if !keyword_matches(raw, kw) {
-                    continue;
-                }
-            }
-            let mut r = plugin.query(&q).await;
-            results.append(&mut r);
-        }
+        // Run all eligible plugin queries concurrently so a slow plugin (e.g.
+        // an external script doing a network call) does not block the others.
+        let futures = self
+            .plugins
+            .iter()
+            .filter(|p| p.keyword().map_or(true, |kw| keyword_matches(raw, kw)))
+            .map(|p| p.query(&q));
+        let mut results: Vec<QueryResult> = futures_util::future::join_all(futures)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
         results.sort_by_key(|b| std::cmp::Reverse(b.score));
         results.truncate(10);
         results
