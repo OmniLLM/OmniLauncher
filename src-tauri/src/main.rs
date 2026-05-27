@@ -7,6 +7,8 @@ use omnilauncher_lib::{
     live_server::{LiveResponse, LiveServer},
     load_settings, save_settings, AppSettings, QueryResult, SkillInfo, SkillManager,
 };
+mod python_installer;
+use python_installer::{check_bundled_python, install_python_command};
 use simplelog::{ColorChoice, ConfigBuilder, LevelFilter, TermLogger, TerminalMode, WriteLogger};
 use std::{
     fs::{self, OpenOptions},
@@ -325,6 +327,8 @@ pub fn run() {
             remove_plugin,
             vision_analyze,
             save_window_position,
+            install_python_command,
+            check_bundled_python,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

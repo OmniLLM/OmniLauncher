@@ -366,23 +366,15 @@ fn build_interpreter_command(entry: &Path) -> Command {
             c
         }
         Some("py") => {
-            let exe: std::borrow::Cow<str> = if cfg!(windows) {
-                // Check bundled Python first, fall back to system
+            // Prefer bundled Python under ~/.omnilauncher/python/, fall back to system.
+            let exe: std::borrow::Cow<str> = {
+                let bundled_rel = if cfg!(windows) { "python.exe" } else { "bin/python3" };
                 let bundled = dirs::home_dir()
-                    .map(|h| h.join(".omnilauncher").join("python").join("python.exe"))
+                    .map(|h| h.join(".omnilauncher").join("python").join(bundled_rel))
                     .filter(|p| p.exists());
                 match bundled {
                     Some(p) => p.to_string_lossy().into_owned().into(),
-                    None => "python.exe".into(),
-                }
-            } else {
-                // Check bundled Python first, fall back to system python3
-                let bundled = dirs::home_dir()
-                    .map(|h| h.join(".omnilauncher").join("python").join("bin").join("python3"))
-                    .filter(|p| p.exists());
-                match bundled {
-                    Some(p) => p.to_string_lossy().into_owned().into(),
-                    None => "python3".into(),
+                    None => if cfg!(windows) { "python.exe".into() } else { "python3".into() },
                 }
             };
             let mut c = Command::new(exe.as_ref());
