@@ -214,6 +214,10 @@ impl SkillManager {
         let dest_file = dest_dir.join("SKILL.md");
         std::fs::write(&dest_file, &content).map_err(|e| format!("write failed: {}", e))?;
 
+        // Persist source URL so update can re-fetch
+        let source_file = dest_dir.join(".source");
+        let _ = std::fs::write(&source_file, url);
+
         // Reload
         self.skills.retain(|s| s.meta.name != name);
         if let Some(s) = parse_skill_file(&content, dest_file) {
@@ -221,6 +225,16 @@ impl SkillManager {
         }
 
         Ok(format!("Installed skill: {}", name))
+    }
+
+    /// Update a skill by re-fetching from its stored source URL.
+    pub fn update_skill(&mut self, name: &str) -> Result<String, String> {
+        let source_file = Self::skill_dir().join(name).join(".source");
+        let url = std::fs::read_to_string(&source_file)
+            .map_err(|_| format!("Skill '{}' has no update source (was not installed from a URL).", name))?;
+        let url = url.trim().to_string();
+        self.install_from_url(&url)
+            .map(|_| format!("Updated skill: {}", name))
     }
 
     /// Install a skill from a local file path.

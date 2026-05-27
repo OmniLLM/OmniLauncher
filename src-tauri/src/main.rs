@@ -237,6 +237,7 @@ pub fn run() {
             reload_skills,
             install_skill,
             delete_skill,
+            update_skill,
             set_window_geometry,
             install_plugin,
             update_plugin,
@@ -839,6 +840,13 @@ async fn delete_skill(name: String, state: tauri::State<'_, AppState>) -> Result
     log::debug!("delete_skill invoked with name={name}");
     let mut mgr = state.skill_manager.lock().await;
     mgr.delete_skill(&name)
+}
+
+#[tauri::command]
+async fn update_skill(name: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    log::debug!("update_skill invoked with name={name}");
+    let mut mgr = state.skill_manager.lock().await;
+    mgr.update_skill(&name)
 }
 
 // ─── External plugin management commands ──────────────────────────────────────
