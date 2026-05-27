@@ -133,6 +133,56 @@ pub fn run() {
                 LiveResponse::json(omnilauncher_lib::plugins::todo::todo_live_data_json())
             })
             .await;
+        live_server_task
+            .register_route("/dashboard", || {
+                LiveResponse::html(omnilauncher_lib::dashboard::index_html())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/data", || {
+                LiveResponse::json(omnilauncher_lib::dashboard::index_data_json())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/todos", || {
+                LiveResponse::html(omnilauncher_lib::dashboard::todos_html())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/todos/data", || {
+                LiveResponse::json(omnilauncher_lib::dashboard::todos_data_json())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/conversation", || {
+                LiveResponse::html(omnilauncher_lib::dashboard::conversation_html())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/conversation/data", || {
+                LiveResponse::json(omnilauncher_lib::dashboard::conversation_data_json())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/jobs", || {
+                LiveResponse::html(omnilauncher_lib::dashboard::jobs_html())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/jobs/data", || {
+                LiveResponse::json(omnilauncher_lib::dashboard::jobs_data_json())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/tables", || {
+                LiveResponse::html(omnilauncher_lib::dashboard::tables_html())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/tables/data", || {
+                LiveResponse::json(omnilauncher_lib::dashboard::tables_data_json())
+            })
+            .await;
         log::info!(
             "starting live server on http://127.0.0.1:{}",
             live_server_port
@@ -147,7 +197,10 @@ pub fn run() {
         conversation: Arc::new(Mutex::new({
             let mut ctx = ConversationContext::default();
             // Re-hydrate from SQLite so follow-up questions survive restarts.
-            ctx.messages = omnilauncher_lib::db::conversation::load_recent(20);
+            let sid = omnilauncher_lib::db::conversation::current_session_id();
+            ctx.session_id = sid;
+            ctx.messages =
+                omnilauncher_lib::db::conversation::load_recent_for_session(sid, 20);
             ctx
         })),
         ai_in_flight: Arc::new(Semaphore::new(1)),
@@ -263,6 +316,10 @@ pub fn run() {
             get_settings,
             save_settings_cmd,
             clear_conversation,
+            list_ai_sessions,
+            current_ai_session,
+            switch_ai_session,
+            delete_ai_session,
             execute_slash_command,
             list_models,
             list_skills,
@@ -380,11 +437,15 @@ async fn ai_query(
     log::debug!("ai_query invoked with {} characters", query.len());
 
     // Add user message to conversation context
-    {
+    let session_id = {
         let mut ctx = state.conversation.lock().await;
+        if ctx.session_id == 0 {
+            ctx.session_id = omnilauncher_lib::db::conversation::current_session_id();
+        }
         ctx.add_user(&query);
-    }
-    omnilauncher_lib::db::conversation::save_turn("user", &query);
+        ctx.session_id
+    };
+    omnilauncher_lib::db::conversation::save_turn(session_id, "user", &query);
 
     // Clone Arcs for the spawned task
     let pm = state.plugin_manager.clone();
@@ -446,11 +507,12 @@ async fn ai_query(
         };
 
         // Add assistant response to context
-        {
+        let sid = {
             let mut ctx = conversation.lock().await;
             ctx.add_assistant(&response.content);
-        }
-        omnilauncher_lib::db::conversation::save_turn("assistant", &response.content);
+            ctx.session_id
+        };
+        omnilauncher_lib::db::conversation::save_turn(sid, "assistant", &response.content);
 
         let _ = window.emit("omnilauncher://ai-done", &response);
     });
@@ -487,16 +549,73 @@ async fn ai_cancel(
 
 #[tauri::command]
 async fn clear_conversation(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    log::debug!("clear_conversation invoked");
+    log::debug!("clear_conversation invoked (starts a new session)");
+    let new_id = omnilauncher_lib::db::conversation::start_new_session(None);
     let mut ctx = state.conversation.lock().await;
     ctx.clear();
-    // Also wipe the persisted history so a restart starts fresh.
-    if let Ok(conn) = rusqlite::Connection::open(
-        omnilauncher_lib::path_config::data_dir().join("omnilauncher.sqlite"),
-    ) {
-        let _ = conn.execute("DELETE FROM conversation_messages", []);
-    }
+    ctx.session_id = new_id;
     Ok(true)
+}
+
+#[tauri::command]
+async fn list_ai_sessions(
+) -> Result<Vec<omnilauncher_lib::db::conversation::SessionInfo>, String> {
+    Ok(omnilauncher_lib::db::conversation::list_sessions())
+}
+
+#[tauri::command]
+async fn current_ai_session(state: tauri::State<'_, AppState>) -> Result<i64, String> {
+    let ctx = state.conversation.lock().await;
+    Ok(ctx.session_id)
+}
+
+#[tauri::command]
+async fn switch_ai_session(
+    session_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    omnilauncher_lib::db::conversation::touch_for_switch(session_id);
+    let msgs =
+        omnilauncher_lib::db::conversation::load_recent_for_session(session_id, 200);
+    let mut ctx = state.conversation.lock().await;
+    ctx.clear();
+    ctx.session_id = session_id;
+    // Re-hydrate in-memory context with the most recent slice (bounded by max_turns).
+    let take_n = ctx.max_turns * 2;
+    let start = msgs.len().saturating_sub(take_n);
+    ctx.messages = msgs[start..].to_vec();
+    // Return the full session transcript so the UI can render it.
+    let payload: Vec<serde_json::Value> = msgs
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "role": m.role,
+                "content": m.content_str(),
+            })
+        })
+        .collect();
+    Ok(payload)
+}
+
+#[tauri::command]
+async fn delete_ai_session(
+    session_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<i64, String> {
+    let ok = omnilauncher_lib::db::conversation::delete_session(session_id);
+    if !ok {
+        return Err("Failed to delete session".to_string());
+    }
+    // If we just deleted the active session, fall back to a fresh one.
+    let mut ctx = state.conversation.lock().await;
+    if ctx.session_id == session_id {
+        let new_id = omnilauncher_lib::db::conversation::current_session_id();
+        ctx.clear();
+        ctx.session_id = new_id;
+        Ok(new_id)
+    } else {
+        Ok(ctx.session_id)
+    }
 }
 
 #[tauri::command]

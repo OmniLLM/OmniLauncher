@@ -16,6 +16,10 @@ pub struct AiResponse {
 pub struct ConversationContext {
     pub messages: Vec<Message>,
     pub max_turns: usize,
+    /// Persistent session this in-memory context is bound to. `0` means
+    /// "not yet initialised" — callers should resolve a real id via
+    /// `crate::db::conversation::current_session_id()` before saving turns.
+    pub session_id: i64,
 }
 
 impl Default for ConversationContext {
@@ -23,6 +27,7 @@ impl Default for ConversationContext {
         Self {
             messages: Vec::new(),
             max_turns: 10,
+            session_id: 0,
         }
     }
 }
@@ -32,6 +37,7 @@ impl ConversationContext {
         Self {
             messages: Vec::new(),
             max_turns,
+            session_id: 0,
         }
     }
 
@@ -279,6 +285,7 @@ impl Router {
         let mut local_ctx = ConversationContext {
             messages: context.messages.clone(),
             max_turns: context.max_turns,
+            session_id: context.session_id,
         };
 
         for _iteration in 0..10 {

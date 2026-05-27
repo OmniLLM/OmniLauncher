@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod dashboard;
 pub mod db;
 pub mod guardrails;
 pub mod live_server;

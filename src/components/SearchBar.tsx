@@ -16,7 +16,7 @@ interface Props {
   /** Render the empty launcher as a centered card */
   compact?: boolean;
   /** External ref forwarded from App so App can imperatively focus */
-  inputRef?: RefObject<HTMLInputElement>;
+  inputRef?: RefObject<HTMLInputElement | HTMLTextAreaElement>;
   onHintBarExpandedChange?: (expanded: boolean) => void;
   inputHistory?: string[];
   historyIdx?: number;
@@ -113,7 +113,7 @@ export default function SearchBar({
   historyIdx,
   onHistoryNavigate,
 }: Props) {
-  const internalRef = useRef<HTMLInputElement>(null);
+  const internalRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const inputRef = externalRef ?? internalRef;
   const [showAllHints, setShowAllHints] = useState(false);
 
@@ -131,6 +131,16 @@ export default function SearchBar({
       setShowAllHints(false);
     }
   }, [showHintBar]);
+
+  // Auto-resize textarea (AI mode) based on content
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el && el.tagName === "TEXTAREA") {
+      const ta = el as HTMLTextAreaElement;
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+    }
+  }, [value, isAiMode]);
 
   useEffect(() => {
     onHintBarExpandedChange?.(showHintBar && showAllHints);
@@ -151,10 +161,17 @@ export default function SearchBar({
     <>
       <style>{`
         .omni-input-wrap {
-          transition: box-shadow 180ms ease;
+          transition: box-shadow 180ms ease, border-color 180ms ease;
         }
         .omni-input-wrap:focus-within {
-          box-shadow: 0 0 0 2px ${colors.accent}30, inset 0 0 0 1px ${colors.accent}55;
+          border-color: ${colors.accent}88 !important;
+          box-shadow: 0 0 0 3px ${colors.accent}22, 0 8px 28px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255,255,255,0.04);
+        }
+        .omni-ai-textarea::placeholder { color: ${colors.text}66; }
+        .omni-ai-textarea::-webkit-scrollbar { width: 6px; }
+        .omni-ai-textarea::-webkit-scrollbar-thumb {
+          background: ${colors.surface2};
+          border-radius: 999px;
         }
         @keyframes omni-tagline-fadein {
           from { opacity: 0; transform: translateY(4px); }
@@ -176,7 +193,10 @@ export default function SearchBar({
       <div
         style={{
           flexShrink: 0,
-          borderTop: isAiMode ? `1px solid ${colors.surface}` : "none",
+          padding: isAiMode ? "14px 16px 18px" : 0,
+          background: isAiMode
+            ? `linear-gradient(to top, ${colors.bg} 70%, ${colors.bg}00)`
+            : "transparent",
         }}
       >
         {!isAiMode && (
@@ -206,27 +226,31 @@ export default function SearchBar({
           className="omni-input-wrap"
           style={{
             display: "flex",
-            alignItems: "center",
-            padding: compact ? "0 18px" : "0 14px",
-            height: compact ? "54px" : "56px",
+            alignItems: isAiMode ? "flex-end" : "center",
+            padding: isAiMode ? "8px 12px 8px 16px" : compact ? "0 18px" : "0 14px",
+            height: isAiMode ? "auto" : compact ? "54px" : "56px",
+            minHeight: isAiMode ? "52px" : undefined,
             width: compact ? "min(94%, 820px)" : "100%",
             margin: compact ? "0 auto" : undefined,
             gap: "10px",
-            border:
-              compact && !isAiMode
+            border: isAiMode
+              ? `1px solid ${colors.surface2}`
+              : compact
                 ? `1px solid ${colors.surface2}`
                 : "none",
             borderBottom:
               !compact && !isAiMode && value
                 ? `1px solid ${colors.surface}`
+                : undefined,
+            background: isAiMode ? `${colors.surface}80` : colors.bg,
+            backdropFilter: isAiMode ? "blur(10px)" : undefined,
+            WebkitBackdropFilter: isAiMode ? "blur(10px)" : undefined,
+            borderRadius: isAiMode ? "18px" : compact ? "16px" : "14px",
+            boxShadow: isAiMode
+              ? "0 8px 28px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255,255,255,0.04)"
+              : compact
+                ? "0 18px 44px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255,255,255,0.03)"
                 : "none",
-            background: compact
-              ? colors.bg
-              : colors.bg,
-            borderRadius: compact ? "16px" : isAiMode ? "0" : "14px",
-            boxShadow: compact
-              ? "0 18px 44px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255,255,255,0.03)"
-              : "none",
           }}
         >
           {/* Leading icon / spinner (clickable when loading to cancel the request) */}
@@ -235,12 +259,14 @@ export default function SearchBar({
             title={loading ? "Stop request" : undefined}
             style={{
               fontSize: compact ? "18px" : "17px",
-              opacity: loading ? 1 : compact ? 0.82 : 0.5,
-              color: compact ? colors.text : undefined,
+              opacity: loading ? 1 : isAiMode ? 0.9 : compact ? 0.82 : 0.5,
+              color: isAiMode ? colors.accent : compact ? colors.text : undefined,
               flexShrink: 0,
               lineHeight: 1,
               display: "flex",
               alignItems: "center",
+              alignSelf: isAiMode ? "center" : undefined,
+              paddingBottom: isAiMode ? "4px" : 0,
               cursor: loading && onCancel ? "pointer" : "default",
             }}
           >
@@ -273,9 +299,44 @@ export default function SearchBar({
           )}
 
           {/* Input */}
+          {isAiMode ? (
+            <textarea
+              autoFocus
+              className="omni-ai-textarea"
+              ref={inputRef as RefObject<HTMLTextAreaElement>}
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  onSubmit(value, e.ctrlKey || e.metaKey);
+                }
+              }}
+              placeholder={placeholder}
+              rows={1}
+              style={{
+                flex: 1,
+                background: "transparent",
+                border: "none",
+                outline: "none",
+                fontSize: "15px",
+                color: colors.text,
+                caretColor: colors.accent,
+                fontFamily: "inherit",
+                fontWeight: 400,
+                letterSpacing: 0,
+                resize: "none",
+                lineHeight: 1.45,
+                maxHeight: "160px",
+                overflowY: "auto",
+                padding: "6px 4px",
+                alignSelf: "stretch",
+              }}
+            />
+          ) : (
           <input
             autoFocus
-            ref={inputRef}
+            ref={inputRef as RefObject<HTMLInputElement>}
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={(e) => {
@@ -314,6 +375,7 @@ export default function SearchBar({
               letterSpacing: 0,
             }}
           />
+          )}
 
           {/* AI mode badge (right side when fully in AI mode) */}
           {isAiMode && (

@@ -41,6 +41,10 @@ pub fn migrations() -> Vec<Migration> {
             version: 5,
             sql: include_str!("../../migrations/005_conversation_history.sql"),
         },
+        Migration {
+            version: 6,
+            sql: include_str!("../../migrations/006_conversation_sessions.sql"),
+        },
     ]
 }
 

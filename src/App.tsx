@@ -34,6 +34,14 @@ interface ConversationTurn {
   isStreaming?: boolean;
 }
 
+interface AiSessionInfo {
+  id: number;
+  title: string;
+  created_at: string;
+  last_active_at: string;
+  message_count: number;
+}
+
 interface AppSettings {
   ai_base_url: string;
   ai_model: string;
@@ -240,10 +248,13 @@ export default function App() {
   const [conversationHistory, setConversationHistory] = useState<
     ConversationTurn[]
   >([]);
+  const [sessions, setSessions] = useState<AiSessionInfo[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
+  const [showSessionPicker, setShowSessionPicker] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1);
   const inputHistoryRef = useRef<string[]>([]);
@@ -267,6 +278,19 @@ export default function App() {
     if (select) inputRef.current?.select();
   }, []);
 
+  const refreshSessions = useCallback(async () => {
+    try {
+      const [list, cur] = await Promise.all([
+        invoke<AiSessionInfo[]>("list_ai_sessions"),
+        invoke<number>("current_ai_session"),
+      ]);
+      setSessions(list || []);
+      setCurrentSessionId(cur || null);
+    } catch (e) {
+      console.error("refreshSessions error:", e);
+    }
+  }, []);
+
   const isAiMode = aiModeEnabled || isAiPrefix(query);
 
   // Load settings on mount
@@ -278,6 +302,33 @@ export default function App() {
         if (s.background_url) setBackgroundUrl(s.background_url);
       })
       .catch(() => {});
+  }, []);
+
+  // Load AI sessions on mount and rehydrate the active session's transcript.
+  useEffect(() => {
+    (async () => {
+      try {
+        const cur = await invoke<number>("current_ai_session");
+        setCurrentSessionId(cur || null);
+        if (cur) {
+          const msgs = await invoke<Array<{ role: string; content: string }>>(
+            "switch_ai_session",
+            { sessionId: cur },
+          );
+          const turns: ConversationTurn[] = (msgs || [])
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => ({
+              role: m.role as "user" | "assistant",
+              content: m.content,
+            }));
+          setConversationHistory(turns);
+        }
+        const list = await invoke<AiSessionInfo[]>("list_ai_sessions");
+        setSessions(list || []);
+      } catch (e) {
+        console.error("session bootstrap error:", e);
+      }
+    })();
   }, []);
 
   // Listen for settings changes from the standalone settings window
@@ -479,6 +530,7 @@ export default function App() {
           ),
           listen<AiResponse>("omnilauncher://ai-done", (event) => {
             finish(event.payload.content, event.payload.tools_used);
+            refreshSessions();
           }),
           listen<string>("omnilauncher://ai-error", (event) => {
             finish(`Error: ${event.payload}`);
@@ -496,7 +548,7 @@ export default function App() {
         finish(`Error: ${e}`);
       }
     },
-    [focusInput, loading],
+    [focusInput, loading, refreshSessions],
   );
 
   const handleQueryChange = useCallback(
@@ -559,7 +611,48 @@ export default function App() {
     setConversationHistory([]);
     setResults([]);
     setQuery("");
-  }, []);
+    setShowSessionPicker(false);
+    refreshSessions();
+  }, [refreshSessions]);
+
+  const handleSwitchSession = useCallback(
+    async (sessionId: number) => {
+      try {
+        const msgs = await invoke<Array<{ role: string; content: string }>>(
+          "switch_ai_session",
+          { sessionId },
+        );
+        const turns: ConversationTurn[] = (msgs || [])
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+        setConversationHistory(turns);
+        setCurrentSessionId(sessionId);
+      } catch (e) {
+        console.error("switch_ai_session error:", e);
+      }
+      setShowSessionPicker(false);
+      setResults([]);
+      setQuery("");
+      refreshSessions();
+    },
+    [refreshSessions],
+  );
+
+  const handleDeleteSession = useCallback(
+    async (sessionId: number) => {
+      try {
+        const newCur = await invoke<number>("delete_ai_session", { sessionId });
+        if (currentSessionId === sessionId) {
+          setConversationHistory([]);
+          setCurrentSessionId(newCur || null);
+        }
+      } catch (e) {
+        console.error("delete_ai_session error:", e);
+      }
+      refreshSessions();
+    },
+    [currentSessionId, refreshSessions],
+  );
 
   const handleSubmit = useCallback(
     async (value: string, forceAi: boolean) => {
@@ -922,29 +1015,189 @@ export default function App() {
             >
               OMNILAUNCHER AI MODE
             </span>
-            <button
-              onClick={handleNewConversation}
-              style={{
-                background: colors.surface,
-                border: "none",
-                borderRadius: "7px",
-                padding: "4px 11px",
-                color: colors.text,
-                cursor: "pointer",
-                fontSize: "12px",
-                display: "flex",
-                alignItems: "center",
-                gap: "5px",
-              }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.background = colors.surface2)
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.background = colors.surface)
-              }
-            >
-              <span style={{ fontSize: "10px" }}>✦</span> New conversation
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", position: "relative" }}>
+              <button
+                onClick={() => setShowSessionPicker((v) => !v)}
+                title="Switch sessions"
+                style={{
+                  background: showSessionPicker ? colors.surface2 : colors.surface,
+                  border: "none",
+                  borderRadius: "7px",
+                  padding: "4px 11px",
+                  color: colors.text,
+                  cursor: "pointer",
+                  fontSize: "12px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  maxWidth: "240px",
+                }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = colors.surface2)
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = showSessionPicker
+                    ? colors.surface2
+                    : colors.surface)
+                }
+              >
+                <span style={{ fontSize: "10px" }}>💬</span>
+                <span
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    maxWidth: "180px",
+                  }}
+                >
+                  {(() => {
+                    const cur = sessions.find((s) => s.id === currentSessionId);
+                    return cur && cur.title
+                      ? cur.title
+                      : currentSessionId
+                        ? `Session #${currentSessionId}`
+                        : "Session";
+                  })()}
+                </span>
+                <span style={{ fontSize: "9px", opacity: 0.6 }}>▾</span>
+              </button>
+              <button
+                onClick={handleNewConversation}
+                style={{
+                  background: colors.surface,
+                  border: "none",
+                  borderRadius: "7px",
+                  padding: "4px 11px",
+                  color: colors.text,
+                  cursor: "pointer",
+                  fontSize: "12px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "5px",
+                }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = colors.surface2)
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = colors.surface)
+                }
+              >
+                <span style={{ fontSize: "10px" }}>✦</span> New conversation
+              </button>
+
+              {showSessionPicker && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 6px)",
+                    right: 0,
+                    width: "320px",
+                    maxHeight: "360px",
+                    overflowY: "auto",
+                    background: colors.surface,
+                    border: `1px solid ${colors.surface2}`,
+                    borderRadius: "10px",
+                    boxShadow: "0 12px 32px rgba(0,0,0,0.35)",
+                    zIndex: 50,
+                    padding: "6px",
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {sessions.length === 0 && (
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        fontSize: "12px",
+                        color: colors.sub,
+                      }}
+                    >
+                      No sessions yet.
+                    </div>
+                  )}
+                  {sessions.map((s) => {
+                    const active = s.id === currentSessionId;
+                    return (
+                      <div
+                        key={s.id}
+                        onClick={() => handleSwitchSession(s.id)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          padding: "7px 9px",
+                          borderRadius: "7px",
+                          cursor: "pointer",
+                          background: active ? colors.surface2 : "transparent",
+                        }}
+                        onMouseEnter={(e) =>
+                          (e.currentTarget.style.background = colors.surface2)
+                        }
+                        onMouseLeave={(e) =>
+                          (e.currentTarget.style.background = active
+                            ? colors.surface2
+                            : "transparent")
+                        }
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: "12.5px",
+                              color: colors.text,
+                              fontWeight: active ? 600 : 500,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {s.title || `Session #${s.id}`}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: "10.5px",
+                              color: colors.sub,
+                              marginTop: "2px",
+                              display: "flex",
+                              gap: "8px",
+                            }}
+                          >
+                            <span>{s.message_count} msg</span>
+                            <span style={{ opacity: 0.6 }}>
+                              {(s.last_active_at || "").slice(0, 16)}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteSession(s.id);
+                          }}
+                          title="Delete session"
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: colors.sub,
+                            cursor: "pointer",
+                            fontSize: "13px",
+                            padding: "2px 6px",
+                            borderRadius: "5px",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = "#a33";
+                            e.currentTarget.style.color = "#fff";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = "transparent";
+                            e.currentTarget.style.color = colors.sub;
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
