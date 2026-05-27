@@ -458,8 +458,7 @@ impl Router {
     }
 
     /// Handle slash commands — instant, no AI involved
-    #[allow(dead_code)]
-    async fn slash_command(
+    pub async fn slash_command(
         input: &str,
         plugin_manager: &PluginManager,
         skill_manager: &SkillManager,

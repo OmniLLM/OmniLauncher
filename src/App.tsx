@@ -175,6 +175,12 @@ interface SlashCommand {
 
 const SLASH_COMMANDS: SlashCommand[] = [
   {
+    cmd: "/skill",
+    description: "Manage AI skills (list, view, install, reload)",
+    usage: "/skill list | view <name> | install <path> | reload | help",
+    examples: ["/skill list", "/skill view web-summarizer", "/skill install ~/my-skill/SKILL.md"],
+  },
+  {
     cmd: "/plugins",
     shortcut: "/pm",
     description: "Open external plugin manager",
@@ -489,7 +495,7 @@ export default function App() {
   }, []);
 
   const handleSubmit = useCallback(
-    (value: string, forceAi: boolean) => {
+    async (value: string, forceAi: boolean) => {
       if (isConversationResetCommand(value)) {
         handleNewConversation();
         return;
@@ -516,6 +522,48 @@ export default function App() {
         setShowPluginManager(true);
         setResults([]);
         setQuery("");
+        return;
+      }
+
+      if (value.trimStart().toLowerCase().startsWith("/skill")) {
+        const slashQuery = value.trim();
+        const userTurn: ConversationTurn = { role: "user", content: slashQuery };
+        const pendingAiTurn: ConversationTurn = {
+          role: "assistant",
+          content: "",
+          tools_used: [],
+          isStreaming: true,
+        };
+        setAiModeEnabled(true);
+        setConversationHistory((prev) => [...prev, userTurn, pendingAiTurn]);
+        setLoading(true);
+        setResults([]);
+        setQuery("");
+        try {
+          const res = await invoke<AiResponse>("execute_slash_command", { query: slashQuery });
+          setConversationHistory((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = {
+              role: "assistant",
+              content: res.content,
+              tools_used: res.tools_used,
+              isStreaming: false,
+            };
+            return next;
+          });
+        } catch (e) {
+          setConversationHistory((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = {
+              role: "assistant",
+              content: `Error: ${e}`,
+              isStreaming: false,
+            };
+            return next;
+          });
+        } finally {
+          setLoading(false);
+        }
         return;
       }
 

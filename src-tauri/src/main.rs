@@ -231,6 +231,7 @@ pub fn run() {
             get_settings,
             save_settings_cmd,
             clear_conversation,
+            execute_slash_command,
             list_models,
             list_skills,
             reload_skills,
@@ -365,6 +366,18 @@ async fn clear_conversation(state: tauri::State<'_, AppState>) -> Result<bool, S
     let mut ctx = state.conversation.lock().await;
     ctx.clear();
     Ok(true)
+}
+
+#[tauri::command]
+async fn execute_slash_command(
+    query: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<omnilauncher_lib::AiResponse, String> {
+    log::debug!("execute_slash_command invoked with query={query}");
+    let pm = state.plugin_manager.lock().await;
+    let skill_mgr = state.skill_manager.lock().await;
+    let response = Router::slash_command(&query, &pm, &skill_mgr).await;
+    Ok(response)
 }
 
 #[tauri::command]
