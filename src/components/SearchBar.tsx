@@ -7,6 +7,8 @@ interface Props {
   onSubmit: (v: string, forceAi: boolean) => void;
   isAiMode: boolean;
   loading: boolean;
+  /** Called when the user clicks the spinner / Stop button while loading. */
+  onCancel?: () => void;
   colors: Record<string, string>;
   onSettingsClick: () => void;
   /** Show the one-line hint bar at the bottom of an empty launcher input */
@@ -100,6 +102,7 @@ export default function SearchBar({
   onSubmit,
   isAiMode,
   loading,
+  onCancel,
   colors,
   onSettingsClick,
   showHintBar = false,
@@ -226,8 +229,10 @@ export default function SearchBar({
               : "none",
           }}
         >
-          {/* Leading icon / spinner */}
+          {/* Leading icon / spinner (clickable when loading to cancel the request) */}
           <span
+            onClick={loading && onCancel ? onCancel : undefined}
+            title={loading ? "Stop request" : undefined}
             style={{
               fontSize: compact ? "18px" : "17px",
               opacity: loading ? 1 : compact ? 0.82 : 0.5,
@@ -236,10 +241,11 @@ export default function SearchBar({
               lineHeight: 1,
               display: "flex",
               alignItems: "center",
+              cursor: loading && onCancel ? "pointer" : "default",
             }}
           >
             {loading ? (
-              <LoadingSpinner color={colors.accent} />
+              <StopGlyph color={colors.accent} />
             ) : isAI ? (
               "✦"
             ) : (
@@ -515,5 +521,38 @@ function LoadingSpinner({ color }: { color: string }) {
         flexShrink: 0,
       }}
     />
+  );
+}
+
+// Spinner with a small stop-square overlay on hover; click cancels the request.
+function StopGlyph({ color }: { color: string }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <span
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        position: "relative",
+        display: "inline-flex",
+        width: "15px",
+        height: "15px",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+      }}
+    >
+      {hovered ? (
+        <span
+          style={{
+            width: "10px",
+            height: "10px",
+            background: color,
+            borderRadius: "2px",
+          }}
+        />
+      ) : (
+        <LoadingSpinner color={color} />
+      )}
+    </span>
   );
 }

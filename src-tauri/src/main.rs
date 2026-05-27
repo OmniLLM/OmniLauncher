@@ -85,6 +85,9 @@ pub struct AppState {
     pub settings: Arc<Mutex<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
     pub ai_in_flight: Arc<Semaphore>,
+    /// Handle to the currently running AI agent task, if any.
+    /// Used by `ai_cancel` to abort an in-flight request.
+    pub current_ai_task: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
     pub skill_manager: Arc<Mutex<SkillManager>>,
     pub live_server: LiveServer,
     pub live_server_port: u16,
@@ -148,6 +151,7 @@ pub fn run() {
             ctx
         })),
         ai_in_flight: Arc::new(Semaphore::new(1)),
+        current_ai_task: Arc::new(Mutex::new(None)),
         skill_manager: Arc::new(Mutex::new(skill_manager)),
         live_server,
         live_server_port,
@@ -253,6 +257,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             search,
             ai_query,
+            ai_cancel,
             execute_result,
             slash_preview,
             get_settings,
@@ -387,7 +392,7 @@ async fn ai_query(
     let conversation = state.conversation.clone();
     let skill_mgr = state.skill_manager.clone();
 
-    tauri::async_runtime::spawn(async move {
+    let handle = tauri::async_runtime::spawn(async move {
         // Keep permit alive for duration of task
         let _permit = permit;
 
@@ -450,7 +455,34 @@ async fn ai_query(
         let _ = window.emit("omnilauncher://ai-done", &response);
     });
 
+    // Track the handle so `ai_cancel` can abort an in-flight task.
+    // Calling `.abort()` on a task that has already finished is a no-op,
+    // so we can leave a stale handle until the next request overwrites it.
+    {
+        let mut slot = state.current_ai_task.lock().await;
+        *slot = Some(handle);
+    }
+
     Ok(())
+}
+
+#[tauri::command]
+async fn ai_cancel(
+    state: tauri::State<'_, AppState>,
+    window: tauri::WebviewWindow,
+) -> Result<bool, String> {
+    log::debug!("ai_cancel invoked");
+    let mut slot = state.current_ai_task.lock().await;
+    if let Some(handle) = slot.take() {
+        handle.abort();
+        let _ = window.emit(
+            "omnilauncher://ai-error",
+            "Cancelled by user".to_string(),
+        );
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 #[tauri::command]
@@ -1129,6 +1161,7 @@ mod tests {
             settings: Arc::new(Mutex::new(AppSettings::default())),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
             ai_in_flight: sem.clone(),
+            current_ai_task: Arc::new(Mutex::new(None)),
             skill_manager: Arc::new(Mutex::new(SkillManager::new())),
             live_server: LiveServer::new(),
             live_server_port: 0,

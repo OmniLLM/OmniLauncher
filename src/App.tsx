@@ -1054,6 +1054,11 @@ export default function App() {
             onSubmit={handleSubmit}
             isAiMode={isAiMode}
             loading={loading}
+            onCancel={() => {
+              invoke("ai_cancel").catch(() => {
+                /* no-op: backend will emit ai-error which finishes the turn */
+              });
+            }}
             colors={colors}
             onSettingsClick={() => setShowSettings(true)}
             showHintBar={
