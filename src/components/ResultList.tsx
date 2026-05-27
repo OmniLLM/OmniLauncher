@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import FormattedSubtitle from "./FormattedSubtitle";
 
 interface QueryResult {
@@ -35,6 +35,23 @@ export default function ResultList({
   const [selected, setSelected] = useState(0);
   const [hovered, setHovered] = useState(-1);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; item: QueryResult } | null>(null);
+  const [favorites, setFavorites] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem("omni-favorites");
+      return new Set(stored ? JSON.parse(stored) : []);
+    } catch { return new Set(); }
+  });
+
+  const toggleFavorite = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try { localStorage.setItem("omni-favorites", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
 
   useEffect(() => {
     setSelected(0);
@@ -171,6 +188,23 @@ export default function ResultList({
                 flexShrink: 0,
               }}
             >
+              <button
+                onClick={(e) => toggleFavorite(r.id, e)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  fontSize: "13px",
+                  opacity: favorites.has(r.id) ? 1 : (isHovered || isSelected) ? 0.35 : 0,
+                  color: favorites.has(r.id) ? "#f5c842" : colors.sub,
+                  padding: "0 2px",
+                  transition: "opacity 150ms, color 150ms",
+                  flexShrink: 0,
+                }}
+                title={favorites.has(r.id) ? "Remove favorite" : "Add favorite"}
+              >
+                ★
+              </button>
               {kbdHint(i) && (
                 <span
                   style={{

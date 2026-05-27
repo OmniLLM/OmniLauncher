@@ -249,6 +249,9 @@ export default function App() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
+  const [historyIdx, setHistoryIdx] = useState(-1);
+  const inputHistoryRef = useRef<string[]>([]);
 
   const resolvedTheme: ResolvedTheme =
     theme === "system" ? systemTheme : theme;
@@ -501,6 +504,7 @@ export default function App() {
 
   const handleQueryChange = useCallback(
     (value: string) => {
+      setHistoryIdx(-1);
       if (isHelpQuery(value)) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         setQuery(value);
@@ -603,10 +607,20 @@ export default function App() {
       if (forceAi || isAiPrefix(value)) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         setAiModeEnabled(true);
+        if (value.trim() && inputHistoryRef.current[0] !== value.trim()) {
+          inputHistoryRef.current = [value.trim(), ...inputHistoryRef.current].slice(0, 50);
+          setInputHistory([...inputHistoryRef.current]);
+        }
+        setHistoryIdx(-1);
         doAiQuery(value);
         setQuery("");
       } else if (aiModeEnabled && value.trim()) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
+        if (value.trim() && inputHistoryRef.current[0] !== value.trim()) {
+          inputHistoryRef.current = [value.trim(), ...inputHistoryRef.current].slice(0, 50);
+          setInputHistory([...inputHistoryRef.current]);
+        }
+        setHistoryIdx(-1);
         doAiQuery(value);
         setQuery("");
       }
@@ -751,6 +765,14 @@ export default function App() {
       if (e.key === "," && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         invoke("open_settings_window").catch(() => {});
+      }
+
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setAiModeEnabled((prev) => !prev);
+        setQuery("");
+        setResults([]);
+        setTimeout(() => focusInput(), 50);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -1004,6 +1026,12 @@ export default function App() {
             compact={isCompactMode}
             inputRef={inputRef}
             onHintBarExpandedChange={setIsHintBarExpanded}
+            inputHistory={inputHistory}
+            historyIdx={historyIdx}
+            onHistoryNavigate={(idx, val) => {
+              setHistoryIdx(idx);
+              setQuery(val);
+            }}
           />
         </div>
       </div>

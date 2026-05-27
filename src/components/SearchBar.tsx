@@ -16,6 +16,9 @@ interface Props {
   /** External ref forwarded from App so App can imperatively focus */
   inputRef?: RefObject<HTMLInputElement>;
   onHintBarExpandedChange?: (expanded: boolean) => void;
+  inputHistory?: string[];
+  historyIdx?: number;
+  onHistoryNavigate?: (idx: number, value: string) => void;
 }
 
 // Non-AI launcher prefixes shown in the idle hint bar.
@@ -103,6 +106,9 @@ export default function SearchBar({
   compact = false,
   inputRef: externalRef,
   onHintBarExpandedChange,
+  inputHistory,
+  historyIdx,
+  onHistoryNavigate,
 }: Props) {
   const internalRef = useRef<HTMLInputElement>(null);
   const inputRef = externalRef ?? internalRef;
@@ -270,6 +276,22 @@ export default function SearchBar({
               if (e.key === "Enter") {
                 e.preventDefault();
                 onSubmit(value, e.ctrlKey || e.metaKey);
+              }
+              if (e.key === "ArrowUp" && (value === "" || (historyIdx ?? -1) >= 0)) {
+                e.preventDefault();
+                const newIdx = Math.min((historyIdx ?? -1) + 1, (inputHistory?.length ?? 0) - 1);
+                if (newIdx >= 0 && inputHistory && inputHistory[newIdx]) {
+                  onHistoryNavigate?.(newIdx, inputHistory[newIdx]);
+                }
+              }
+              if (e.key === "ArrowDown" && (historyIdx ?? -1) >= 0) {
+                e.preventDefault();
+                const newIdx = (historyIdx ?? 0) - 1;
+                if (newIdx < 0) {
+                  onHistoryNavigate?.(-1, "");
+                } else if (inputHistory && inputHistory[newIdx]) {
+                  onHistoryNavigate?.(newIdx, inputHistory[newIdx]);
+                }
               }
             }}
             placeholder={placeholder}
