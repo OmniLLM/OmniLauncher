@@ -2,6 +2,17 @@
 node_modules/
 dist/
 src-tauri/target/
+target/
+
+# AI analysis/session artifacts (root level)
+SOURCE_FILES_MANIFEST.md
+omnilauncher_analysis.md
+skill-demo.html
+screenshot-*.png
+skill-ui-test.png
+
+# AI-generated plan/doc directories
+docs/superpowers/
 .claude/
 .env
 *.ico
