@@ -923,7 +923,7 @@ export default function App() {
         )}
 
         {/* ── PLUGIN MANAGER panel ─────────────────────────────────────── */}
-        {showPluginManager && !showSettings && (
+        {showPluginManager && !isAiMode && !showSettings && (
           <PluginManager
             colors={colors}
             onClose={() => setShowPluginManager(false)}
@@ -931,7 +931,7 @@ export default function App() {
         )}
 
         {/* ── SKILL MANAGER panel ──────────────────────────────────────── */}
-        {showSkillManager && !showSettings && !showPluginManager && (
+        {showSkillManager && isAiMode && !showSettings && (
           <SkillManager
             colors={colors}
             onClose={() => setShowSkillManager(false)}
