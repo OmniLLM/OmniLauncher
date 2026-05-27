@@ -107,8 +107,9 @@ export default function ResultList({
               gap: "12px",
               padding: "8px 14px",
               cursor: "pointer",
-              transition: "background 150ms ease",
+              transition: "background 150ms ease, transform 120ms ease",
               background: highlighted ? `${colors.surface}CC` : "transparent",
+              transform: highlighted ? "translateX(2px)" : "translateX(0)",
               borderLeft: isSelected
                 ? `3px solid ${colors.accent}`
                 : "3px solid transparent",

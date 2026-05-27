@@ -1046,23 +1046,18 @@ function ChatBubble({
         >
           {turn.tools_used.map((tool, i) => {
             const isSkill = tool.startsWith("🎯");
+            const isActiveLast =
+              turn.isStreaming && i === turn.tools_used!.length - 1;
             return (
               <span
                 key={i}
-                style={{
-                  fontSize: "11px",
-                  background: isSkill
-                    ? `${colors.accent}20`
-                    : `${colors.surface2}CC`,
-                  border: isSkill
-                    ? `1px solid ${colors.accent}55`
-                    : `1px solid ${colors.surface2}`,
-                  padding: "2px 8px",
-                  borderRadius: "10px",
-                  color: isSkill ? colors.accent : colors.sub,
-                  fontWeight: 500,
-                  letterSpacing: "0.02em",
-                }}
+                className={
+                  isActiveLast
+                    ? "chat-msg__tool-badge chat-msg__tool-badge--active"
+                    : isSkill
+                      ? "chat-msg__tool-badge chat-msg__tool-badge--skill"
+                      : "chat-msg__tool-badge"
+                }
               >
                 {isSkill ? tool : `${toolIcon(tool)} ${tool}`}
               </span>
