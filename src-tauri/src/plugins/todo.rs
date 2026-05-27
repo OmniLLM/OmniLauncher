@@ -626,7 +626,7 @@ function makeDataRow(t) {{
   const dueDisplay=t.due?(over?`⚠ ${{t.due}}`:t.due):'—';
   const descPreview=t.desc?`<div class="desc-preview">${{esc(t.desc)}}</div>`:'';
   const completedDisplay=t.completed||'—';
-  const commentCount=t.comments.length>0?`<span style="color:#cba6f7;font-weight:600">${{t.comments.length}}</span>`:'—';
+  const commentCount=t.comments.length>0?`<span style="color:#a78bfa;font-weight:600">${{t.comments.length}}</span>`:'—';
   tr.innerHTML=`
     <td class="col-expand">${{expanded.has(t.id)?'▾':'▸'}}</td>
     <td class="col-id">#${{t.id}}</td>
@@ -634,7 +634,7 @@ function makeDataRow(t) {{
     <td class="col-pri"><span class="${{PRI_CLASS[t.priority]||'pri-3'}}">${{PRI_LABEL[t.priority]||'Normal'}}</span></td>
     <td class="col-status"><span class="badge ${{statusClass(t.status)}}">${{statusLabel(t.status)}}</span></td>
     <td class="col-due">${{dueDisplay}}</td>
-    <td class="col-tags">${{tagHtml||'<span style="color:#45475a">—</span>'}}</td>
+    <td class="col-tags">${{tagHtml||'<span style="color:#475569">—</span>'}}</td>
     <td class="col-date">${{t.date}}</td>
     <td class="col-completed">${{completedDisplay}}</td>
     <td class="col-comments">${{commentCount}}</td>

@@ -62,7 +62,7 @@ pub fn jobs_html() -> String {
     <div class="grid-main">
       <section class="card" style="grid-column: 1 / -1">
         <h2>All Scheduled Jobs</h2>
-        <div id="jobs" style="display:flex;flex-direction:column;gap:10px"></div>
+        <div id="jobs" class="flex flex-col gap-2.5"></div>
       </section>
     </div>
     "##;
@@ -81,19 +81,19 @@ pub fn jobs_html() -> String {
       const el = document.getElementById('jobs');
       if (!items.length) { el.innerHTML='<div class="empty">No scheduled jobs.</div>'; return; }
       el.innerHTML = items.map(j => `
-        <div style="padding:12px 14px;background:var(--bg-2);border:1px solid var(--border);border-radius:12px;display:flex;flex-direction:column;gap:8px">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <span style="color:var(--sub);font-family:ui-monospace,'Cascadia Code',monospace;font-size:11px">#${j.id}</span>
-            <span style="font-weight:600">${esc(j.label)}</span>
+        <div class="job-row">
+          <div class="row-head">
+            <span class="id">#${j.id}</span>
+            <span class="label">${esc(j.label)}</span>
             <span class="badge ${j.enabled?'done':'todo'}">${j.enabled?'ON':'OFF'}</span>
-            <span style="margin-left:auto;color:var(--sub);font-size:11px">${j.runs} runs · created ${esc(j.created||'')}</span>
+            <span class="meta">${j.runs} runs · created ${esc(j.created||'')}</span>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;font-size:12px">
-            <div><span style="color:var(--sub)">Schedule:</span> <code style="background:var(--surface-2);padding:2px 6px;border-radius:4px">${esc(j.schedule)}</code></div>
-            <div><span style="color:var(--sub)">Last run:</span> ${esc(j.last_run||'—')}</div>
-            <div><span style="color:var(--sub)">Next run:</span> ${esc(j.next_run||'—')}</div>
+          <div class="row-grid">
+            <div><span class="k">Schedule:</span> <code>${esc(j.schedule)}</code></div>
+            <div><span class="k">Last run:</span> ${esc(j.last_run||'—')}</div>
+            <div><span class="k">Next run:</span> ${esc(j.next_run||'—')}</div>
           </div>
-          <div style="font-size:12px;color:var(--text);background:var(--surface-2);padding:8px 10px;border-radius:6px;font-family:ui-monospace,'Cascadia Code',monospace;word-break:break-all">${esc(j.command)}</div>
+          <div class="cmd">${esc(j.command)}</div>
         </div>`).join('');
     }
     async function refresh(){

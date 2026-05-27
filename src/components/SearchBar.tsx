@@ -21,6 +21,10 @@ interface Props {
   inputHistory?: string[];
   historyIdx?: number;
   onHistoryNavigate?: (idx: number, value: string) => void;
+  /** Current resolved theme for the toggle icon */
+  resolvedTheme?: "dark" | "light";
+  /** Called when the user clicks the theme toggle button */
+  onThemeToggle?: () => void;
 }
 
 // Non-AI launcher prefixes shown in the idle hint bar.
@@ -112,6 +116,8 @@ export default function SearchBar({
   inputHistory,
   historyIdx,
   onHistoryNavigate,
+  resolvedTheme,
+  onThemeToggle,
 }: Props) {
   const internalRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const inputRef = externalRef ?? internalRef;
@@ -396,6 +402,15 @@ export default function SearchBar({
             </span>
           )}
 
+          {/* Theme toggle button */}
+          {onThemeToggle && (
+            <ThemeToggleButton
+              resolvedTheme={resolvedTheme}
+              colors={colors}
+              onThemeToggle={onThemeToggle}
+            />
+          )}
+
           {/* Settings button */}
           <button
             onClick={onSettingsClick}
@@ -566,7 +581,51 @@ function HintChip({
   );
 }
 
-// ─── Tiny inline spinner ──────────────────────────────────────────────────────
+// ─── Theme toggle button with spin animation ──────────────────────────────────
+
+function ThemeToggleButton({
+  resolvedTheme,
+  colors,
+  onThemeToggle,
+}: {
+  resolvedTheme?: "dark" | "light";
+  colors: Record<string, string>;
+  onThemeToggle: () => void;
+}) {
+  const [spinning, setSpinning] = useState(false);
+
+  const handleClick = () => {
+    setSpinning(true);
+    onThemeToggle();
+    setTimeout(() => setSpinning(false), 380);
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      className={spinning ? "theme-toggle-animate" : ""}
+      style={{
+        background: "none",
+        border: "none",
+        cursor: "pointer",
+        fontSize: "15px",
+        opacity: 0.4,
+        color: colors.text,
+        padding: "4px",
+        flexShrink: 0,
+        lineHeight: 1,
+        transition: "opacity 150ms",
+        display: "inline-flex",
+        alignItems: "center",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.75")}
+      onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.4")}
+      title={resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+    >
+      {resolvedTheme === "dark" ? "☀" : "🌙"}
+    </button>
+  );
+}
 
 function LoadingSpinner({ color }: { color: string }) {
   return (

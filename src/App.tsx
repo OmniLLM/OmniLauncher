@@ -146,17 +146,17 @@ function isHelpHintQuery(input: string): boolean {
 }
 
 const DARK_COLORS = {
-  bg: "#0B1220",
-  surface: "#16233B",
-  surface2: "#203355",
-  text: "#EAF3FF",
-  accent: "#00AEFF",
-  accentDim: "#5ED0FF",
-  sub: "#8AA0C2",
-  userBubble: "#008FDD",
-  userBubbleText: "#FFFFFF",
-  aiBubble: "#16233B",
-  aiText: "#EAF3FF",
+  bg: "#202124",
+  surface: "#303134",
+  surface2: "#3c3f43",
+  text: "#e8eaed",
+  accent: "#8ab4f8",
+  accentDim: "#aecbfa",
+  sub: "#9aa0a6",
+  userBubble: "#1a73e8",
+  userBubbleText: "#ffffff",
+  aiBubble: "#303134",
+  aiText: "#e8eaed",
 };
 
 const LIGHT_COLORS = {
@@ -272,6 +272,18 @@ export default function App() {
   const resolvedTheme: ResolvedTheme =
     theme === "system" ? systemTheme : theme;
   const colors = resolvedTheme === "dark" ? DARK_COLORS : LIGHT_COLORS;
+
+  const handleThemeToggle = useCallback(async () => {
+    const next: ThemeMode = resolvedTheme === "dark" ? "light" : "dark";
+    setTheme(next);
+    // Persist to backend settings so it survives restarts
+    try {
+      const current = await invoke<AppSettings>("get_settings");
+      await invoke("save_settings_cmd", { settings: { ...current, theme: next } });
+    } catch {
+      // non-fatal — the in-memory theme change already happened
+    }
+  }, [resolvedTheme]);
 
   const focusInput = useCallback((select = false) => {
     inputRef.current?.focus();
@@ -1314,6 +1326,8 @@ export default function App() {
             }}
             colors={colors}
             onSettingsClick={() => setShowSettings(true)}
+            resolvedTheme={resolvedTheme}
+            onThemeToggle={handleThemeToggle}
             showHintBar={
               !isAiMode && (isHelpHintQuery(query) || query.trim() === "")
             }

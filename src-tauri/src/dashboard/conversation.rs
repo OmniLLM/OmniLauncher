@@ -196,51 +196,13 @@ pub fn conversation_html() -> String {
       </section>
     </div>
 
-    <section class="card" style="margin-top:16px">
-      <h2 style="display:flex;align-items:center;gap:10px">
+    <section class="card mt-4">
+      <h2 class="flex items-center gap-2.5">
         Sessions
-        <span id="session-note" style="font-size:11px;color:var(--sub);font-weight:400;text-transform:none;letter-spacing:0"></span>
+        <span id="session-note" class="text-[11px] text-slate-500 font-normal normal-case tracking-normal"></span>
       </h2>
-      <div id="sessions" style="display:flex;flex-direction:column;gap:10px"></div>
+      <div id="sessions" class="flex flex-col gap-2.5"></div>
     </section>
-
-    <style>
-      .session {
-        background: var(--bg-2); border: 1px solid var(--border);
-        border-radius: 12px; overflow: hidden;
-        transition: border-color 180ms ease;
-      }
-      .session.open { border-color: var(--accent); }
-      .session-head {
-        display: flex; align-items: center; gap: 10px;
-        padding: 12px 14px; cursor: pointer;
-        user-select: none;
-      }
-      .session-head:hover { background: rgba(94,161,255,0.05); }
-      .session-head .caret { color: var(--sub); transition: transform 180ms ease; }
-      .session.open .session-head .caret { transform: rotate(90deg); color: var(--accent); }
-      .session-head .num {
-        font-family: ui-monospace, 'Cascadia Code', monospace;
-        font-size: 11px; color: var(--sub); min-width: 28px;
-      }
-      .session-head .title {
-        flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        font-weight: 600; font-size: 13.5px;
-      }
-      .session-head .pill {
-        font-size: 10.5px; padding: 2px 8px; border-radius: 999px;
-        background: var(--surface-2); color: var(--sub);
-        border: 1px solid var(--border);
-      }
-      .session-head .pill.u { color: var(--accent); border-color: rgba(94,161,255,0.4); }
-      .session-head .pill.a { color: var(--purple); border-color: rgba(179,137,243,0.4); }
-      .session-head .when { color: var(--sub); font-size: 11px; }
-      .session-body {
-        padding: 4px 14px 14px;
-        display: flex; flex-direction: column; gap: 8px;
-        border-top: 1px solid var(--border);
-      }
-    </style>
     "##;
 
     let script = r##"

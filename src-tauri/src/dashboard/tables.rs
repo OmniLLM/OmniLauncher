@@ -137,11 +137,11 @@ pub fn tables_data_json() -> String {
 pub fn tables_html() -> String {
     let body = r##"
     <h1 class="page-title">Database</h1>
-    <p style="color:var(--sub);margin:-12px 0 24px;font-size:13px">
+    <p class="page-lede">
       Auto-discovered SQLite tables. New tables added by future migrations appear here automatically.
     </p>
     <div class="grid-stats" id="stats"></div>
-    <div id="tables-grid" style="display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))"></div>
+    <div id="tables-grid" class="tbl-grid"></div>
     "##;
 
     let script = r##"
@@ -160,18 +160,18 @@ pub fn tables_html() -> String {
       el.innerHTML = tables.map(t => {
         const samples = (t.samples||[]).map(row => {
           const cells = Object.entries(row).map(([k,v]) =>
-            `<div style="display:flex;gap:6px;font-size:11px;line-height:1.45"><span style="color:var(--sub);min-width:80px">${esc(k)}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(v===null?'—':v)}</span></div>`
+            `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v===null?'—':v)}</span></div>`
           ).join('');
-          return `<div style="padding:6px 8px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px">${cells}</div>`;
+          return `<div class="sample">${cells}</div>`;
         }).join('') || '<div class="empty">empty</div>';
         const cols = (t.columns||[]).join(', ');
-        return `<div class="card" style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
-          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">
-            <div style="font-weight:600;font-family:ui-monospace,'Cascadia Code',monospace;color:var(--accent);font-size:14px">${esc(t.name)}</div>
-            <div style="color:var(--sub);font-size:11px">${t.rows} rows${t.added_today?` · +${t.added_today} today`:''}</div>
+        return `<div class="tbl-card">
+          <div class="head">
+            <div class="name">${esc(t.name)}</div>
+            <div class="rows">${t.rows} rows${t.added_today?` · +${t.added_today} today`:''}</div>
           </div>
-          <div style="color:var(--sub);font-size:10.5px;line-height:1.4;word-break:break-word" title="${esc(cols)}">${esc(cols)}</div>
-          <div style="display:flex;flex-direction:column;gap:4px">${samples}</div>
+          <div class="cols" title="${esc(cols)}">${esc(cols)}</div>
+          <div class="samples">${samples}</div>
         </div>`;
       }).join('');
     }

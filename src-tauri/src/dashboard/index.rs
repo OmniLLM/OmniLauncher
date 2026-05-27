@@ -66,75 +66,10 @@ pub fn index_html() -> String {
     let _ = common::open_db; // silence unused re-export when feature-gated
     let body = r##"
     <h1 class="page-title">Dashboards</h1>
-    <p style="color:var(--sub);margin:-12px 0 24px;font-size:13px">
+    <p class="page-lede">
       Live views of OmniLauncher's local data. Click any card to open the full dashboard.
     </p>
     <div class="dash-grid" id="cards"></div>
-
-    <style>
-      .dash-grid {
-        display: grid; gap: 18px;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      }
-      .dash-card {
-        display: flex; flex-direction: column; gap: 12px;
-        padding: 22px;
-        background: linear-gradient(180deg, var(--surface), var(--bg-2));
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        text-decoration: none;
-        color: var(--text);
-        box-shadow: 0 8px 24px rgba(0,0,0,0.22);
-        transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
-        position: relative;
-        overflow: hidden;
-      }
-      .dash-card::before {
-        content: ""; position: absolute; inset: 0;
-        background: radial-gradient(400px 200px at 100% 0%, var(--card-glow, rgba(94,161,255,0.18)), transparent 70%);
-        pointer-events: none;
-      }
-      .dash-card:hover {
-        transform: translateY(-3px);
-        border-color: var(--card-accent, var(--accent));
-        box-shadow: 0 14px 32px rgba(0,0,0,0.32);
-      }
-      .dash-card .head {
-        display: flex; align-items: center; gap: 12px;
-        position: relative;
-      }
-      .dash-card .icon {
-        width: 40px; height: 40px; flex-shrink: 0;
-        border-radius: 11px;
-        display: inline-flex; align-items: center; justify-content: center;
-        font-size: 20px; font-weight: 700; color: #fff;
-        background: var(--card-accent, var(--accent));
-        box-shadow: 0 6px 14px rgba(0,0,0,0.28);
-      }
-      .dash-card .title { font-size: 16px; font-weight: 700; }
-      .dash-card .desc { color: var(--sub); font-size: 12.5px; line-height: 1.5;
-        position: relative; }
-      .dash-card .metrics {
-        display: flex; gap: 18px; margin-top: 4px;
-        position: relative;
-      }
-      .dash-card .metric { display: flex; flex-direction: column; gap: 2px; }
-      .dash-card .metric .v { font-size: 22px; font-weight: 700;
-        color: var(--card-accent, var(--accent)); }
-      .dash-card .metric .k { font-size: 10.5px; color: var(--sub);
-        text-transform: uppercase; letter-spacing: 0.08em; }
-      .dash-card .cta {
-        margin-top: auto; padding-top: 6px;
-        font-size: 12px; color: var(--sub);
-        display: flex; align-items: center; gap: 6px;
-        position: relative;
-      }
-      .dash-card .cta .arr {
-        transition: transform 180ms ease;
-      }
-      .dash-card:hover .cta { color: var(--text); }
-      .dash-card:hover .cta .arr { transform: translateX(4px); }
-    </style>
     "##;
 
     let script = r##"
