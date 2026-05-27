@@ -104,6 +104,37 @@ fn parse_list(val: &str, list_re: &Regex) -> Vec<String> {
         .collect()
 }
 
+fn normalize_skill_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if let Some(path) = trimmed.strip_prefix("https://github.com/") {
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() >= 5 && parts[2] == "blob" {
+            return format!(
+                "https://raw.githubusercontent.com/{}/{}/{}/{}",
+                parts[0],
+                parts[1],
+                parts[3],
+                parts[4..].join("/")
+            );
+        }
+
+        if parts.len() >= 5 && parts[2] == "tree" {
+            let skill_path = parts[4..].join("/").trim_end_matches('/').to_string();
+            let suffix = if skill_path.ends_with("SKILL.md") {
+                skill_path
+            } else {
+                format!("{}/SKILL.md", skill_path)
+            };
+            return format!(
+                "https://raw.githubusercontent.com/{}/{}/{}/{}",
+                parts[0], parts[1], parts[3], suffix
+            );
+        }
+    }
+
+    trimmed.to_string()
+}
+
 // ─── SkillManager ─────────────────────────────────────────────────────────────
 
 impl SkillManager {
@@ -185,10 +216,12 @@ impl SkillManager {
 
     /// Download and install a skill from a URL.
     pub fn install_from_url(&mut self, url: &str) -> Result<String, String> {
+        let download_url = normalize_skill_url(url);
+
         // Use reqwest in blocking mode via std::process or tokio — but we're in a sync context.
         // We'll delegate to curl/wget as a simple approach.
         let output = std::process::Command::new("curl")
-            .args(["-fsSL", url])
+            .args(["-fsSL", &download_url])
             .output()
             .map_err(|e| format!("curl failed: {}", e))?;
 
@@ -384,6 +417,24 @@ When the user asks to summarize a URL, do the following.
 
         let none = mgr.find_relevant("launch chrome");
         assert_eq!(none.len(), 0);
+    }
+
+    #[test]
+    fn test_normalize_github_tree_skill_url() {
+        let url = "https://github.com/anthropics/skills/tree/main/skills/frontend-design";
+        assert_eq!(
+            normalize_skill_url(url),
+            "https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn test_normalize_github_blob_skill_url() {
+        let url = "https://github.com/anthropics/skills/blob/main/skills/frontend-design/SKILL.md";
+        assert_eq!(
+            normalize_skill_url(url),
+            "https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/SKILL.md"
+        );
     }
 
     #[test]

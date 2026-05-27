@@ -173,7 +173,7 @@ export default function SearchBar({
         {!isAiMode && (
           <div
             style={{
-              padding: compact ? "0 2px 14px" : "12px 16px 0",
+              padding: compact ? "0 2px 12px" : "12px 16px 0",
               animation: "omni-tagline-fadein 240ms ease both",
               textAlign: compact ? "center" : "left",
             }}
@@ -181,10 +181,11 @@ export default function SearchBar({
             <div
               style={{
                 color: colors.text,
-                fontSize: compact ? "18px" : "13px",
+                fontSize: compact ? "16px" : "13px",
                 fontWeight: 800,
-                letterSpacing: compact ? "0.01em" : "0.02em",
+                letterSpacing: compact ? "0.04em" : "0.02em",
                 lineHeight: 1.2,
+                opacity: compact ? 0.9 : 1,
               }}
             >
               OMNILAUNCHER
@@ -197,9 +198,9 @@ export default function SearchBar({
           style={{
             display: "flex",
             alignItems: "center",
-            padding: compact ? "0 16px" : "0 14px",
-            height: compact ? "62px" : "56px",
-            width: compact ? "min(96%, 840px)" : "100%",
+            padding: compact ? "0 18px" : "0 14px",
+            height: compact ? "54px" : "56px",
+            width: compact ? "min(94%, 820px)" : "100%",
             margin: compact ? "0 auto" : undefined,
             gap: "10px",
             border:
@@ -213,8 +214,10 @@ export default function SearchBar({
             background: compact
               ? colors.bg
               : colors.bg,
-            borderRadius: compact ? "18px" : isAiMode ? "0" : "14px",
-            boxShadow: "none",
+            borderRadius: compact ? "16px" : isAiMode ? "0" : "14px",
+            boxShadow: compact
+              ? "0 18px 44px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255,255,255,0.03)"
+              : "none",
           }}
         >
           {/* Leading icon / spinner */}
@@ -275,12 +278,12 @@ export default function SearchBar({
               background: "transparent",
               border: "none",
               outline: "none",
-              fontSize: compact ? "16.5px" : "16px",
+              fontSize: compact ? "15.5px" : "16px",
               color: colors.text,
               caretColor: colors.accent,
               fontFamily: "inherit",
               fontWeight: compact ? 500 : 400,
-              letterSpacing: compact ? "0.005em" : undefined,
+              letterSpacing: 0,
             }}
           />
 
@@ -330,8 +333,8 @@ export default function SearchBar({
         {showHintBar && (
           <div
             style={{
-              padding: compact ? "10px 2px 0" : "4px 16px 8px",
-              width: compact ? "min(96%, 840px)" : "100%",
+              padding: compact ? "8px 2px 0" : "4px 16px 8px",
+              width: compact ? "min(94%, 820px)" : "100%",
               margin: compact ? "0 auto" : undefined,
               animation: "omni-hint-fadein 240ms ease both",
             }}
@@ -342,7 +345,7 @@ export default function SearchBar({
               style={{
                 display: "flex",
                 justifyContent: compact ? "flex-start" : "flex-start",
-                gap: compact ? "6px" : "4px",
+                gap: compact ? "5px" : "4px",
                 flexWrap: wrapHints ? "wrap" : "nowrap",
                 overflowX: wrapHints ? "visible" : "auto",
                 overflowY: "hidden",
@@ -351,7 +354,7 @@ export default function SearchBar({
                 scrollbarColor: compact && !wrapHints
                   ? `${colors.surface2} transparent`
                   : undefined,
-                marginBottom: compact ? "6px" : "4px",
+                marginBottom: compact ? "4px" : "4px",
               }}
             >
               {localHints.map(({ key, label }) => (
@@ -369,7 +372,7 @@ export default function SearchBar({
               style={{
                 display: "flex",
                 justifyContent: compact ? "flex-start" : "flex-start",
-                gap: compact ? "6px" : "4px",
+                gap: compact ? "5px" : "4px",
                 flexWrap: wrapHints ? "wrap" : "nowrap",
                 overflowX: wrapHints ? "visible" : "auto",
                 overflowY: "hidden",
@@ -395,7 +398,7 @@ export default function SearchBar({
                 style={{
                   display: "flex",
                   justifyContent: compact ? "center" : "flex-start",
-                  paddingTop: compact ? "6px" : "8px",
+                  paddingTop: compact ? "4px" : "8px",
                 }}
               >
                 <button
@@ -406,7 +409,7 @@ export default function SearchBar({
                     border: `1px solid ${colors.surface2}`,
                     color: colors.text,
                     borderRadius: compact ? "999px" : "8px",
-                    padding: compact ? "4px 10px" : "4px 9px",
+                    padding: compact ? "3px 10px" : "4px 9px",
                     fontSize: compact ? "10.5px" : "11px",
                     lineHeight: 1.2,
                     cursor: "pointer",
@@ -445,10 +448,10 @@ function HintChip({
         display: "inline-flex",
         alignItems: "center",
         flexShrink: 0,
-        gap: compact ? "5px" : "3px",
-        fontSize: compact ? "10.5px" : "11px",
+        gap: compact ? "4px" : "3px",
+        fontSize: compact ? "10px" : "11px",
         color: compact ? `${colors.text}D0` : colors.sub,
-        lineHeight: 1.35,
+        lineHeight: 1.25,
         userSelect: "none",
         marginRight: compact ? "0" : "4px",
       }}
@@ -456,13 +459,13 @@ function HintChip({
       <kbd
         style={{
           fontFamily: "'Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-          fontSize: compact ? "9.5px" : "10px",
+          fontSize: compact ? "9px" : "10px",
           background: colors.surface,
           color: colors.accent,
-          padding: compact ? "2px 6px" : "1px 5px",
-          borderRadius: compact ? "6px" : "4px",
+          padding: compact ? "1px 6px" : "1px 5px",
+          borderRadius: compact ? "5px" : "4px",
           border: `1px solid ${colors.surface2}`,
-          lineHeight: 1.6,
+          lineHeight: 1.55,
           whiteSpace: "nowrap",
         }}
       >

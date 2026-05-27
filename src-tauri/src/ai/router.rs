@@ -176,6 +176,10 @@ impl Router {
         context: &ConversationContext,
         skill_manager: &SkillManager,
     ) -> AiResponse {
+        if is_skill_inventory_query(query) {
+            return skill_inventory_response(skill_manager);
+        }
+
         let tools = plugin_manager.all_tool_schemas();
 
         let os_info = get_os_info();
@@ -191,41 +195,7 @@ impl Router {
             .collect();
         let tool_list = tool_names.join(", ");
 
-        let system_prompt = format!(
-            "You are OmniLauncher, an AI-powered desktop assistant with full tool access.\n\
-            \n\
-            SYSTEM ENVIRONMENT:\n\
-            - Operating System: {}\n\
-            - Shell: {}\n\
-            \n\
-            IMPORTANT: When executing shell commands via shell_exec or code_execute, you MUST use the correct shell syntax for this OS:\n\
-            {}\n\
-            \n\
-            AVAILABLE TOOLS ({} total): {}\n\
-            \n\
-            TOOL SELECTION STRATEGY — do your best to find the most appropriate tool:\n\
-            - ALWAYS prefer a specific plugin tool over a generic one when one exists.\n\
-              Example: use `color_picker` for color conversion, NOT `shell_exec`.\n\
-              Example: use `dns` for DNS lookups, NOT `shell_exec` with nslookup.\n\
-              Example: use `currency` for currency conversion, NOT `web_search`.\n\
-              Example: use `timestamp` for time conversions, NOT `code_execute`.\n\
-              Example: use `ip_info` for IP lookups, NOT `http_request`.\n\
-            - For each task, mentally scan the full tool list and pick the most targeted one.\n\
-            - Chain tools when needed: e.g. use `web_search` to find info, then `web_fetch` to read it.\n\
-            - Fall back to `shell_exec` or `code_execute` only when no dedicated tool fits.\n\
-            \n\
-            OUTPUT FORMATTING:\n\
-            - Always use well-formatted Markdown in your responses\n\
-            - Use **bold** for emphasis, `inline code` for commands/paths/values\n\
-            - Use ```language\\ncode\\n``` for multi-line code or command output\n\
-            - Use bullet lists (- item) or numbered lists for multiple items\n\
-            - Use tables (| col1 | col2 |) for structured data\n\
-            - Use headers (## Section) to organize longer responses\n\
-            - Keep responses concise but visually clear and scannable\n\
-            \n\
-            Use tools proactively. When in doubt, try the most specific tool first.",
-            os_info.0, os_info.1, os_info.2, tool_names.len(), tool_list
-        );
+        let system_prompt = build_system_prompt(&os_info, tool_names.len(), &tool_list);
 
         // Find relevant skills
         let relevant_skills = skill_manager.find_relevant(query);
@@ -285,41 +255,8 @@ impl Router {
             // Rebuild loop_messages to reflect any compression that occurred
             loop_messages = {
                 let os_info = get_os_info();
-                let system_prompt_rebuild = format!(
-                    "You are OmniLauncher, an AI-powered desktop assistant with full tool access.\n\
-                    \n\
-                    SYSTEM ENVIRONMENT:\n\
-                    - Operating System: {}\n\
-                    - Shell: {}\n\
-                    \n\
-                    IMPORTANT: When executing shell commands via shell_exec or code_execute, you MUST use the correct shell syntax for this OS:\n\
-                    {}\n\
-                    \n\
-                    AVAILABLE TOOLS ({} total): {}\n\
-                    \n\
-                    TOOL SELECTION STRATEGY — do your best to find the most appropriate tool:\n\
-                    - ALWAYS prefer a specific plugin tool over a generic one when one exists.\n\
-                      Example: use `color_picker` for color conversion, NOT `shell_exec`.\n\
-                      Example: use `dns` for DNS lookups, NOT `shell_exec` with nslookup.\n\
-                      Example: use `currency` for currency conversion, NOT `web_search`.\n\
-                      Example: use `timestamp` for time conversions, NOT `code_execute`.\n\
-                      Example: use `ip_info` for IP lookups, NOT `http_request`.\n\
-                    - For each task, mentally scan the full tool list and pick the most targeted one.\n\
-                    - Chain tools when needed: e.g. use `web_search` to find info, then `web_fetch` to read it.\n\
-                    - Fall back to `shell_exec` or `code_execute` only when no dedicated tool fits.\n\
-                    \n\
-                    OUTPUT FORMATTING:\n\
-                    - Always use well-formatted Markdown in your responses\n\
-                    - Use **bold** for emphasis, `inline code` for commands/paths/values\n\
-                    - Use ```language\\ncode\\n``` for multi-line code or command output\n\
-                    - Use bullet lists (- item) or numbered lists for multiple items\n\
-                    - Use tables (| col1 | col2 |) for structured data\n\
-                    - Use headers (## Section) to organize longer responses\n\
-                    - Keep responses concise but visually clear and scannable\n\
-                    \n\
-                    Use tools proactively. When in doubt, try the most specific tool first.",
-                    os_info.0, os_info.1, os_info.2, tool_names.len(), tool_list
-                );
+                let system_prompt_rebuild =
+                    build_system_prompt(&os_info, tool_names.len(), &tool_list);
                 let rebuilt = local_ctx.get_messages_with_system(&system_prompt_rebuild);
                 // Re-append any tool results from previous iterations that aren't in local_ctx
                 rebuilt
@@ -438,11 +375,38 @@ impl Router {
         // If we have tool results but no final content, ask AI to format them
         if final_content.is_empty() && !all_tools_used.is_empty() {
             let mut followup = loop_messages.clone();
-            followup.push(Message::user("Please summarize the tool results above in clean Markdown. \
-                         Be concise. Do NOT show raw output. Only show the formatted/summarized version."));
+            followup.push(Message::user(
+                "Format the tool results above as the final answer to the user. \
+                 Apply the OUTPUT FORMATTING rules strictly: render any list/tabular/key-value data as a Markdown TABLE. \
+                 Do NOT show raw command text or unresolved commands. \
+                 Show only the resolved values, concise and well-structured.",
+            ));
             match ai_client.chat(followup).await {
                 Ok(formatted) => final_content = formatted,
                 Err(e) => final_content = format!("AI error: {}", e),
+            }
+        }
+
+        // Output-formatter pass: when tools were used and the answer doesn't already
+        // contain table/structured markdown, run one normalization call so the user
+        // always gets table-formatted output where the data is tabular.
+        if !all_tools_used.is_empty()
+            && !final_content.is_empty()
+            && needs_output_formatting(&final_content)
+        {
+            let mut formatter_msgs = loop_messages.clone();
+            formatter_msgs.push(Message::user(&format!(
+                "Reformat the following answer for the user. \
+                 Apply the OUTPUT FORMATTING rules strictly: render any list/tabular/key-value data as a Markdown TABLE; \
+                 use bullet lists only for single-attribute lists; never paste raw shell/PowerShell commands as if they were the result. \
+                 Preserve all factual content; only change presentation. Return ONLY the reformatted answer.\n\n\
+                 --- ORIGINAL ANSWER ---\n{}\n--- END ---",
+                final_content
+            )));
+            if let Ok(formatted) = ai_client.chat(formatter_msgs).await {
+                if !formatted.trim().is_empty() {
+                    final_content = formatted;
+                }
             }
         }
 
@@ -935,33 +899,7 @@ impl Router {
 
                 match subcmd {
                     "list" | "" => {
-                        let metas = skill_manager.list_meta();
-                        if metas.is_empty() {
-                            return AiResponse {
-                                content: "No skills loaded. Install skills with `/skill install <url|path>`".to_string(),
-                                tools_used: vec![],
-                                results: vec![],
-                                is_ai: false,
-                            };
-                        }
-                        let mut lines = vec!["## 🎯 Installed Skills\n".to_string()];
-                        for meta in &metas {
-                            let triggers = meta.triggers.join(", ");
-                            lines.push(format!(
-                                "### {} `v{}`\n{}\n\n**Triggers:** {}\n**Tags:** {}\n",
-                                meta.name,
-                                meta.version,
-                                meta.description,
-                                triggers,
-                                meta.tags.join(", ")
-                            ));
-                        }
-                        AiResponse {
-                            content: lines.join("\n"),
-                            tools_used: vec![],
-                            results: vec![],
-                            is_ai: false,
-                        }
+                        skill_inventory_response(skill_manager)
                     }
                     "view" => {
                         if subarg.is_empty() {
@@ -1152,7 +1090,7 @@ const SKILL_HELP: &str = "\
 | `/skill reload` | Hot-reload all skills |
 | `/skill help` | Show this help |
 
-**Tip:** Open the visual Skill Manager with `/skills` or `/sm` for a rich UI experience.
+**Tip:** Open the visual Skill Manager with `/skills` for a rich UI experience.
 
 **About Skills:**
 Skills are Markdown files (`SKILL.md`) with YAML frontmatter that inject behavior into the AI assistant.
@@ -1195,6 +1133,61 @@ fn get_command_help(cmd: &str) -> String {
     }
 }
 
+fn is_skill_inventory_query(query: &str) -> bool {
+    let normalized = query
+        .trim()
+        .to_lowercase()
+        .replace(['?', '.', '!', ','], " ");
+    let words: Vec<&str> = normalized.split_whitespace().collect();
+    let mentions_skills = words.iter().any(|word| *word == "skill" || *word == "skills");
+    let asks_to_list = words.iter().any(|word| {
+        matches!(
+            *word,
+            "show" | "list" | "display" | "available" | "installed" | "what" | "which"
+        )
+    });
+
+    mentions_skills && asks_to_list
+}
+
+fn skill_inventory_response(skill_manager: &SkillManager) -> AiResponse {
+    let metas = skill_manager.list_meta();
+    if metas.is_empty() {
+        return AiResponse {
+            content: "No skills loaded. Install skills with `/skill install <url|path>` or open `/skills`.".to_string(),
+            tools_used: vec![],
+            results: vec![],
+            is_ai: false,
+        };
+    }
+
+    let mut lines = vec!["## 🎯 Installed Skills\n".to_string()];
+    for meta in &metas {
+        let triggers = if meta.triggers.is_empty() {
+            "none".to_string()
+        } else {
+            meta.triggers.join(", ")
+        };
+        let tags = if meta.tags.is_empty() {
+            "none".to_string()
+        } else {
+            meta.tags.join(", ")
+        };
+
+        lines.push(format!(
+            "### {} `v{}`\n{}\n\n**Triggers:** {}\n**Tags:** {}\n",
+            meta.name, meta.version, meta.description, triggers, tags
+        ));
+    }
+
+    AiResponse {
+        content: lines.join("\n"),
+        tools_used: vec!["skills".to_string()],
+        results: vec![],
+        is_ai: false,
+    }
+}
+
 /// Returns (os_name, shell, instructions) tuple for the current platform
 fn get_os_info() -> (&'static str, &'static str, &'static str) {
     if cfg!(target_os = "windows") {
@@ -1229,6 +1222,117 @@ fn get_os_info() -> (&'static str, &'static str, &'static str) {
              - For code_execute, prefer language='bash' for system tasks",
         )
     }
+}
+
+/// Build the AI system prompt. Centralised so the agentic loop's per-iteration
+/// rebuild stays in sync with the initial prompt and we only update formatting
+/// rules in one place.
+fn build_system_prompt(
+    os_info: &(&'static str, &'static str, &'static str),
+    tool_count: usize,
+    tool_list: &str,
+) -> String {
+    format!(
+        "You are OmniLauncher, an AI-powered desktop assistant with full tool access.\n\
+        \n\
+        SYSTEM ENVIRONMENT:\n\
+        - Operating System: {}\n\
+        - Shell: {}\n\
+        \n\
+        IMPORTANT: When executing shell commands via shell_exec or code_execute, you MUST use the correct shell syntax for this OS:\n\
+        {}\n\
+        \n\
+        AVAILABLE TOOLS ({} total): {}\n\
+        \n\
+        TOOL SELECTION STRATEGY — do your best to find the most appropriate tool:\n\
+        - ALWAYS prefer a specific plugin tool over a generic one when one exists.\n\
+          Example: use `color_picker` for color conversion, NOT `shell_exec`.\n\
+          Example: use `dns` for DNS lookups, NOT `shell_exec` with nslookup.\n\
+          Example: use `currency` for currency conversion, NOT `web_search`.\n\
+          Example: use `timestamp` for time conversions, NOT `code_execute`.\n\
+          Example: use `ip_info` for IP lookups, NOT `http_request`.\n\
+        - For each task, mentally scan the full tool list and pick the most targeted one.\n\
+        - Chain tools when needed: e.g. use `web_search` to find info, then `web_fetch` to read it.\n\
+        - Fall back to `shell_exec` or `code_execute` only when no dedicated tool fits.\n\
+        \n\
+        OUTPUT FORMATTING — MANDATORY, applies to EVERY response:\n\
+        - You are the output formatter. EVERY answer must be presented as clean, well-structured Markdown derived from the resolved tool results — never as raw command text.\n\
+        - PREFER MARKDOWN TABLES. If the data is a list of items with one or more attributes, key/value pairs, or any tabular structure (printers, IPs, processes, files, env vars, services, network connections, ports, properties), render it as a table:\n\
+          | # | Name | Value |\n\
+          |---|------|-------|\n\
+          | 1 | ...  | ...   |\n\
+        - Use tables for: multi-attribute lists, key/value property dumps, comparisons, structured CLI output (netstat, ipconfig, tasklist, Get-Process, Get-NetIPAddress, Get-Printer, services, env vars).\n\
+        - Use bullet lists ONLY for short single-column lists (≤ 1 attribute per item).\n\
+        - Use ## headers to group multiple tables/sections in longer responses.\n\
+        - Use **bold** for emphasis, `inline code` for paths/commands/values/identifiers.\n\
+        - Use ```language fenced blocks ONLY for actual source code or truly unstructured multi-line output that cannot be tabulated.\n\
+        - NEVER paste the raw PowerShell/bash command as if it were the answer. If a tool returned the command text itself or failed, say so explicitly and re-run with the correct tool — do not echo the command as the result.\n\
+        - Strip noise: column separator lines (e.g. ----), blank lines, redundant ID-only columns, and irrelevant metadata.\n\
+        - Be concise but visually clear and scannable.\n\
+        \n\
+        Use tools proactively. When in doubt, try the most specific tool first.",
+        os_info.0, os_info.1, os_info.2, tool_count, tool_list
+    )
+}
+
+/// Heuristic: decide whether the final assistant content still needs a
+/// second-pass output-formatter call. We skip the extra call when the
+/// answer is already well-formatted to avoid unnecessary latency.
+fn needs_output_formatting(content: &str) -> bool {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Already contains a markdown table — trust it.
+    let has_table = trimmed
+        .lines()
+        .any(|l| l.contains('|') && l.matches('|').count() >= 2);
+    if has_table {
+        return false;
+    }
+
+    // Very short single-line answers don't need reformatting.
+    if trimmed.lines().count() <= 1 && trimmed.len() < 120 {
+        return false;
+    }
+
+    // Looks like raw command text echoed back — definitely reformat.
+    let looks_like_raw_command = trimmed.contains("Invoke-WebRequest")
+        || trimmed.contains("Get-NetIPAddress")
+        || trimmed.contains("Get-Process")
+        || trimmed.contains("Get-Printer")
+        || trimmed.contains("Get-Service")
+        || trimmed.contains("netstat ")
+        || trimmed.contains("ipconfig ")
+        || trimmed.contains("tasklist");
+    if looks_like_raw_command {
+        return true;
+    }
+
+    // Multi-item list of >=3 items without a table → reformat as table.
+    let bullet_count = trimmed
+        .lines()
+        .filter(|l| {
+            let s = l.trim_start();
+            s.starts_with("- ") || s.starts_with("* ") || s.starts_with("• ")
+        })
+        .count();
+    if bullet_count >= 3 {
+        return true;
+    }
+
+    // Multi-line raw output (>= 3 non-empty lines) with no markdown markers.
+    let non_empty_lines = trimmed.lines().filter(|l| !l.trim().is_empty()).count();
+    let has_markdown_marker = trimmed.contains("**")
+        || trimmed.contains("##")
+        || trimmed.contains("```")
+        || trimmed.contains('`');
+    if non_empty_lines >= 3 && !has_markdown_marker {
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -1266,5 +1370,14 @@ mod tests {
         assert_eq!(Router::strip_ai_prefix("ai help me"), "help me");
         assert_eq!(Router::strip_ai_prefix("AI help me"), "help me");
         assert_eq!(Router::strip_ai_prefix("chrome"), "chrome");
+    }
+
+    #[test]
+    fn test_skill_inventory_query_detection() {
+        assert!(is_skill_inventory_query("show your skills"));
+        assert!(is_skill_inventory_query("which skills are installed?"));
+        assert!(is_skill_inventory_query("list available skill"));
+        assert!(!is_skill_inventory_query("use frontend-design skill for this UI"));
+        assert!(!is_skill_inventory_query("help me design a frontend"));
     }
 }

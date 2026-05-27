@@ -255,16 +255,18 @@ async fn set_window_geometry(
     window: tauri::WebviewWindow,
     height: f64,
     ai_mode: bool,
+    panel_mode: Option<bool>,
 ) -> Result<bool, String> {
-    sync_window_geometry(&window, height, ai_mode).await
+    sync_window_geometry(&window, height, ai_mode, panel_mode.unwrap_or(false)).await
 }
 
 async fn sync_window_geometry(
     window: &tauri::WebviewWindow,
     height: f64,
     ai_mode: bool,
+    panel_mode: bool,
 ) -> Result<bool, String> {
-    let clamped_height = height.clamp(56.0, 640.0);
+    let clamped_height = height.clamp(56.0, 1200.0);
     log::trace!("sync_window_geometry requested height={height}, clamped={clamped_height}");
 
     if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
@@ -276,8 +278,10 @@ async fn sync_window_geometry(
         let monitor_x = monitor_position.x as f64 / scale_factor;
         let monitor_y = monitor_position.y as f64 / scale_factor;
 
-        let window_width = if ai_mode {
-            monitor_width * 0.4
+        let window_width = if panel_mode {
+            monitor_width * 0.5
+        } else if ai_mode {
+            monitor_width * 0.5
         } else {
             monitor_width / 3.0
         };
@@ -298,7 +302,7 @@ async fn sync_window_geometry(
             .map_err(|e| e.to_string())?;
         Ok(true)
     } else {
-        let fallback_width = if ai_mode { 768.0 } else { 680.0 };
+        let fallback_width = if ai_mode { 768.0 } else { 640.0 };
         log::debug!(
             "No monitor info available; applying fallback geometry width={fallback_width:.2} height={clamped_height:.2}"
         );

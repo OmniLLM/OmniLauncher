@@ -176,12 +176,6 @@ interface SlashCommand {
 
 const SLASH_COMMANDS: SlashCommand[] = [
   {
-    cmd: "/skill",
-    description: "Manage AI skills (list, view, install, reload)",
-    usage: "/skill list | view <name> | install <path> | reload | help",
-    examples: ["/skill list", "/skill view web-summarizer", "/skill install ~/my-skill/SKILL.md"],
-  },
-  {
     cmd: "/plugins",
     shortcut: "/pm",
     description: "Open external plugin manager",
@@ -190,10 +184,9 @@ const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     cmd: "/skills",
-    shortcut: "/sm",
-    description: "Open skill manager UI (install, view, delete skills)",
+    description: "Open skill manager (install, view, delete skills)",
     usage: "/skills",
-    examples: ["/skills", "/sm"],
+    examples: ["/skills"],
   },
   {
     cmd: "/new",
@@ -527,59 +520,19 @@ export default function App() {
         return;
       }
 
-      if (value.trimStart().toLowerCase() === "/plugins" || value.trimStart().toLowerCase() === "/pm") {
+      const slashCommand = value.trim().toLowerCase();
+
+      if (slashCommand === "/plugins" || slashCommand === "/pm") {
         setShowPluginManager(true);
         setResults([]);
         setQuery("");
         return;
       }
 
-      if (value.trimStart().toLowerCase() === "/skills" || value.trimStart().toLowerCase() === "/sm") {
+      if (slashCommand === "/skills") {
         setShowSkillManager(true);
         setResults([]);
         setQuery("");
-        return;
-      }
-
-      if (value.trimStart().toLowerCase().startsWith("/skill")) {
-        const slashQuery = value.trim();
-        const userTurn: ConversationTurn = { role: "user", content: slashQuery };
-        const pendingAiTurn: ConversationTurn = {
-          role: "assistant",
-          content: "",
-          tools_used: [],
-          isStreaming: true,
-        };
-        setAiModeEnabled(true);
-        setConversationHistory((prev) => [...prev, userTurn, pendingAiTurn]);
-        setLoading(true);
-        setResults([]);
-        setQuery("");
-        try {
-          const res = await invoke<AiResponse>("execute_slash_command", { query: slashQuery });
-          setConversationHistory((prev) => {
-            const next = [...prev];
-            next[next.length - 1] = {
-              role: "assistant",
-              content: res.content,
-              tools_used: res.tools_used,
-              isStreaming: false,
-            };
-            return next;
-          });
-        } catch (e) {
-          setConversationHistory((prev) => {
-            const next = [...prev];
-            next[next.length - 1] = {
-              role: "assistant",
-              content: `Error: ${e}`,
-              isStreaming: false,
-            };
-            return next;
-          });
-        } finally {
-          setLoading(false);
-        }
         return;
       }
 
@@ -735,13 +688,19 @@ export default function App() {
   const launcherHasContent =
     results.length > 0 || showSettings || showPluginManager || showSkillManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
-  const panelHeight = isAiMode
-    ? 560
-    : launcherHasContent
-      ? 520
-      : isHintBarExpanded
-        ? 320
-        : 210;
+  const isPanelMode = showPluginManager || showSkillManager;
+  const screenHeight = typeof window !== "undefined" ? window.screen.height : 1080;
+  const compactHeight = Math.max(320, Math.round(screenHeight * 0.3));
+  const aiHeight = Math.max(560, Math.round(screenHeight * 0.5));
+  const panelHeight = isPanelMode
+    ? Math.round(screenHeight * 0.4)
+    : isAiMode
+      ? aiHeight
+      : launcherHasContent
+        ? 520
+        : isHintBarExpanded
+          ? 320
+          : compactHeight;
   const windowHeight = `${panelHeight}px`;
   const maxHeight = `${panelHeight}px`;
   const shellFont =
@@ -751,8 +710,9 @@ export default function App() {
     invoke("set_window_geometry", {
       height: panelHeight,
       aiMode: isAiMode,
+      panelMode: isPanelMode,
     }).catch(() => {});
-  }, [panelHeight, isAiMode]);
+  }, [panelHeight, isAiMode, isPanelMode]);
 
   return (
     <>
@@ -807,7 +767,7 @@ export default function App() {
           display: "flex",
           flexDirection: "column",
           justifyContent: isCompactMode ? "center" : "flex-start",
-          padding: isCompactMode ? "14px 0" : 0,
+          padding: isCompactMode ? "0" : 0,
           boxSizing: "border-box",
           transition:
             "height 220ms cubic-bezier(0.4,0,0.2,1), max-height 220ms cubic-bezier(0.4,0,0.2,1)",
@@ -862,7 +822,7 @@ export default function App() {
         )}
 
         {/* ── AI MODE: scrollable chat history ─────────────────────────── */}
-        {isAiMode && !showSkillManager && (
+        {isAiMode && !showSkillManager && !showSettings && (
           <div
             ref={chatScrollRef}
             style={{
@@ -931,7 +891,7 @@ export default function App() {
         )}
 
         {/* ── SKILL MANAGER panel ──────────────────────────────────────── */}
-        {showSkillManager && isAiMode && !showSettings && (
+        {showSkillManager && !showSettings && (
           <SkillManager
             colors={colors}
             onClose={() => setShowSkillManager(false)}
@@ -962,22 +922,29 @@ export default function App() {
           />
         )}
 
-        {/* ── Search / input bar (always at bottom) ────────────────────── */}
-        <SearchBar
-          value={query}
-          onChange={handleQueryChange}
-          onSubmit={handleSubmit}
-          isAiMode={isAiMode}
-          loading={loading}
-          colors={colors}
-          onSettingsClick={() => setShowSettings((s) => !s)}
-          showHintBar={
-            !isAiMode && (isHelpHintQuery(query) || query.trim() === "")
-          }
-          compact={isCompactMode}
-          inputRef={inputRef}
-          onHintBarExpandedChange={setIsHintBarExpanded}
-        />
+        <div
+          style={{
+            flexShrink: 0,
+            transform: isCompactMode ? "translateY(-18px)" : undefined,
+          }}
+        >
+          {/* ── Search / input bar (always at bottom) ────────────────────── */}
+          <SearchBar
+            value={query}
+            onChange={handleQueryChange}
+            onSubmit={handleSubmit}
+            isAiMode={isAiMode}
+            loading={loading}
+            colors={colors}
+            onSettingsClick={() => setShowSettings((s) => !s)}
+            showHintBar={
+              !isAiMode && (isHelpHintQuery(query) || query.trim() === "")
+            }
+            compact={isCompactMode}
+            inputRef={inputRef}
+            onHintBarExpandedChange={setIsHintBarExpanded}
+          />
+        </div>
       </div>
     </>
   );
