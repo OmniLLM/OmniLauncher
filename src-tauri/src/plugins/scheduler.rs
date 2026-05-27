@@ -20,6 +20,10 @@ fn open_db() -> rusqlite::Result<Connection> {
         rusqlite::Error::InvalidPath(format!("Failed to create data dir {:?}: {}", dir, e).into())
     })?;
     let conn = Connection::open(db_path())?;
+    // Allow concurrent readers (dashboard polls every 5s) and let writers wait
+    // up to 5s instead of failing immediately with SQLITE_BUSY.
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    let _ = conn.pragma_update(None, "busy_timeout", 5000);
     db::run_migrations(&conn)?;
     Ok(conn)
 }
@@ -218,13 +222,21 @@ pub fn toggle_job(id: i64, enabled: bool) -> bool {
 
 /// Called by the scheduler background task after executing a job.
 pub fn record_run(id: i64, schedule: &Schedule) {
-    let Ok(conn) = open_db() else { return };
+    let conn = match open_db() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[scheduler] record_run open_db failed for job #{}: {}", id, e);
+            return;
+        }
+    };
     let now = unix_to_iso(now_unix());
     let next = unix_to_iso(schedule.next_from_now());
-    let _ = conn.execute(
+    if let Err(e) = conn.execute(
         "UPDATE scheduled_jobs SET last_run = ?1, next_run = ?2, run_count = run_count + 1 WHERE id = ?3",
         params![now, next, id],
-    );
+    ) {
+        eprintln!("[scheduler] record_run UPDATE failed for job #{}: {}", id, e);
+    }
 }
 
 fn unix_to_iso(t: i64) -> String {
