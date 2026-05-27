@@ -8,6 +8,42 @@ pub enum GuardrailAction {
 
 pub struct Guardrails;
 
+/// Sensitive path fragments that should never be read by tools regardless of where
+/// the user's home directory lives. Matched case-insensitively against the
+/// normalized (forward-slash) absolute path.
+const SENSITIVE_READ_FRAGMENTS: &[&str] = &[
+    "/.ssh/",
+    "/.aws/credentials",
+    "/.aws/config",
+    "/.gnupg/",
+    "/.config/gcloud/",
+    "/.kube/config",
+    "/.docker/config.json",
+    "/.netrc",
+    "/.npmrc",
+    "/.pypirc",
+    "/.git-credentials",
+    "/etc/shadow",
+    "/etc/sudoers",
+    "/etc/ssh/ssh_host",
+];
+
+/// Path prefixes (normalized to forward slashes, lowercase) that are off-limits
+/// for both reading and writing by tools.
+const DENIED_PATH_PREFIXES: &[&str] = &[
+    "/etc/",
+    "/sys/",
+    "/proc/",
+    "/dev/",
+    "/boot/",
+    "c:/windows/system32/",
+    "c:/windows/syswow64/",
+];
+
+fn normalize_path(path: &str) -> String {
+    path.replace('\\', "/").to_lowercase()
+}
+
 impl Guardrails {
     /// Check whether a shell command should be allowed, warned about, or denied.
     pub fn check_shell_command(cmd: &str) -> GuardrailAction {
