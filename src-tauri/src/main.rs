@@ -175,6 +175,17 @@ pub fn run() {
                 LiveResponse::json(omnilauncher_lib::dashboard::tables_data_json())
             })
             .await;
+        live_server_task
+            .register_route("/dashboard/github", || {
+                LiveResponse::html(omnilauncher_lib::dashboard::github_html())
+            })
+            .await;
+        live_server_task
+            .register_route("/dashboard/github/data", || {
+                let rt = tokio::runtime::Handle::current();
+                LiveResponse::json(rt.block_on(omnilauncher_lib::dashboard::github_data_json()))
+            })
+            .await;
         log::info!(
             "starting live server on http://127.0.0.1:{}",
             live_server_port

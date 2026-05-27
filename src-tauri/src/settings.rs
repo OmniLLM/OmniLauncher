@@ -15,6 +15,16 @@ pub struct AppSettings {
     /// `~/.omnilauncher/plugins/`.  Each entry is an absolute path string.
     #[serde(default)]
     pub plugin_dirs: Vec<String>,
+    /// GitHub personal access token (classic or fine-grained).
+    #[serde(default)]
+    pub github_token: String,
+    /// GitHub API server base URL. Leave empty for github.com ("https://api.github.com").
+    /// For GitHub Enterprise set to e.g. "https://github.example.com/api/v3".
+    #[serde(default)]
+    pub github_server: String,
+    /// GitHub organisations/owners to show in the dashboard (comma-separated or as array).
+    #[serde(default)]
+    pub github_orgs: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -28,6 +38,9 @@ impl Default for AppSettings {
             max_results: 10,
             background_url: String::new(),
             plugin_dirs: vec![],
+            github_token: String::new(),
+            github_server: String::new(),
+            github_orgs: vec![],
         }
     }
 }

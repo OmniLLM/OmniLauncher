@@ -106,6 +106,11 @@ pub fn index_html() -> String {
         metrics: d => [
           { k: "tables", v: d.tables.count },
         ] },
+      { key: "github",       href: "/dashboard/github",       icon: "⚙",
+        title: "GitHub",
+        desc: "Open issues and pull requests grouped by org and repo. Filter by org, repo, or type.",
+        accent: "#8ab4f8", glow: "rgba(138,180,248,0.18)",
+        metrics: d => [] },
     ];
 
     function renderCards(d) {

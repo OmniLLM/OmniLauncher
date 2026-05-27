@@ -12,12 +12,14 @@
 
 mod common;
 mod conversation;
+mod github;
 mod index;
 mod jobs;
 mod tables;
 mod todos;
 
 pub use conversation::{conversation_data_json, conversation_html};
+pub use github::{github_data_json, github_html};
 pub use index::{index_data_json, index_html};
 pub use jobs::{jobs_data_json, jobs_html};
 pub use tables::{tables_data_json, tables_html};

@@ -29,6 +29,7 @@ pub fn create_plugin_manager() -> PluginManager {
     pm.register(Box::new(plugins::file_search::FileSearchPlugin));
     pm.register(Box::new(plugins::file_write::FileWritePlugin));
     pm.register(Box::new(plugins::git::GitPlugin));
+    pm.register(Box::new(plugins::github::GitHubPlugin));
     pm.register(Box::new(plugins::glob::GlobPlugin));
     pm.register(Box::new(plugins::grep::GrepPlugin));
     pm.register(Box::new(plugins::hosts::HostsPlugin));
