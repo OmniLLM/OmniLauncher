@@ -91,14 +91,14 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     )?;
 
     for m in migrations() {
-        let already_applied: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM _migrations WHERE version = ?1",
-                [m.version],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap_or(0)
-            > 0;
+        // ✅ Propagate errors so callers know if the DB is broken instead of
+        // silently treating query failures as "not applied".
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM _migrations WHERE version = ?1",
+            [m.version],
+            |row| row.get(0),
+        )?;
+        let already_applied = count > 0;
 
         if already_applied {
             continue;
@@ -110,4 +110,26 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+
+    #[test]
+    fn test_run_migrations_idempotent() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        run_migrations(&conn).expect("first migration run");
+        run_migrations(&conn).expect("second migration run should be idempotent");
+    }
+
+    #[test]
+    fn test_migration_tracking_records_version() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        run_migrations(&conn).expect("migrations");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations", [], |r| r.get(0))
+            .expect("query");
+        assert!(count > 0, "at least one migration should be recorded");
+    }
 }
