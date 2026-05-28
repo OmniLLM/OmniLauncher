@@ -309,6 +309,41 @@ export default function SearchBar({
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   onSubmit(value, e.ctrlKey || e.metaKey);
+                  return;
+                }
+                // Shell-style history navigation. Only steal the arrow key
+                // when (a) the draft is empty so the caret has nowhere to
+                // go, or (b) we're already cycling through history.
+                const inHistory = (historyIdx ?? -1) >= 0;
+                if (
+                  e.key === "ArrowUp" &&
+                  !e.shiftKey &&
+                  !e.altKey &&
+                  (value === "" || inHistory)
+                ) {
+                  e.preventDefault();
+                  const newIdx = Math.min(
+                    (historyIdx ?? -1) + 1,
+                    (inputHistory?.length ?? 0) - 1,
+                  );
+                  if (newIdx >= 0 && inputHistory && inputHistory[newIdx]) {
+                    onHistoryNavigate?.(newIdx, inputHistory[newIdx]);
+                  }
+                  return;
+                }
+                if (
+                  e.key === "ArrowDown" &&
+                  !e.shiftKey &&
+                  !e.altKey &&
+                  inHistory
+                ) {
+                  e.preventDefault();
+                  const newIdx = (historyIdx ?? 0) - 1;
+                  if (newIdx < 0) {
+                    onHistoryNavigate?.(-1, "");
+                  } else if (inputHistory && inputHistory[newIdx]) {
+                    onHistoryNavigate?.(newIdx, inputHistory[newIdx]);
+                  }
                 }
               }}
               placeholder={placeholder}

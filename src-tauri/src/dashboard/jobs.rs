@@ -20,17 +20,23 @@ fn aggregate() -> Value {
     );
 
     let mut jobs: Vec<Value> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
+    let mut load_error: Option<String> = None;
+    match conn.prepare(
         "SELECT id, label, schedule, command, enabled, COALESCE(run_count,0), \
                 COALESCE(last_run,''), COALESCE(next_run,''), substr(created_at,1,10) \
          FROM scheduled_jobs ORDER BY id DESC",
     ) {
-        if let Ok(rows) = stmt.query_map([], |r| {
+        Err(e) => load_error = Some(format!("prepare: {e}")),
+        Ok(mut stmt) => match stmt.query_map([], |r| {
+            // `command` is read via ValueRef to tolerate both TEXT and BLOB
+            // storage (legacy rows inserted via sqlite3 `readfile()` came
+            // back as BLOB; freshly migrated rows are TEXT basenames).
+            let cmd = crate::plugins::scheduler::command_as_string(r, 3)?;
             Ok(json!({
                 "id":       r.get::<_, i64>(0)?,
                 "label":    r.get::<_, String>(1)?,
                 "schedule": r.get::<_, String>(2)?,
-                "command":  r.get::<_, String>(3)?,
+                "command":  cmd,
                 "enabled":  r.get::<_, i64>(4)? != 0,
                 "runs":     r.get::<_, i64>(5)?,
                 "last_run": r.get::<_, String>(6)?,
@@ -38,17 +44,30 @@ fn aggregate() -> Value {
                 "created":  r.get::<_, String>(8).unwrap_or_default(),
             }))
         }) {
-            for v in rows.flatten() {
-                jobs.push(v);
+            Err(e) => load_error = Some(format!("query_map: {e}")),
+            Ok(rows) => {
+                for row in rows {
+                    match row {
+                        Ok(v) => jobs.push(v),
+                        Err(e) => {
+                            load_error = Some(format!("row map: {e}"));
+                            break;
+                        }
+                    }
+                }
             }
-        }
+        },
     }
 
-    json!({
+    let mut out = json!({
         "generated_at": now_human(),
         "total": total, "enabled": enabled, "runs": runs,
         "jobs": jobs,
-    })
+    });
+    if let Some(err) = load_error {
+        out["load_error"] = Value::String(err);
+    }
+    out
 }
 
 pub fn jobs_data_json() -> String {

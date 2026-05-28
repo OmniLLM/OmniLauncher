@@ -270,6 +270,7 @@ pub fn run() {
             log::debug!("Running Tauri setup");
 
             // Start background scheduler (must be inside setup — tokio runtime is live here)
+            omnilauncher_lib::plugins::scheduler::migrate_inline_commands_to_files();
             omnilauncher_lib::plugins::scheduler::start_scheduler();
 
             let window = app.get_webview_window("main").unwrap();

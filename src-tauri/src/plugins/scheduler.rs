@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub struct SchedulerPlugin;
 
@@ -181,7 +182,7 @@ pub fn list_jobs() -> Vec<Job> {
             id: row.get(0)?,
             label: row.get(1)?,
             schedule: row.get(2)?,
-            command: row.get(3)?,
+            command: command_as_string(row, 3)?,
             enabled: row.get::<_, i64>(4)? != 0,
             last_run: row.get(5)?,
             next_run: row.get(6)?,
@@ -192,22 +193,150 @@ pub fn list_jobs() -> Vec<Job> {
     .unwrap_or_default()
 }
 
+/// Read the `command` column tolerantly: SQLite typing is dynamic per-row
+/// and legacy data may be stored as either TEXT or BLOB depending on how
+/// the row was inserted. rusqlite's `get::<String>` and `get::<Vec<u8>>`
+/// each only accept one of those, so we go through `ValueRef` and accept
+/// both, decoding bytes as UTF-8 (lossy).
+pub(crate) fn command_as_string(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<String> {
+    use rusqlite::types::ValueRef;
+    match row.get_ref(idx)? {
+        ValueRef::Text(b) | ValueRef::Blob(b) => {
+            Ok(String::from_utf8_lossy(b).into_owned())
+        }
+        ValueRef::Null => Ok(String::new()),
+        other => Ok(format!("{:?}", other)),
+    }
+}
+
 pub fn add_job(label: &str, schedule: &Schedule, command: &str) -> rusqlite::Result<i64> {
     let conn = open_db()?;
     let sched_str = schedule.to_stored();
     let next = unix_to_iso(schedule.next_from_now());
+    // Two-step insert: we need the rowid to name the script file, so insert
+    // with a placeholder command, then UPDATE once the file is on disk.
     conn.execute(
         "INSERT INTO scheduled_jobs (label, schedule, command, enabled, next_run) VALUES (?1, ?2, ?3, 1, ?4)",
-        params![label, sched_str, command, next],
+        params![label, sched_str, "__pending__", next],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+
+    let filename = match write_script_for_job(id, command) {
+        Ok(name) => name,
+        Err(e) => {
+            // Couldn't write the file → roll back the row to avoid a job that
+            // references a missing script.
+            let _ = conn.execute("DELETE FROM scheduled_jobs WHERE id = ?1", params![id]);
+            return Err(rusqlite::Error::InvalidPath(
+                format!("failed to persist script for job #{}: {}", id, e).into(),
+            ));
+        }
+    };
+    conn.execute(
+        "UPDATE scheduled_jobs SET command = ?1 WHERE id = ?2",
+        params![filename, id],
+    )?;
+    Ok(id)
+}
+
+/// Materialise a job's script body to `~/.omnilauncher/scheduler/scripts/job_<id>.<ext>`
+/// and return the basename. Picks the extension from the body's shebang (or
+/// the global default if none is present) so the resident file can be hand-
+/// edited as the right language.
+fn write_script_for_job(id: i64, body: &str) -> std::io::Result<String> {
+    let ext = match executor_for(body) {
+        Executor::Python     => "py",
+        Executor::PowerShell => "ps1",
+        Executor::Sh         => "sh",
+    };
+    let dir = scripts_dir();
+    let filename = format!("job_{}.{}", id, ext);
+    // Remove any stale file with a different extension for this id so we don't
+    // accidentally keep two scripts for the same job.
+    for old in ["py", "ps1", "sh"] {
+        if old != ext {
+            let _ = std::fs::remove_file(dir.join(format!("job_{}.{}", id, old)));
+        }
+    }
+    let file_body = if matches!(executor_for(body), Executor::Sh) && !body.starts_with("#!") {
+        format!("#!/bin/sh\n{}\n", body)
+    } else {
+        body.to_string()
+    };
+    std::fs::write(dir.join(&filename), file_body)?;
+    Ok(filename)
+}
+
+/// At startup, walk `scheduled_jobs` and externalise any row whose `command`
+/// column still holds an inline script body (legacy rows from before the
+/// script-file refactor). After migration the column holds just the basename
+/// like `job_18.py`.
+pub fn migrate_inline_commands_to_files() {
+    let conn = match open_db() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[scheduler] migrate: open_db failed: {}", e);
+            return;
+        }
+    };
+    let mut to_migrate: Vec<(i64, String)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT id, command FROM scheduled_jobs") {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, command_as_string(r, 1)?))
+        }) {
+            for row in rows.flatten() {
+                if looks_like_script_filename(&row.1) {
+                    continue;
+                }
+                to_migrate.push(row);
+            }
+        }
+    }
+    for (id, body) in to_migrate {
+        match write_script_for_job(id, &body) {
+            Ok(filename) => {
+                if let Err(e) = conn.execute(
+                    "UPDATE scheduled_jobs SET command = ?1 WHERE id = ?2",
+                    params![filename, id],
+                ) {
+                    eprintln!("[scheduler] migrate: UPDATE failed for job #{}: {}", id, e);
+                } else {
+                    eprintln!("[scheduler] migrate: job #{} → {}", id, filename);
+                }
+            }
+            Err(e) => eprintln!("[scheduler] migrate: write failed for job #{}: {}", id, e),
+        }
+    }
+}
+
+/// Heuristic: a stored `command` value that's a single token of the form
+/// `job_<n>.<ext>` (no whitespace, no newlines) is treated as a filename
+/// reference; everything else is treated as an inline body that still needs
+/// to be migrated.
+fn looks_like_script_filename(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() || t.contains(['\n', '\r', ' ', '\t']) {
+        return false;
+    }
+    matches!(
+        std::path::Path::new(t).extension().and_then(|e| e.to_str()),
+        Some("py" | "ps1" | "sh")
+    ) && t.starts_with("job_")
 }
 
 pub fn delete_job(id: i64) -> bool {
     let Ok(conn) = open_db() else { return false };
-    conn.execute("DELETE FROM scheduled_jobs WHERE id = ?1", params![id])
+    let removed = conn
+        .execute("DELETE FROM scheduled_jobs WHERE id = ?1", params![id])
         .map(|n| n > 0)
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if removed {
+        let dir = scripts_dir();
+        for ext in ["py", "ps1", "sh"] {
+            let _ = std::fs::remove_file(dir.join(format!("job_{}.{}", id, ext)));
+        }
+    }
+    removed
 }
 
 pub fn toggle_job(id: i64, enabled: bool) -> bool {
@@ -307,36 +436,7 @@ fn run_job(id: i64, label: &str, command: &str, schedule: &Schedule) {
     let _ = schedule; // reserved for future use (e.g. timeout based on schedule)
 
     tokio::spawn(async move {
-        #[cfg(windows)]
-        let output = {
-            // Write the command to a temp .cmd file and run it via cmd /C.
-            // This avoids fragile nested-quote handling when the command itself
-            // contains things like `powershell -Command "..."`, and lets the
-            // user's command be interpreted as a normal Windows batch line.
-            let mut path = std::env::temp_dir();
-            path.push(format!(
-                "omnilauncher_job_{}_{}.cmd",
-                id,
-                now_unix()
-            ));
-            let write_res = std::fs::write(&path, format!("@echo off\r\n{}\r\n", cmd));
-            let result = match write_res {
-                Ok(()) => {
-                    tokio::process::Command::new("cmd")
-                        .args(["/C", path.to_str().unwrap_or("")])
-                        .output()
-                        .await
-                }
-                Err(e) => Err(e),
-            };
-            let _ = std::fs::remove_file(&path);
-            result
-        };
-        #[cfg(not(windows))]
-        let output = tokio::process::Command::new("sh")
-            .args(["-c", &cmd])
-            .output()
-            .await;
+        let output = spawn_command(&cmd, id).await;
 
         let result_msg = match output {
             Ok(out) => {
@@ -366,6 +466,250 @@ fn strip_clixml(s: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Which interpreter the scheduler should use to run a job command.
+/// Python is preferred for cross-platform / cross-syntax consistency;
+/// falls back to PowerShell on Windows and `sh` on Unix when no Python
+/// interpreter is on PATH.
+#[derive(Clone, Copy, Debug)]
+enum Executor {
+    Python,
+    PowerShell,
+    Sh,
+}
+
+impl Executor {
+    fn label(self) -> &'static str {
+        match self {
+            Executor::Python => "python",
+            Executor::PowerShell => "powershell",
+            Executor::Sh => "sh",
+        }
+    }
+}
+
+fn python_bin() -> &'static Option<String> {
+    static CACHE: OnceLock<Option<String>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        // Invocation prefix (whitespace-separated) → probe args used to
+        // confirm it's actually executable. `py -3` is the Windows launcher.
+        let candidates: &[(&str, &[&str])] = &[
+            ("python3", &["--version"]),
+            ("python",  &["--version"]),
+            #[cfg(windows)]
+            ("py -3",   &["--version"]),
+        ];
+        for (prefix, probe) in candidates {
+            let mut parts = prefix.split_whitespace();
+            let bin = parts.next().unwrap();
+            let extra_args: Vec<&str> = parts.collect();
+            let mut cmd = std::process::Command::new(bin);
+            for a in &extra_args {
+                cmd.arg(a);
+            }
+            for a in probe.iter() {
+                cmd.arg(a);
+            }
+            if let Ok(out) = cmd.output() {
+                if out.status.success() {
+                    return Some((*prefix).to_string());
+                }
+            }
+        }
+        None
+    })
+}
+
+fn pick_executor() -> Executor {
+    if python_bin().is_some() {
+        Executor::Python
+    } else if cfg!(windows) {
+        Executor::PowerShell
+    } else {
+        Executor::Sh
+    }
+}
+
+/// Look at the first non-empty line of the body for a shebang-style
+/// language hint and return the explicit `Executor` it picks. Recognises:
+///   `#!python`, `#!python3`, `#!/usr/bin/env python[3]`
+///   `#!powershell`, `#!pwsh`, `#!ps1`, `#!/usr/bin/env pwsh`
+///   `#!sh`, `#!bash`, `#!/bin/sh`, `#!/bin/bash`, `#!/usr/bin/env bash`
+/// Returns `None` if no recognised hint is present; the caller then falls
+/// back to `pick_executor()` (Python preferred).
+fn detect_explicit_executor(body: &str) -> Option<Executor> {
+    let first = body.lines().find(|l| !l.trim().is_empty())?.trim();
+    if !first.starts_with("#!") {
+        return None;
+    }
+    let rest = &first[2..];
+    let lc = rest.to_ascii_lowercase();
+    if lc.contains("python") {
+        Some(Executor::Python)
+    } else if lc.contains("pwsh") || lc.contains("powershell") || lc.ends_with(".ps1") {
+        Some(Executor::PowerShell)
+    } else if lc.contains("bash") || lc.ends_with("/sh") || lc == "sh" {
+        Some(Executor::Sh)
+    } else {
+        None
+    }
+}
+
+/// Resolve the executor to use for a given job body: explicit shebang
+/// wins, otherwise the global preference order applies (Python → shell).
+fn executor_for(body: &str) -> Executor {
+    detect_explicit_executor(body).unwrap_or_else(pick_executor)
+}
+
+/// Directory where scheduler script files live. One file per job (named
+/// `job_<id>.<ext>`), plus throwaway `validate_<ts>.<ext>` files for
+/// dry-runs. We keep the per-job files around so the user can inspect or
+/// hand-edit them outside the app.
+fn scripts_dir() -> PathBuf {
+    let dir = path_config::data_dir().join("scheduler").join("scripts");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Execute either a stored job script (when `cmd` is a `job_<id>.<ext>`
+/// filename living under `~/.omnilauncher/scheduler/scripts/`) or an
+/// ad-hoc body (used by validation). Returns the captured
+/// `std::process::Output`.
+///
+/// Filename references are resolved against the scripts dir directly so the
+/// scheduler never re-writes the on-disk script at run time — the file is
+/// the source of truth and the user can hand-edit it. Inline bodies are
+/// materialised as `validate_<ts>.<ext>` and deleted after the run.
+async fn spawn_command(cmd: &str, tag: i64) -> std::io::Result<std::process::Output> {
+    let dir = scripts_dir();
+
+    let (path, is_ephemeral, executor) = if looks_like_script_filename(cmd) {
+        let path = dir.join(cmd.trim());
+        if !path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("script file missing: {}", path.display()),
+            ));
+        }
+        let body = std::fs::read_to_string(&path).unwrap_or_default();
+        let executor = detect_explicit_executor(&body)
+            .or_else(|| {
+                path.extension().and_then(|e| e.to_str()).and_then(|e| match e {
+                    "py"  => Some(Executor::Python),
+                    "ps1" => Some(Executor::PowerShell),
+                    "sh"  => Some(Executor::Sh),
+                    _ => None,
+                })
+            })
+            .unwrap_or_else(pick_executor);
+        (path, false, executor)
+    } else {
+        let executor = executor_for(cmd);
+        let (ext, file_body) = match executor {
+            Executor::Python     => ("py",  cmd.to_string()),
+            Executor::PowerShell => ("ps1", cmd.to_string()),
+            Executor::Sh         => ("sh",  format!("#!/bin/sh\n{}\n", cmd)),
+        };
+        let p = if tag > 0 {
+            dir.join(format!("job_{}.{}", tag, ext))
+        } else {
+            dir.join(format!("validate_{}.{}", now_unix(), ext))
+        };
+        std::fs::write(&p, file_body)?;
+        (p, tag <= 0, executor)
+    };
+
+    let path_str = path.to_string_lossy().to_string();
+    let result = match executor {
+        Executor::Python => {
+            let prefix = python_bin().clone().unwrap_or_else(|| "python".into());
+            let mut parts = prefix.split_whitespace();
+            let bin = parts.next().unwrap_or("python");
+            let mut command = tokio::process::Command::new(bin);
+            for arg in parts {
+                command.arg(arg);
+            }
+            command.arg(&path_str).output().await
+        }
+        Executor::PowerShell => {
+            tokio::process::Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    &path_str,
+                ])
+                .output()
+                .await
+        }
+        Executor::Sh => {
+            tokio::process::Command::new("sh")
+                .arg(&path_str)
+                .output()
+                .await
+        }
+    };
+
+    if is_ephemeral {
+        let _ = std::fs::remove_file(&path);
+    }
+    result
+}
+
+/// Dry-run a scheduled-job command exactly the way the scheduler would,
+/// but synchronously and with a timeout. Returns `Ok(stdout snippet)` on
+/// exit-code-0, `Err(error message)` otherwise. Used by `action="add"` to
+/// catch broken commands before they hit the scheduler, and by
+/// `action="validate"` for ad-hoc re-checks.
+async fn validate_command(cmd: &str, timeout_secs: u64) -> Result<String, String> {
+    let cmd_owned = cmd.to_string();
+    let executor_label = executor_for(cmd).label();
+
+    let exec = async move { spawn_command(&cmd_owned, 0).await };
+
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        exec,
+    )
+    .await
+    {
+        Ok(res) => res.map_err(|e| format!("failed to spawn: {}", e))?,
+        Err(_) => {
+            return Err(format!(
+                "command did not finish within {}s — still considered runnable, but slow jobs can overlap their next scheduled tick",
+                timeout_secs
+            ));
+        }
+    };
+
+    let stdout = strip_clixml(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_clixml(&String::from_utf8_lossy(&output.stderr));
+    if output.status.success() {
+        let snippet = stdout.trim();
+        let body = if snippet.is_empty() {
+            "(no output)".to_string()
+        } else if snippet.chars().count() > 400 {
+            format!("{}…", snippet.chars().take(400).collect::<String>())
+        } else {
+            snippet.to_string()
+        };
+        Ok(format!("[{}] {}", executor_label, body))
+    } else {
+        let code = output
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "?".into());
+        let err = stderr.trim();
+        let detail = if err.is_empty() {
+            stdout.trim().to_string()
+        } else {
+            err.to_string()
+        };
+        Err(format!("[{}] exit {}: {}", executor_label, code, detail))
+    }
 }
 
 fn send_notification(title: &str, body: &str) {
@@ -595,11 +939,12 @@ impl Plugin for SchedulerPlugin {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "description": "'list', 'add', 'delete', 'enable', or 'disable'" },
-                        "id": { "type": "integer", "description": "Job ID (required for delete/enable/disable)" },
+                        "action": { "type": "string", "description": "'list', 'add', 'delete', 'enable', 'disable', or 'validate'" },
+                        "id": { "type": "integer", "description": "Job ID (required for delete/enable/disable; optional for validate)" },
                         "label": { "type": "string", "description": "Job label (required for add)" },
                         "schedule": { "type": "string", "description": "Schedule for add. One of: interval ('5m','1h','30s','45sec','10min'); daily time 'HH:MM' (e.g. '09:30' = every day at 9:30); 5-field cron '*/5 * * * *'. Plain values like '11:33' MUST be in HH:MM 24h form." },
-                        "command": { "type": "string", "description": "Shell command to run (required for add)" }
+                        "command": { "type": "string", "description": "Script body to run (required for add; optional for validate). Default interpreter is Python (when available); start the body with a shebang to force a different one: '#!powershell' or '#!pwsh' for PowerShell, '#!sh' or '#!bash' for a POSIX shell. The body is written to ~/.omnilauncher/scheduler/scripts/job_<id>.<ext> and executed from there." },
+                        "force": { "type": "boolean", "description": "If true, skip the pre-flight test run during 'add' even when the command currently fails. Default false — broken commands are rejected." }
                     },
                     "required": ["action"]
                 }
@@ -640,9 +985,56 @@ impl Plugin for SchedulerPlugin {
                     Ok(s) => s,
                     Err(e) => return format!("Error: {}", e),
                 };
-                match add_job(label, &schedule, cmd) {
-                    Ok(id) => format!("Job #{} added: {} — {} | cmd: {}", id, label, schedule.display(), cmd),
-                    Err(e) => format!("Error adding job: {}", e),
+
+                // Pre-flight: dry-run the command once so the user finds out
+                // about syntax errors / missing binaries / etc. BEFORE the
+                // job gets persisted and starts firing on its own. Skipped
+                // when `force: true` so a known-currently-failing job can
+                // still be scheduled (e.g. command depends on a future state).
+                let force = args["force"].as_bool().unwrap_or(false);
+                if !force {
+                    match validate_command(cmd, 30).await {
+                        Ok(snippet) => {
+                            match add_job(label, &schedule, cmd) {
+                                Ok(id) => format!(
+                                    "Job #{} added (validated ✓): {} — {} | cmd: {}\nTest run output: {}",
+                                    id, label, schedule.display(), cmd, snippet
+                                ),
+                                Err(e) => format!("Error adding job: {}", e),
+                            }
+                        }
+                        Err(e) => format!(
+                            "Validation failed — job NOT added. Fix the command or retry with force=true.\nReason: {}",
+                            e
+                        ),
+                    }
+                } else {
+                    match add_job(label, &schedule, cmd) {
+                        Ok(id) => format!(
+                            "Job #{} added (validation skipped ⚠): {} — {} | cmd: {}",
+                            id, label, schedule.display(), cmd
+                        ),
+                        Err(e) => format!("Error adding job: {}", e),
+                    }
+                }
+            }
+            "validate" => {
+                // Dry-run an arbitrary command OR an existing job id without
+                // touching the schedule.  Returns the captured output / exit
+                // status so the user can confirm the command still works.
+                let cmd: String = if let Some(id) = args["id"].as_i64() {
+                    match list_jobs().into_iter().find(|j| j.id == id) {
+                        Some(j) => j.command,
+                        None => return format!("Job #{} not found", id),
+                    }
+                } else if let Some(c) = args["command"].as_str() {
+                    c.to_string()
+                } else {
+                    return "Error: 'validate' needs either 'id' (existing job) or 'command' (ad-hoc string)".to_string();
+                };
+                match validate_command(&cmd, 30).await {
+                    Ok(snippet) => format!("✓ runnable — output: {}", snippet),
+                    Err(e) => format!("✗ failed — {}", e),
                 }
             }
             "delete" => {
