@@ -79,6 +79,36 @@ impl ExternalPlugin {
             None
         }
     }
+
+    /// Template skeleton shared by query / execute_tool / execute_action.
+    ///
+    /// Sends `request` as JSON on stdin, waits up to `timeout_secs`, and
+    /// returns the raw stdout string. Returns `None` on spawn failure, process
+    /// error, or timeout — logging a warning in each case.
+    async fn call_op(
+        &self,
+        request: serde_json::Value,
+        timeout_secs: u64,
+        op_name: &str,
+    ) -> Option<String> {
+        match timeout(Duration::from_secs(timeout_secs), self.call(&request.to_string())).await {
+            Ok(Some(output)) => Some(output),
+            Ok(None) => {
+                log::warn!(
+                    "External plugin '{}' {} failed",
+                    self.manifest.name, op_name
+                );
+                None
+            }
+            Err(_) => {
+                log::warn!(
+                    "External plugin '{}' {} timed out ({timeout_secs}s)",
+                    self.manifest.name, op_name
+                );
+                None
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -100,71 +130,48 @@ impl Plugin for ExternalPlugin {
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
-        let request = serde_json::json!({
-            "op": "query",
-            "query": q.raw,
-        });
-        let input = request.to_string();
-
-        let result = timeout(Duration::from_secs(3), self.call(&input)).await;
-
-        match result {
-            Ok(Some(output)) => {
-                // Parse {"results": [...]}
-                match serde_json::from_str::<serde_json::Value>(&output) {
-                    Ok(val) => val["results"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|item| {
-                                    Some(QueryResult {
-                                        id: {
-                                            let raw_id = item["id"].as_str()?.to_string();
-                                            // For plugin_execute callbacks we need to
-                                            // route back to this plugin, so prefix the
-                                            // id with `<plugin_name>::` as a routing tag.
-                                            if item["action_type"].as_str() == Some("plugin_execute") {
-                                                format!("{}::{}", self.manifest.name, raw_id)
-                                            } else {
-                                                raw_id
-                                            }
-                                        },
-                                        title: item["title"].as_str()?.to_string(),
-                                        subtitle: item["subtitle"].as_str().map(|s| s.to_string()),
-                                        icon: item["icon"]
-                                            .as_str()
-                                            .map(|s| s.to_string())
-                                            .or_else(|| self.manifest.icon.clone()),
-                                        score: item["score"].as_i64().unwrap_or(50) as i32,
-                                        action_type: item["action_type"]
-                                            .as_str()
-                                            .unwrap_or("shell")
-                                            .to_string(),
-                                        action_data: item["action_data"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string(),
-                                    })
-                                })
-                                .collect()
+        let request = serde_json::json!({ "op": "query", "query": q.raw });
+        let Some(output) = self.call_op(request, 3, "query").await else {
+            return vec![];
+        };
+        match serde_json::from_str::<serde_json::Value>(&output) {
+            Ok(val) => val["results"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|item| {
+                            Some(QueryResult {
+                                id: {
+                                    let raw_id = item["id"].as_str()?.to_string();
+                                    if item["action_type"].as_str() == Some("plugin_execute") {
+                                        format!("{}::{}", self.manifest.name, raw_id)
+                                    } else {
+                                        raw_id
+                                    }
+                                },
+                                title: item["title"].as_str()?.to_string(),
+                                subtitle: item["subtitle"].as_str().map(|s| s.to_string()),
+                                icon: item["icon"]
+                                    .as_str()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| self.manifest.icon.clone()),
+                                score: item["score"].as_i64().unwrap_or(50) as i32,
+                                action_type: item["action_type"]
+                                    .as_str()
+                                    .unwrap_or("shell")
+                                    .to_string(),
+                                action_data: item["action_data"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
                         })
-                        .unwrap_or_default(),
-                    Err(e) => {
-                        log::warn!(
-                            "External plugin '{}' returned invalid JSON: {e}",
-                            self.manifest.name
-                        );
-                        vec![]
-                    }
-                }
-            }
-            Ok(None) => {
-                log::warn!("External plugin '{}' query failed", self.manifest.name);
-                vec![]
-            }
-            Err(_) => {
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(e) => {
                 log::warn!(
-                    "External plugin '{}' query timed out (3 s)",
+                    "External plugin '{}' returned invalid JSON: {e}",
                     self.manifest.name
                 );
                 vec![]
@@ -173,61 +180,24 @@ impl Plugin for ExternalPlugin {
     }
 
     async fn execute_tool(&self, args: serde_json::Value) -> String {
-        let request = serde_json::json!({
-            "op": "tool_call",
-            "args": args,
-        });
-        let input = request.to_string();
-
-        match timeout(Duration::from_secs(10), self.call(&input)).await {
-            Ok(Some(output)) => {
-                // Parse {"output": "..."}
-                match serde_json::from_str::<serde_json::Value>(&output) {
-                    Ok(val) => val["output"].as_str().unwrap_or(&output).to_string(),
-                    Err(_) => output,
-                }
-            }
-            Ok(None) => {
-                log::warn!("External plugin '{}' execute failed", self.manifest.name);
-                String::new()
-            }
-            Err(_) => {
-                log::warn!(
-                    "External plugin '{}' execute timed out (10 s)",
-                    self.manifest.name
-                );
-                String::new()
-            }
+        let request = serde_json::json!({ "op": "tool_call", "args": args });
+        let Some(output) = self.call_op(request, 10, "execute_tool").await else {
+            return String::new();
+        };
+        match serde_json::from_str::<serde_json::Value>(&output) {
+            Ok(val) => val["output"].as_str().unwrap_or(&output).to_string(),
+            Err(_) => output,
         }
     }
 
     async fn execute_action(&self, id: &str, action_data: &str) -> Option<String> {
-        let request = serde_json::json!({
-            "op": "execute",
-            "id": id,
-            "action_data": action_data,
-        });
-        let input = request.to_string();
-
-        match timeout(Duration::from_secs(10), self.call(&input)).await {
-            Ok(Some(output)) => match serde_json::from_str::<serde_json::Value>(&output) {
-                Ok(val) => Some(val["output"].as_str().unwrap_or("").to_string()),
-                Err(_) => Some(output),
-            },
-            Ok(None) => {
-                log::warn!(
-                    "External plugin '{}' execute_action failed",
-                    self.manifest.name
-                );
-                None
-            }
-            Err(_) => {
-                log::warn!(
-                    "External plugin '{}' execute_action timed out (10 s)",
-                    self.manifest.name
-                );
-                None
-            }
+        let request = serde_json::json!({ "op": "execute", "id": id, "action_data": action_data });
+        let Some(output) = self.call_op(request, 10, "execute_action").await else {
+            return None;
+        };
+        match serde_json::from_str::<serde_json::Value>(&output) {
+            Ok(val) => Some(val["output"].as_str().unwrap_or("").to_string()),
+            Err(_) => Some(output),
         }
     }
 }
@@ -426,30 +396,36 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
 
     let mut plugins: Vec<ExternalPlugin> = vec![];
 
-    for base in &dirs {
-        if !base.exists() {
-            continue;
-        }
-        match std::fs::read_dir(base) {
-            Ok(entries) => {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        for (plugin_dir, manifest) in discover_plugins_in_repo(&path) {
-                            log::info!(
-                                "Discovered external plugin '{}' from {}",
-                                manifest.name,
-                                plugin_dir.display()
-                            );
-                            plugins.push(ExternalPlugin::new(plugin_dir, manifest));
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("Failed to scan plugin dir {}: {e}", base.display());
-            }
-        }
-    }
     plugins
+}
+
+#[cfg(test)]
+mod external_template_tests {
+    use super::*;
+
+    /// Verify that call_op with an instant-failing process returns None
+    /// and doesn't panic. We use a manifest pointing to a nonexistent entry
+    /// so the spawn fails immediately.
+    #[tokio::test]
+    async fn test_call_op_returns_none_on_spawn_failure() {
+        let plugin = ExternalPlugin::new(
+            std::path::PathBuf::from("/nonexistent/dir"),
+            PluginManifest {
+                name: "test".to_string(),
+                description: "test".to_string(),
+                version: "0.1.0".to_string(),
+                keyword: None,
+                icon: None,
+                entry: "run.sh".to_string(),
+                entry_windows: None,
+                tool_schema: None,
+            },
+        );
+        let result = plugin.call_op(
+            serde_json::json!({"op": "query", "query": "test"}),
+            1,
+            "query",
+        ).await;
+        assert!(result.is_none());
+    }
 }
