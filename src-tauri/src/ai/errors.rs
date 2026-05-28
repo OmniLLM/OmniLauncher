@@ -1,3 +1,66 @@
+/// Structured error type for all AI client operations.
+#[derive(Debug, thiserror::Error)]
+pub enum AiError {
+    /// HTTP client / transport error (connection refused, DNS failure, etc.)
+    #[error("HTTP transport error: {0}")]
+    Transport(String),
+
+    /// The server responded with a non-2xx status.
+    #[error("API error {status}: {body}")]
+    Api { status: u16, body: String },
+
+    /// JSON serialization / deserialization failure.
+    #[error("JSON error: {0}")]
+    Json(String),
+
+    /// Request timed out.
+    #[error("request timed out")]
+    Timeout,
+
+    /// The AI model produced malformed output (bad tool call, etc.)
+    #[error("model error: {0}")]
+    Model(String),
+
+    /// Context / token budget exceeded.
+    #[error("context limit exceeded: {0}")]
+    ContextLimit(String),
+}
+
+impl AiError {
+    /// Convert from a raw reqwest error string (used during migration from String errors).
+    pub fn from_reqwest_str(s: &str) -> Self {
+        if s.contains("timed out") || s.contains("timeout") {
+            AiError::Timeout
+        } else {
+            AiError::Transport(s.to_string())
+        }
+    }
+
+    /// True for errors that indicate a non-2xx HTTP response with a specific status.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            AiError::Api { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+}
+
+/// Classify an `AiError` into an `ErrorClass` for retry/recovery logic.
+pub fn classify_ai_error(err: &AiError) -> ErrorClass {
+    match err {
+        AiError::Timeout => ErrorClass::Transient,
+        AiError::Transport(_) => ErrorClass::Transient,
+        AiError::Api { status, .. } => match status {
+            429 | 502 | 503 => ErrorClass::Transient,
+            400 | 401 | 403 | 404 | 422 => ErrorClass::Permanent,
+            _ => ErrorClass::Permanent,
+        },
+        AiError::Json(_) => ErrorClass::Permanent,
+        AiError::Model(_) => ErrorClass::ModelError,
+        AiError::ContextLimit(_) => ErrorClass::ResourceError,
+    }
+}
+
 /// Classification of AI/network errors to guide retry and recovery strategies.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ErrorClass {
@@ -103,5 +166,35 @@ mod tests {
             ErrorClass::Permanent
         );
         assert_eq!(classify_error("some unknown error"), ErrorClass::Permanent);
+    }
+}
+
+#[cfg(test)]
+mod ai_error_tests {
+    use super::*;
+
+    #[test]
+    fn test_ai_error_display_api() {
+        let e = AiError::Api { status: 429, body: "rate limited".into() };
+        assert!(e.to_string().contains("429"));
+        assert!(e.to_string().contains("rate limited"));
+    }
+
+    #[test]
+    fn test_ai_error_display_timeout() {
+        let e = AiError::Timeout;
+        assert!(e.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn test_ai_error_classify_transient() {
+        let e = AiError::Api { status: 429, body: "too many".into() };
+        assert_eq!(classify_ai_error(&e), ErrorClass::Transient);
+    }
+
+    #[test]
+    fn test_ai_error_classify_permanent() {
+        let e = AiError::Api { status: 401, body: "unauthorized".into() };
+        assert_eq!(classify_ai_error(&e), ErrorClass::Permanent);
     }
 }
