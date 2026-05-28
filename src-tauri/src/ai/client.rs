@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(test))]
 use tauri::Emitter;
 
+use crate::ai::errors::{classify_ai_error, AiError, ErrorClass};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
@@ -93,9 +95,9 @@ pub struct ChatResponse {
 }
 
 pub struct AiClient {
-    pub base_url: String,
-    pub api_key: String,
-    pub model: String,
+    base_url: String,
+    api_key: String,
+    model: String,
 }
 
 impl AiClient {
@@ -107,59 +109,48 @@ impl AiClient {
         }
     }
 
-    fn build_client(&self) -> Result<reqwest::Client, String> {
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn build_client(&self) -> Result<reqwest::Client, AiError> {
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
-            .map_err(|e| e.to_string())
+            .map_err(|e| AiError::Transport(e.to_string()))
     }
 
-    /// Returns true if the error message indicates a retriable failure.
-    fn is_retriable(err: &str) -> bool {
-        let lower = err.to_lowercase();
-        // Network-level errors (reqwest errors contain these keywords)
-        if lower.contains("connection") || lower.contains("network") || lower.contains("timed out")
-        {
-            return true;
-        }
-        // HTTP status codes and textual rate-limit messages
-        lower.contains("rate limit")
-            || lower.contains("429")
-            || lower.contains("503")
-            || lower.contains("502")
-    }
-
-    pub async fn chat(&self, messages: Vec<Message>) -> Result<String, String> {
+    pub async fn chat(&self, messages: Vec<Message>) -> Result<String, AiError> {
         let resp = self.chat_with_tools(messages, vec![]).await?;
         Ok(resp.content.unwrap_or_default())
     }
 
-    /// Wrapper with retry logic (max 3 attempts, 2 s base delay + 0–1 s jitter).
+    /// Wrapper with retry logic (max 3 attempts, 2 s base delay + XOR-shift jitter).
     ///
-    /// Retries on: network errors, rate-limit, 429, 502, 503.
-    /// Does NOT retry on 4xx auth/bad-request errors (400, 401, 403, 404, 422).
+    /// Retries on: transient errors (timeout, transport, 429, 502, 503).
+    /// Does NOT retry on permanent errors (auth, bad request, etc.).
     pub async fn chat_with_tools(
         &self,
         messages: Vec<Message>,
         tools: Vec<serde_json::Value>,
-    ) -> Result<ChatResponse, String> {
+    ) -> Result<ChatResponse, AiError> {
         const MAX_ATTEMPTS: u32 = 3;
         const BASE_DELAY_MS: u64 = 2_000;
 
-        let mut last_err = String::new();
+        let mut last_err: Option<AiError> = None;
 
         for attempt in 0..MAX_ATTEMPTS {
-            // Exponential backoff with random jitter (0–1 s) for retries
             if attempt > 0 {
                 let backoff_ms = BASE_DELAY_MS * (1u64 << (attempt - 1));
-                // Simple pseudo-random jitter using sub-millisecond system time
-                let jitter_ms = (std::time::SystemTime::now()
+                let seed = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .subsec_millis() as u64)
-                    % 1_000;
-                let sleep_ms = backoff_ms + jitter_ms;
-                tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
+                    .subsec_nanos() as u64;
+                let jitter_ms = seed.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(attempt as u64) % 1_000;
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms + jitter_ms)).await;
             }
 
             match self
@@ -167,32 +158,18 @@ impl AiClient {
                 .await
             {
                 Ok(resp) => return Ok(resp),
-                Err(e) => {
-                    // Do NOT retry on non-429 4xx errors (auth, bad request, etc.)
-                    let lower = e.to_lowercase();
-                    let is_4xx_non_retriable = (lower.contains("400")
-                        || lower.contains("401")
-                        || lower.contains("403")
-                        || lower.contains("404")
-                        || lower.contains("422"))
-                        && !lower.contains("429");
-
-                    if is_4xx_non_retriable {
-                        return Err(e);
+                Err(e) => match classify_ai_error(&e) {
+                    ErrorClass::Transient => {
+                        last_err = Some(e);
                     }
-
-                    if Self::is_retriable(&e) {
-                        last_err = e;
-                        // continue to next attempt
-                    } else {
-                        // Non-retriable unknown error — fail immediately
-                        return Err(e);
-                    }
-                }
+                    _ => return Err(e),
+                },
             }
         }
 
-        Err(last_err)
+        Err(last_err.unwrap_or(AiError::Transport(
+            "max retries exhausted".into(),
+        )))
     }
 
     /// Single (non-retrying) API call — used internally by `chat_with_tools`.
@@ -200,7 +177,7 @@ impl AiClient {
         &self,
         messages: Vec<Message>,
         tools: Vec<serde_json::Value>,
-    ) -> Result<ChatResponse, String> {
+    ) -> Result<ChatResponse, AiError> {
         let client = self.build_client()?;
 
         let api_messages: Vec<serde_json::Value> = messages
@@ -216,13 +193,16 @@ impl AiClient {
 
                 // Tool calls on assistant messages
                 if let Some(ref tcs) = m.tool_calls {
-                    let tc_json: Vec<serde_json::Value> = tcs.iter().map(|tc| {
-                    serde_json::json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": { "name": tc.function.name, "arguments": tc.function.arguments }
-                    })
-                }).collect();
+                    let tc_json: Vec<serde_json::Value> = tcs
+                        .iter()
+                        .map(|tc| {
+                            serde_json::json!({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": { "name": tc.function.name, "arguments": tc.function.arguments }
+                            })
+                        })
+                        .collect();
                     msg["tool_calls"] = serde_json::json!(tc_json);
                 }
 
@@ -258,15 +238,25 @@ impl AiClient {
             req = req.bearer_auth(&self.api_key);
         }
 
-        let response = req.send().await.map_err(|e| e.to_string())?;
+        let response = req
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    AiError::Timeout
+                } else {
+                    AiError::Transport(e.to_string())
+                }
+            })?;
 
         if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, text));
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AiError::Api { status, body });
         }
 
-        let json: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        let json: serde_json::Value =
+            response.json().await.map_err(|e| AiError::Json(e.to_string()))?;
 
         let choice = &json["choices"][0]["message"];
         let content = choice["content"].as_str().map(|s| s.to_string());
@@ -299,7 +289,7 @@ impl AiClient {
         &self,
         messages: Vec<Message>,
         window: tauri::WebviewWindow,
-    ) -> Result<(), String> {
+    ) -> Result<(), AiError> {
         let client = self.build_client()?;
 
         let body = serde_json::json!({
@@ -321,16 +311,26 @@ impl AiClient {
             req = req.bearer_auth(&self.api_key);
         }
 
-        let response = req.send().await.map_err(|e| e.to_string())?;
+        let response = req
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    AiError::Timeout
+                } else {
+                    AiError::Transport(e.to_string())
+                }
+            })?;
+
         if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, text));
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AiError::Api { status, body });
         }
 
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let bytes = chunk.map_err(|e| e.to_string())?;
+            let bytes = chunk.map_err(|e| AiError::Transport(e.to_string()))?;
             let text = String::from_utf8_lossy(&bytes);
             for line in text.lines() {
                 let line = line.trim();
@@ -364,7 +364,39 @@ impl AiClient {
         &self,
         _messages: Vec<Message>,
         _window_placeholder: (),
-    ) -> Result<(), String> {
+    ) -> Result<(), AiError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod client_tests {
+    use super::*;
+    use crate::ai::errors::AiError;
+
+    fn make_client() -> AiClient {
+        AiClient::new(
+            "http://localhost:9999".into(),
+            "test-key".into(),
+            "test-model".into(),
+        )
+    }
+
+    #[test]
+    fn test_client_accessors_exist() {
+        let c = make_client();
+        assert_eq!(c.base_url(), "http://localhost:9999");
+        assert_eq!(c.model(), "test-model");
+    }
+
+    #[tokio::test]
+    async fn test_chat_returns_ai_error_on_connection_refused() {
+        let c = make_client();
+        let result = c.chat(vec![Message::user("hello")]).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AiError::Transport(_) | AiError::Timeout => {}
+            other => panic!("Expected Transport or Timeout, got {:?}", other),
+        }
     }
 }

@@ -1,5 +1,5 @@
 use crate::ai::client::{AiClient, Message};
-use crate::ai::errors::{classify_error, ErrorClass};
+use crate::ai::errors::{classify_ai_error, ErrorClass};
 use crate::plugins::{PluginManager, QueryResult};
 use crate::skills::SkillManager;
 use serde::{Deserialize, Serialize};
@@ -383,7 +383,7 @@ impl Router {
                 }
                 Err(e) => {
                     // ── Error classification ───────────────────────────────────
-                    match classify_error(&e) {
+                    match classify_ai_error(&e) {
                         ErrorClass::ModelError => {
                             let corrective = Message::user(&format!(
                                 "Your last response contained an invalid tool call or malformed output: {}. \
