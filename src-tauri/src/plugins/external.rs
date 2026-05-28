@@ -91,8 +91,23 @@ impl ExternalPlugin {
         timeout_secs: u64,
         op_name: &str,
     ) -> Option<String> {
+        log::debug!(
+            "ExternalPlugin '{}' call_op op='{}' timeout={}s request={}",
+            self.manifest.name,
+            op_name,
+            timeout_secs,
+            request
+        );
         match timeout(Duration::from_secs(timeout_secs), self.call(&request.to_string())).await {
-            Ok(Some(output)) => Some(output),
+            Ok(Some(output)) => {
+                log::debug!(
+                    "ExternalPlugin '{}' {} returned {} bytes",
+                    self.manifest.name,
+                    op_name,
+                    output.len()
+                );
+                Some(output)
+            }
             Ok(None) => {
                 log::warn!(
                     "External plugin '{}' {} failed",
@@ -180,6 +195,11 @@ impl Plugin for ExternalPlugin {
     }
 
     async fn execute_tool(&self, args: serde_json::Value) -> String {
+        log::debug!(
+            "ExternalPlugin '{}' execute_tool args={}",
+            self.manifest.name,
+            args
+        );
         let request = serde_json::json!({ "op": "tool_call", "args": args });
         let Some(output) = self.call_op(request, 10, "execute_tool").await else {
             return String::new();
@@ -191,6 +211,12 @@ impl Plugin for ExternalPlugin {
     }
 
     async fn execute_action(&self, id: &str, action_data: &str) -> Option<String> {
+        log::debug!(
+            "ExternalPlugin '{}' execute_action id='{}' action_data_len={}",
+            self.manifest.name,
+            id,
+            action_data.len()
+        );
         let request = serde_json::json!({ "op": "execute", "id": id, "action_data": action_data });
         let output = self.call_op(request, 10, "execute_action").await?;
         match serde_json::from_str::<serde_json::Value>(&output) {

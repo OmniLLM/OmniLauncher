@@ -141,13 +141,175 @@ fn inspect_git_repo(dir: &PathBuf) -> Option<serde_json::Value> {
 /// git@github.com:user/my-plugin.git  →  "my-plugin"
 /// https://github.com/user/my-plugin  →  "my-plugin"
 /// /home/user/projects/my-plugin      →  "my-plugin"
+/// https://github.com/o/r/tree/main/extensions/foo  →  "foo"
 fn dir_name_from_source(source: &str) -> String {
+    if let Some(parsed) = parse_github_subdir_url(source) {
+        return parsed.leaf_name;
+    }
     let base = source.trim_end_matches('/').trim_end_matches(".git");
 
     base.rsplit(['/', '\\', ':'])
         .next()
         .unwrap_or("plugin")
         .to_string()
+}
+
+/// Parsed components of a GitHub subdirectory URL (the kind GitHub shows
+/// when you click into a folder): `tree/<branch>/<subpath>` or
+/// `blob/<branch>/<subpath>`. Such URLs are not directly clone-able and
+/// must be translated into a sparse-checkout of `<subpath>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GithubSubdirUrl {
+    clone_url: String,
+    branch: String,
+    subpath: String,
+    leaf_name: String,
+}
+
+fn parse_github_subdir_url(source: &str) -> Option<GithubSubdirUrl> {
+    let s = source.trim().trim_end_matches('/');
+    let rest = s
+        .strip_prefix("https://github.com/")
+        .or_else(|| s.strip_prefix("http://github.com/"))?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    let owner = parts[0];
+    let repo = parts[1].trim_end_matches(".git");
+    let kind = parts[2];
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    if kind != "tree" && kind != "blob" {
+        return None;
+    }
+    let branch = parts[3];
+    let subpath_parts = &parts[4..];
+    if branch.is_empty() || subpath_parts.is_empty() {
+        return None;
+    }
+    let subpath = subpath_parts.join("/");
+    let leaf_name = subpath_parts
+        .last()
+        .copied()
+        .unwrap_or(repo)
+        .trim_end_matches(".git")
+        .to_string();
+    Some(GithubSubdirUrl {
+        clone_url: format!("https://github.com/{owner}/{repo}.git"),
+        branch: branch.to_string(),
+        subpath,
+        leaf_name,
+    })
+}
+
+/// Sparse-checkout `subdir.subpath` out of `subdir.clone_url@subdir.branch`
+/// into a temp stage, then copy that single folder's contents into `dest`.
+async fn sparse_checkout_subdir(
+    subdir: &GithubSubdirUrl,
+    dest: &PathBuf,
+) -> Result<(), String> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let stage = std::env::temp_dir().join(format!(
+        "omnilauncher-subdir-{}-{}-{}",
+        subdir.leaf_name,
+        std::process::id(),
+        ts
+    ));
+    log::debug!(
+        "sparse_checkout_subdir: stage='{}' dest='{}'",
+        stage.display(),
+        dest.display()
+    );
+    if stage.exists() {
+        log::debug!("sparse_checkout_subdir: clearing pre-existing stage");
+        let _ = force_remove_dir_all(&stage);
+    }
+    let stage_str = stage.to_string_lossy().into_owned();
+
+    log::debug!(
+        "sparse_checkout_subdir: git clone --depth=1 --filter=blob:none --no-checkout --branch {} {} {}",
+        subdir.branch, subdir.clone_url, stage_str
+    );
+
+    let clone = tokio::process::Command::new("git")
+        .args([
+            "clone",
+            "--depth=1",
+            "--filter=blob:none",
+            "--no-checkout",
+            "--branch",
+            &subdir.branch,
+            &subdir.clone_url,
+            &stage_str,
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to spawn git: {e}"))?;
+    if !clone.status.success() {
+        let _ = force_remove_dir_all(&stage);
+        return Err(format!(
+            "git clone failed: {}",
+            String::from_utf8_lossy(&clone.stderr).trim()
+        ));
+    }
+
+    let run_git = |args: Vec<String>| -> Result<(), String> {
+        let out = Command::new("git")
+            .args(&args)
+            .current_dir(&stage)
+            .output()
+            .map_err(|e| format!("Failed to spawn git: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(())
+    };
+
+    let checkout = run_git(vec![
+        "sparse-checkout".into(),
+        "init".into(),
+        "--cone".into(),
+    ])
+    .and_then(|_| {
+        run_git(vec![
+            "sparse-checkout".into(),
+            "set".into(),
+            subdir.subpath.clone(),
+        ])
+    })
+    .and_then(|_| run_git(vec!["checkout".into()]));
+
+    if let Err(e) = checkout {
+        let _ = force_remove_dir_all(&stage);
+        return Err(e);
+    }
+
+    let src = stage.join(&subdir.subpath);
+    if !src.is_dir() {
+        let _ = force_remove_dir_all(&stage);
+        return Err(format!(
+            "Subdirectory '{}' not found in {}@{}.",
+            subdir.subpath, subdir.clone_url, subdir.branch
+        ));
+    }
+
+    log::debug!(
+        "sparse_checkout_subdir: copying {} -> {}",
+        src.display(),
+        dest.display()
+    );
+    let copy_result = copy_dir_recursive(&src, dest);
+    let _ = force_remove_dir_all(&stage);
+    copy_result
 }
 
 fn legacy_split_collection_identity(repo_name: &str) -> Option<(String, String, String)> {
@@ -246,6 +408,11 @@ fn infer_collection_identity(
 /// `target_dir`: optional install base directory. Defaults to `~/.omnilauncher/plugins/`.
 /// Returns the plugin name on success.
 pub async fn install_plugin(source: String, target_dir: Option<String>) -> Result<String, String> {
+    log::info!(
+        "install_plugin: source='{}' target_dir={:?}",
+        source,
+        target_dir
+    );
     let base_dir = match target_dir {
         Some(ref d) if !d.is_empty() => {
             let p = PathBuf::from(d);
@@ -257,6 +424,11 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
     };
     let dir_name = dir_name_from_source(&source);
     let dest = base_dir.join(&dir_name);
+    log::debug!(
+        "install_plugin: derived dir_name='{}' dest='{}'",
+        dir_name,
+        dest.display()
+    );
 
     if dest.exists() {
         // If the existing directory has no discoverable plugins (an orphan from
@@ -282,9 +454,19 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
         || source.starts_with("https://")
         || source.starts_with("git@");
 
-    if is_remote {
+    if let Some(subdir) = parse_github_subdir_url(&source) {
+        // GitHub `tree/<branch>/<subpath>` URLs are not clone-able. Sparse-
+        // checkout the requested subpath into a temp stage and copy it into
+        // the final destination.
+        log::info!(
+            "install_plugin: detected GitHub subdir URL repo='{}' branch='{}' subpath='{}'",
+            subdir.clone_url, subdir.branch, subdir.subpath
+        );
+        sparse_checkout_subdir(&subdir, &dest).await?;
+    } else if is_remote {
         // Clone the repo
         let dest_str = dest.to_string_lossy().into_owned();
+        log::info!("install_plugin: git clone --depth=1 {} -> {}", source, dest_str);
         let output = tokio::process::Command::new("git")
             .args(["clone", "--depth=1", &source, &dest_str])
             .output()
@@ -471,7 +653,31 @@ pub async fn update_plugin_collection(
 }
 
 fn install_staged_plugin(dest: &PathBuf) -> Result<String, String> {
+    log::debug!("install_staged_plugin: dest='{}'", dest.display());
+    // Materialize plugin.json for foreign plugin formats (Raycast extensions,
+    // Flow.Launcher plugins) before discovery so they show up like native
+    // OmniLauncher plugins. Both calls are no-ops on directories that don't
+    // look like the corresponding format.
+    let raycast_synth = super::raycast::synthesize_raycast_extensions_in(dest);
+    let flow_synth = super::flow::synthesize_flow_plugins_in(dest);
+    log::debug!(
+        "install_staged_plugin: raycast_synthesized={:?} flow_synthesized={:?}",
+        raycast_synth,
+        flow_synth
+    );
+    if !raycast_synth.is_empty() {
+        super::raycast::try_build_extension(dest);
+    }
+    if !flow_synth.is_empty() {
+        super::flow::try_setup_dependencies(dest);
+    }
+
     let discovered = discover_plugins_in_repo(dest);
+    log::debug!(
+        "install_staged_plugin: discovered {} plugin(s): {:?}",
+        discovered.len(),
+        discovered.iter().map(|(_, m)| &m.name).collect::<Vec<_>>()
+    );
     if discovered.is_empty() {
         let _ = force_remove_dir_all(dest);
         return Err(
@@ -645,6 +851,49 @@ mod tests {
     use tempfile::TempDir;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn parse_github_subdir_url_handles_tree_with_trailing_slash() {
+        let p = parse_github_subdir_url(
+            "https://github.com/raycast/extensions/tree/main/extensions/apple-stocks-search/",
+        )
+        .expect("tree URL should parse");
+        assert_eq!(p.clone_url, "https://github.com/raycast/extensions.git");
+        assert_eq!(p.branch, "main");
+        assert_eq!(p.subpath, "extensions/apple-stocks-search");
+        assert_eq!(p.leaf_name, "apple-stocks-search");
+    }
+
+    #[test]
+    fn parse_github_subdir_url_handles_blob() {
+        let p = parse_github_subdir_url("https://github.com/o/r/blob/develop/a/b")
+            .expect("blob URL should parse");
+        assert_eq!(p.subpath, "a/b");
+        assert_eq!(p.leaf_name, "b");
+        assert_eq!(p.branch, "develop");
+    }
+
+    #[test]
+    fn parse_github_subdir_url_rejects_plain_repo() {
+        assert!(parse_github_subdir_url("https://github.com/o/r").is_none());
+        assert!(parse_github_subdir_url("https://github.com/o/r.git").is_none());
+        assert!(parse_github_subdir_url("https://github.com/o/r/tree/main").is_none());
+        assert!(parse_github_subdir_url("https://gitlab.com/o/r/tree/main/x").is_none());
+    }
+
+    #[test]
+    fn dir_name_uses_subpath_leaf_for_tree_urls() {
+        assert_eq!(
+            dir_name_from_source(
+                "https://github.com/raycast/extensions/tree/main/extensions/apple-stocks-search/"
+            ),
+            "apple-stocks-search"
+        );
+        assert_eq!(
+            dir_name_from_source("https://github.com/o/my-plugin.git"),
+            "my-plugin"
+        );
+    }
 
     fn git(args: &[&str], cwd: &std::path::Path) {
         let output = std::process::Command::new("git")

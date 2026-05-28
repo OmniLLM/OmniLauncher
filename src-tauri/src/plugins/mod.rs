@@ -38,8 +38,12 @@ pub trait Plugin: Send + Sync {
 
 pub struct PluginManager {
     pub plugins: Vec<Box<dyn Plugin>>,
-    /// Index from plugin name → index in `plugins` for O(1) tool lookup.
+    /// Index from plugin name → index in `plugins` for O(1) lookup by name.
     name_index: std::collections::HashMap<String, usize>,
+    /// Index from tool schema function name → plugin index. The AI calls tools by
+    /// the `function.name` in the schema, which often differs from `plugin.name()`
+    /// (e.g. plugin "PowerShell Runner" exposes tool "powershell").
+    tool_index: std::collections::HashMap<String, usize>,
 }
 
 fn keyword_matches(raw: &str, keyword: &str) -> bool {
@@ -55,6 +59,16 @@ fn keyword_matches(raw: &str, keyword: &str) -> bool {
     }
 }
 
+/// Extract the OpenAI-style `function.name` from a plugin's tool schema, if any.
+fn tool_schema_function_name(p: &dyn Plugin) -> Option<String> {
+    p.tool_schema()
+        .as_ref()
+        .and_then(|s| s.get("function"))
+        .and_then(|f| f.get("name"))
+        .and_then(|n| n.as_str())
+        .map(str::to_string)
+}
+
 impl Default for PluginManager {
     fn default() -> Self {
         Self::new()
@@ -63,14 +77,27 @@ impl Default for PluginManager {
 
 impl PluginManager {
     pub fn new() -> Self {
-        Self { plugins: vec![], name_index: std::collections::HashMap::new() }
+        Self {
+            plugins: vec![],
+            name_index: std::collections::HashMap::new(),
+            tool_index: std::collections::HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, p: Box<dyn Plugin>) {
         let name = p.name().to_string();
+        let keyword = p.keyword().map(str::to_string);
+        let tool_name = tool_schema_function_name(p.as_ref());
         let idx = self.plugins.len();
+        log::debug!(
+            "PluginManager.register: name='{}' keyword={:?} tool_name={:?} idx={}",
+            name, keyword, tool_name, idx
+        );
         self.plugins.push(p);
         self.name_index.insert(name, idx);
+        if let Some(t) = tool_name {
+            self.tool_index.insert(t, idx);
+        }
     }
 
     /// Register a plugin, evicting any existing plugin that conflicts on name or keyword.
@@ -96,15 +123,23 @@ impl PluginManager {
                 self.unregister_by_keyword(kw);
             }
         }
+        let tool_name = tool_schema_function_name(p.as_ref());
         let idx = self.plugins.len();
         self.plugins.push(p);
         self.name_index.insert(name, idx);
+        if let Some(t) = tool_name {
+            self.tool_index.insert(t, idx);
+        }
     }
 
     fn rebuild_index(&mut self) {
         self.name_index.clear();
+        self.tool_index.clear();
         for (i, p) in self.plugins.iter().enumerate() {
             self.name_index.insert(p.name().to_string(), i);
+            if let Some(t) = tool_schema_function_name(p.as_ref()) {
+                self.tool_index.insert(t, i);
+            }
         }
     }
 
@@ -160,16 +195,51 @@ impl PluginManager {
     }
 
     pub fn all_tool_schemas(&self) -> Vec<serde_json::Value> {
-        self.plugins
+        let schemas: Vec<serde_json::Value> = self
+            .plugins
             .iter()
             .filter_map(|p| p.tool_schema())
-            .collect()
+            .collect();
+        if log::log_enabled!(log::Level::Debug) {
+            let names: Vec<&str> = schemas
+                .iter()
+                .filter_map(|s| {
+                    s.get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                })
+                .collect();
+            log::debug!(
+                "PluginManager.all_tool_schemas: {}/{} plugins expose tools: {:?}",
+                schemas.len(),
+                self.plugins.len(),
+                names
+            );
+        }
+        schemas
     }
 
     pub async fn execute_tool(&self, name: &str, args: serde_json::Value) -> String {
-        if let Some(&idx) = self.name_index.get(name) {
+        log::debug!(
+            "PluginManager.execute_tool: name='{}' args={}",
+            name,
+            args
+        );
+        // AI calls tools by their schema function name; fall back to plugin name
+        // for backward compatibility with callers that pass plugin.name() directly.
+        let idx = self
+            .tool_index
+            .get(name)
+            .or_else(|| self.name_index.get(name))
+            .copied();
+        if let Some(idx) = idx {
             return self.plugins[idx].execute_tool(args).await;
         }
+        log::warn!(
+            "PluginManager.execute_tool: tool '{}' not registered (known tools: {:?})",
+            name,
+            self.tool_index.keys().collect::<Vec<_>>()
+        );
         "Tool not found".to_string()
     }
 
@@ -180,9 +250,19 @@ impl PluginManager {
         id: &str,
         action_data: &str,
     ) -> Option<String> {
+        log::debug!(
+            "PluginManager.execute_action: plugin='{}' id='{}' action_data_len={}",
+            plugin_name,
+            id,
+            action_data.len()
+        );
         if let Some(&idx) = self.name_index.get(plugin_name) {
             return self.plugins[idx].execute_action(id, action_data).await;
         }
+        log::warn!(
+            "PluginManager.execute_action: plugin '{}' not registered",
+            plugin_name
+        );
         None
     }
 }
@@ -212,6 +292,8 @@ pub mod ls;
 pub mod network;
 pub mod plugin_manager_cmd;
 pub mod pomodoro;
+pub mod raycast;
+pub mod flow;
 pub mod process_manager;
 pub mod scheduler;
 pub mod screenshot;
@@ -246,6 +328,35 @@ mod plugin_manager_tests {
         async fn query(&self, _q: &Query) -> Vec<QueryResult> { vec![] }
     }
 
+    /// Plugin whose display name and tool-schema function name intentionally diverge,
+    /// matching the real-world shape of community plugins like "PowerShell Runner"
+    /// exposing tool name "powershell".
+    struct ToolPlugin {
+        plugin_name: &'static str,
+        tool_name: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for ToolPlugin {
+        fn name(&self) -> &str { self.plugin_name }
+        fn description(&self) -> &str { "tool fake" }
+        fn keyword(&self) -> Option<&str> { None }
+        async fn query(&self, _q: &Query) -> Vec<QueryResult> { vec![] }
+        fn tool_schema(&self) -> Option<serde_json::Value> {
+            Some(serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": self.tool_name,
+                    "description": "t",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            }))
+        }
+        async fn execute_tool(&self, _args: serde_json::Value) -> String {
+            format!("ran:{}", self.tool_name)
+        }
+    }
+
     #[tokio::test]
     async fn test_execute_tool_finds_by_name() {
         let mut pm = PluginManager::new();
@@ -268,5 +379,48 @@ mod plugin_manager_tests {
         pm.register_override(Box::new(FakePlugin { name: "tool_a", kw: None }));
         // Should still be exactly 1 plugin
         assert_eq!(pm.plugins.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_execute_tool_dispatches_by_schema_function_name() {
+        // Reproduces the real bug: plugin "PowerShell Runner" exposes tool
+        // schema named "powershell". AI calls execute_tool("powershell", ...)
+        // and must reach the plugin.
+        let mut pm = PluginManager::new();
+        pm.register(Box::new(ToolPlugin {
+            plugin_name: "PowerShell Runner",
+            tool_name: "powershell",
+        }));
+        let result = pm
+            .execute_tool("powershell", serde_json::json!({}))
+            .await;
+        assert_eq!(result, "ran:powershell");
+    }
+
+    #[tokio::test]
+    async fn test_execute_tool_still_finds_by_plugin_name_fallback() {
+        // Backward compat: when a caller (or a plugin without a schema)
+        // passes plugin.name(), it should still resolve.
+        let mut pm = PluginManager::new();
+        pm.register(Box::new(ToolPlugin {
+            plugin_name: "PowerShell Runner",
+            tool_name: "powershell",
+        }));
+        let result = pm
+            .execute_tool("PowerShell Runner", serde_json::json!({}))
+            .await;
+        assert_eq!(result, "ran:powershell");
+    }
+
+    #[test]
+    fn test_unregister_rebuilds_tool_index() {
+        let mut pm = PluginManager::new();
+        pm.register(Box::new(ToolPlugin {
+            plugin_name: "PowerShell Runner",
+            tool_name: "powershell",
+        }));
+        assert_eq!(pm.unregister_by_name("PowerShell Runner"), 1);
+        assert!(!pm.tool_index.contains_key("powershell"));
+        assert!(!pm.name_index.contains_key("PowerShell Runner"));
     }
 }

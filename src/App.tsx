@@ -254,6 +254,7 @@ export default function App() {
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1);
   const inputHistoryRef = useRef<string[]>([]);
+  const pendingQueueRef = useRef<string[]>([]);
 
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
@@ -513,6 +514,11 @@ export default function App() {
           return next;
         });
         setLoading(false);
+        // Drain next queued prompt after loading state settles
+        setTimeout(() => {
+          const next = pendingQueueRef.current.shift();
+          if (next) doAiQuery(next);
+        }, 50);
         setTimeout(() => focusInput(), 50);
       };
 
@@ -710,7 +716,11 @@ export default function App() {
           setInputHistory([...inputHistoryRef.current]);
         }
         setHistoryIdx(-1);
-        doAiQuery(value);
+        if (loading) {
+          pendingQueueRef.current.push(value);
+        } else {
+          doAiQuery(value);
+        }
         setQuery("");
       } else if (aiModeEnabled && value.trim()) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -719,7 +729,11 @@ export default function App() {
           setInputHistory([...inputHistoryRef.current]);
         }
         setHistoryIdx(-1);
-        doAiQuery(value);
+        if (loading) {
+          pendingQueueRef.current.push(value);
+        } else {
+          doAiQuery(value);
+        }
         setQuery("");
       }
     },
