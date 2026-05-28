@@ -193,13 +193,17 @@ pub fn github_html() -> String {
       <select id="org-filter" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 10px;font-size:13px">
         <option value="">All orgs</option>
       </select>
+      <label style="color:var(--text-secondary);font-size:13px">Repo:</label>
+      <select id="repo-filter" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 10px;font-size:13px">
+        <option value="">All repos</option>
+      </select>
       <label style="color:var(--text-secondary);font-size:13px">Type:</label>
       <select id="type-filter" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 10px;font-size:13px">
         <option value="">Issues &amp; PRs</option>
         <option value="issues">Issues only</option>
         <option value="prs">PRs only</option>
       </select>
-      <input id="search" type="text" placeholder="Filter by title / repo…"
+      <input id="search" type="text" placeholder="Filter by title…"
         style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 12px;font-size:13px;min-width:200px;flex:1">
       <button onclick="loadData()" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px">↺ Refresh</button>
     </div>
@@ -233,15 +237,25 @@ pub fn github_html() -> String {
 
     function populateFilters(servers) {
       const srvSel = document.getElementById('server-filter');
-      const orgSel = document.getElementById('org-filter');
       while (srvSel.options.length > 1) srvSel.remove(1);
-      while (orgSel.options.length > 1) orgSel.remove(1);
-      const seenOrgs = new Set();
       servers.forEach(s => {
         const opt = document.createElement('option');
         opt.value = s.hostname;
         opt.textContent = s.hostname + (s.has_token ? ' ✓' : ' ✗');
         srvSel.appendChild(opt);
+      });
+      refreshOrgDropdown();
+    }
+
+    function refreshOrgDropdown() {
+      if (!allData) return;
+      const srvFilter = document.getElementById('server-filter').value;
+      const orgSel = document.getElementById('org-filter');
+      const prevOrg = orgSel.value;
+      while (orgSel.options.length > 1) orgSel.remove(1);
+      const seenOrgs = new Set();
+      allData.servers.forEach(s => {
+        if (srvFilter && s.hostname !== srvFilter) return;
         (s.orgs||[]).forEach(o => {
           if (!seenOrgs.has(o.org)) {
             seenOrgs.add(o.org);
@@ -252,12 +266,41 @@ pub fn github_html() -> String {
           }
         });
       });
+      orgSel.value = seenOrgs.has(prevOrg) ? prevOrg : '';
+      refreshRepoDropdown();
+    }
+
+    function refreshRepoDropdown() {
+      if (!allData) return;
+      const srvFilter = document.getElementById('server-filter').value;
+      const orgFilter = document.getElementById('org-filter').value;
+      const repoSel = document.getElementById('repo-filter');
+      const prevRepo = repoSel.value;
+      while (repoSel.options.length > 1) repoSel.remove(1);
+      const seenRepos = new Set();
+      allData.servers.forEach(s => {
+        if (srvFilter && s.hostname !== srvFilter) return;
+        (s.orgs||[]).forEach(o => {
+          if (orgFilter && o.org !== orgFilter) return;
+          (o.repos||[]).forEach(r => {
+            if (!seenRepos.has(r.full_name)) {
+              seenRepos.add(r.full_name);
+              const opt = document.createElement('option');
+              opt.value = r.full_name;
+              opt.textContent = `${r.name} (${r.open_issues_count}🔴 ${r.open_prs_count}🟢)`;
+              repoSel.appendChild(opt);
+            }
+          });
+        });
+      });
+      repoSel.value = seenRepos.has(prevRepo) ? prevRepo : '';
     }
 
     function render() {
       if (!allData) return;
       const srvFilter = document.getElementById('server-filter').value;
       const orgFilter = document.getElementById('org-filter').value;
+      const repoFilter = document.getElementById('repo-filter').value;
       const typeFilter = document.getElementById('type-filter').value;
       const search = document.getElementById('search').value.toLowerCase();
 
@@ -273,6 +316,7 @@ pub fn github_html() -> String {
           if (orgFilter && org.org !== orgFilter) continue;
           let orgHtml = '';
           for (const repo of org.repos) {
+            if (repoFilter && repo.full_name !== repoFilter) continue;
             let items = '';
             if (typeFilter !== 'prs') {
               for (const i of repo.issues) {
@@ -335,8 +379,9 @@ pub fn github_html() -> String {
       document.getElementById('content').innerHTML = html || '<p style="color:var(--sub)">No matching results.</p>';
     }
 
-    document.getElementById('server-filter').addEventListener('change', render);
-    document.getElementById('org-filter').addEventListener('change', render);
+    document.getElementById('server-filter').addEventListener('change', () => { refreshOrgDropdown(); render(); });
+    document.getElementById('org-filter').addEventListener('change', () => { refreshRepoDropdown(); render(); });
+    document.getElementById('repo-filter').addEventListener('change', render);
     document.getElementById('type-filter').addEventListener('change', render);
     document.getElementById('search').addEventListener('input', render);
 
