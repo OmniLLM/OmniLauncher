@@ -1200,28 +1200,52 @@ async fn update_skill(name: String, state: tauri::State<'_, AppState>) -> Result
 
 // ─── External plugin management commands ──────────────────────────────────────
 
-#[tauri::command]
-async fn install_plugin(source: String, target_dir: Option<String>) -> Result<String, String> {
-    log::debug!("install_plugin invoked with source={source} target_dir={target_dir:?}");
-    omnilauncher_lib::plugins::plugin_manager_cmd::install_plugin(source, target_dir).await
+/// Refresh the in-memory `PluginManager` so newly installed / updated /
+/// removed external plugins (including their AI `tool_schema`s) become
+/// visible immediately, without restarting the launcher.
+async fn reload_external_plugins(state: &tauri::State<'_, AppState>) {
+    let settings = omnilauncher_lib::load_settings();
+    let mut pm = state.plugin_manager.lock().await;
+    pm.reload_external_plugins(&settings.plugin_dirs);
 }
 
 #[tauri::command]
-async fn update_plugin(name: String) -> Result<String, String> {
+async fn install_plugin(
+    source: String,
+    target_dir: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    log::debug!("install_plugin invoked with source={source} target_dir={target_dir:?}");
+    let result =
+        omnilauncher_lib::plugins::plugin_manager_cmd::install_plugin(source, target_dir).await?;
+    reload_external_plugins(&state).await;
+    Ok(result)
+}
+
+#[tauri::command]
+async fn update_plugin(name: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
     log::debug!("update_plugin invoked with name={name}");
-    omnilauncher_lib::plugins::plugin_manager_cmd::update_plugin(name).await
+    let result = omnilauncher_lib::plugins::plugin_manager_cmd::update_plugin(name).await?;
+    reload_external_plugins(&state).await;
+    Ok(result)
 }
 
 #[tauri::command]
 async fn update_plugin_collection(
     source: String,
     plugin_dirs: Vec<String>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
     log::debug!(
         "update_plugin_collection invoked with source={source} plugin_dirs={plugin_dirs:?}"
     );
-    omnilauncher_lib::plugins::plugin_manager_cmd::update_plugin_collection(source, plugin_dirs)
-        .await
+    let result = omnilauncher_lib::plugins::plugin_manager_cmd::update_plugin_collection(
+        source,
+        plugin_dirs,
+    )
+    .await?;
+    reload_external_plugins(&state).await;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1231,9 +1255,11 @@ fn list_plugins() -> Vec<serde_json::Value> {
 }
 
 #[tauri::command]
-async fn remove_plugin(name: String) -> Result<(), String> {
+async fn remove_plugin(name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     log::debug!("remove_plugin invoked with name={name}");
-    omnilauncher_lib::plugins::plugin_manager_cmd::remove_plugin(name).await
+    omnilauncher_lib::plugins::plugin_manager_cmd::remove_plugin(name).await?;
+    reload_external_plugins(&state).await;
+    Ok(())
 }
 
 /// Vision analyze command:

@@ -34,6 +34,12 @@ pub trait Plugin: Send + Sync {
     async fn execute_action(&self, _id: &str, _action_data: &str) -> Option<String> {
         None
     }
+    /// True for plugins loaded from `~/.omnilauncher/plugins/` (or extra dirs).
+    /// Used by `PluginManager::reload_external_plugins` to discard and re-load
+    /// only externally-sourced plugins without touching built-ins.
+    fn is_external(&self) -> bool {
+        false
+    }
 }
 
 pub struct PluginManager {
@@ -264,6 +270,26 @@ impl PluginManager {
             plugin_name
         );
         None
+    }
+
+    /// Drop all externally-sourced plugins and re-discover them from
+    /// `~/.omnilauncher/plugins/` plus `extra_dirs`. Built-in plugins are
+    /// untouched, preserving their internal state (caches, indexes, etc.).
+    ///
+    /// Call this after install / update / remove operations so the in-memory
+    /// registry reflects what's on disk without restarting the launcher.
+    pub fn reload_external_plugins(&mut self, extra_dirs: &[String]) {
+        let before = self.plugins.len();
+        self.plugins.retain(|p| !p.is_external());
+        self.rebuild_index();
+        for plugin in external::load_external_plugins_from(extra_dirs) {
+            self.register_override(Box::new(plugin));
+        }
+        log::info!(
+            "PluginManager.reload_external_plugins: {} → {} registered plugins",
+            before,
+            self.plugins.len()
+        );
     }
 }
 

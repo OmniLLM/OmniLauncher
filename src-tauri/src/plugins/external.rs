@@ -144,6 +144,10 @@ impl Plugin for ExternalPlugin {
         self.manifest.tool_schema.clone()
     }
 
+    fn is_external(&self) -> bool {
+        true
+    }
+
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let request = serde_json::json!({ "op": "query", "query": q.raw });
         let Some(output) = self.call_op(request, 3, "query").await else {
