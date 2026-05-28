@@ -160,10 +160,15 @@ impl Router {
         let trimmed = input.trim();
         if let Some(stripped) = trimmed.strip_prefix('?') {
             stripped.trim()
-        } else if trimmed.len() >= 3 && trimmed[..3].to_lowercase() == "ai " {
-            trimmed[3..].trim()
         } else {
-            trimmed
+            // Case-insensitive "ai " prefix — safe: check lowercase copy, slice original by byte len.
+            // "ai " is 3 ASCII bytes so the slice is always on a char boundary.
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.starts_with("ai ") {
+                trimmed[3..].trim()
+            } else {
+                trimmed
+            }
         }
     }
 
@@ -229,9 +234,17 @@ impl Router {
             .map(|s| format!("🎯 {}", s.meta.name))
             .collect();
 
+        // We need a mutable clone of context so compress_if_needed can work on
+        // a local copy without requiring mutable access to the shared context.
+        let mut local_ctx = ConversationContext {
+            messages: context.messages.clone(),
+            max_turns: context.max_turns,
+            session_id: context.session_id,
+        };
+
         // Build messages: system + history + optional skill context + current user msg
         // The current user message is already added to context before route() is called.
-        let mut messages = context.get_messages_with_system(&system_prompt);
+        let mut messages = local_ctx.get_messages_with_system(&system_prompt);
 
         // Inject skill context as a user message just before the last user message
         // (Hermes pattern: skill body injected before the actual query).
@@ -280,18 +293,13 @@ impl Router {
         let mut recent_fingerprints: std::collections::VecDeque<String> =
             std::collections::VecDeque::with_capacity(3);
 
-        // We need a mutable clone of context so compress_if_needed can work on
-        // a local copy without requiring mutable access to the shared context.
-        let mut local_ctx = ConversationContext {
-            messages: context.messages.clone(),
-            max_turns: context.max_turns,
-            session_id: context.session_id,
-        };
-
         for _iteration in 0..10 {
             // ── Context compression (sliding window) ──────────────────────────
             local_ctx.compress_if_needed();
-            // Rebuild loop_messages to reflect any compression that occurred
+            // Rebuild loop_messages to reflect any compression that occurred.
+            // NOTE: skill-context messages are intentionally NOT stored in local_ctx —
+            // they are re-injected fresh each iteration via get_messages_with_system.
+            // Tool results ARE stored in local_ctx and will be included in the rebuild.
             loop_messages = {
                 let os_info = get_os_info();
                 let system_prompt_rebuild =
@@ -1071,7 +1079,6 @@ impl Router {
     }
 }
 
-#[allow(dead_code)]
 const SLASH_HELP: &str = "\
 ## ⚡ Slash Commands (Instant — No AI)
 
@@ -1118,7 +1125,6 @@ const SLASH_HELP: &str = "\
 **Tip:** Type `/` to see the command palette. Anything without `/` goes to AI.
 ";
 
-#[allow(dead_code)]
 const SKILL_HELP: &str = "\
 ## 🎯 Skill Commands
 
@@ -1149,7 +1155,6 @@ When your query matches a skill's triggers, the skill's instructions are automat
 ```
 ";
 
-#[allow(dead_code)]
 fn get_command_help(cmd: &str) -> String {
     match cmd {
         "/run" | "/r" => "## `/run` (shortcut: `/r`)\n\nExecute a shell command and display output.\n\n**Usage:** `/run <command>`\n\n**Examples:**\n```\n/run dir\n/run git status\n/run npm test\n/run Get-Process | Select -First 5\n/r cargo build --release\n```\n\n**Notes:**\n- Uses PowerShell on Windows, bash on macOS/Linux\n- Output is displayed in a code block\n- Long output is truncated to 4000 chars".to_string(),
@@ -1412,6 +1417,15 @@ mod tests {
         assert_eq!(Router::strip_ai_prefix("ai help me"), "help me");
         assert_eq!(Router::strip_ai_prefix("AI help me"), "help me");
         assert_eq!(Router::strip_ai_prefix("chrome"), "chrome");
+    }
+
+    #[test]
+    fn test_strip_prefix_multibyte_safe() {
+        // "ai " followed by a multi-byte emoji — must not panic
+        assert_eq!(Router::strip_ai_prefix("ai 🦀 hello"), "🦀 hello");
+        assert_eq!(Router::strip_ai_prefix("AI hello world"), "hello world");
+        // Mixed case
+        assert_eq!(Router::strip_ai_prefix("Ai tell me something"), "tell me something");
     }
 
     #[test]
