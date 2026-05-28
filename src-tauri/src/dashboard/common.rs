@@ -57,6 +57,15 @@ const LAYOUT: &str = r##"<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>OmniLauncher · {{TITLE}}</title>
+<script>
+  // Apply persisted theme synchronously before paint to avoid FOUC.
+  (function() {
+    try {
+      var t = localStorage.getItem('omnilauncher.dashboard.theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { /* localStorage unavailable */ }
+  })();
+</script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   tailwind.config = {
@@ -159,11 +168,25 @@ const LAYOUT: &str = r##"<!doctype html>
       color: #e8eaed;
       box-shadow: inset 0 -2px 0 #8ab4f8;
     }
-    nav.topbar .right { @apply ml-auto text-xs flex items-center; color: #9aa0a6; }
+    nav.topbar .right { @apply ml-auto text-xs flex items-center gap-3; color: #9aa0a6; }
     nav.topbar .pulse {
       @apply inline-block w-2 h-2 rounded-full mr-2 align-middle animate-pulseDot;
       background: #34a853;
     }
+    /* theme toggle in the topbar */
+    nav.topbar #theme-toggle {
+      @apply inline-flex items-center justify-center w-8 h-8 rounded-lg border cursor-pointer transition;
+      background: rgba(255,255,255,0.04);
+      border-color: rgba(255,255,255,0.12);
+      color: #e8eaed;
+      font-size: 15px;
+      line-height: 1;
+    }
+    nav.topbar #theme-toggle:hover {
+      background: rgba(255,255,255,0.10);
+      border-color: rgba(255,255,255,0.25);
+    }
+    nav.topbar #theme-toggle .theme-icon { line-height: 1; }
 
     main { @apply max-w-[1400px] mx-auto px-4 sm:px-8 pt-6 pb-16; }
     h1.page-title { @apply text-2xl font-bold mb-6 tracking-tight; color: #e8eaed; }
@@ -471,7 +494,61 @@ const LAYOUT: &str = r##"<!doctype html>
     tr.data-row { @apply cursor-pointer transition-colors; }
     tr.data-row:hover td { background: rgba(255,255,255,0.03); }
     tr.data-row.expanded td { background: rgba(138,180,248,0.06); border-bottom: 0; }
-    tr.data-row.overdue td.col-due { color: #f28b82; font-weight: 600; }
+
+    /* ── Due-date warning tiers ─────────────────────────────────────────── */
+    /* overdue:   red, blinking — past due date                              */
+    /* due-today: orange, slow pulse — due within the next 24h               */
+    /* due-soon:  yellow tint — due within 3 days                            */
+    /* due-week:  blue tint   — due within 7 days                            */
+    @keyframes overdue-blink {
+      0%, 100% { background-color: rgba(242,139,130,0.22); }
+      50%      { background-color: rgba(242,139,130,0.55); }
+    }
+    @keyframes today-pulse {
+      0%, 100% { background-color: rgba(253,214,99,0.18); }
+      50%      { background-color: rgba(253,214,99,0.38); }
+    }
+    tr.data-row.overdue td {
+      animation: overdue-blink 1.2s ease-in-out infinite;
+      border-bottom-color: rgba(242,139,130,0.5) !important;
+      color: #fab8c8 !important;
+    }
+    tr.data-row.overdue:hover td   { animation: none; background: rgba(242,139,130,0.60); }
+    tr.data-row.overdue.expanded td{ animation: none; background: rgba(242,139,130,0.45); }
+    tr.data-row.overdue td.col-expand { box-shadow: inset 4px 0 0 #f28b82; }
+    tr.data-row.overdue td.col-due    { color: #ffffff !important; font-weight: 700; }
+    tr.data-row.overdue td.col-due::before { content: "⚠ "; font-size: 12px; }
+
+    tr.data-row.due-today td {
+      animation: today-pulse 2s ease-in-out infinite;
+      border-bottom-color: rgba(253,214,99,0.5) !important;
+      color: #fdd663 !important;
+    }
+    tr.data-row.due-today:hover td   { animation: none; background: rgba(253,214,99,0.42); }
+    tr.data-row.due-today.expanded td{ animation: none; background: rgba(253,214,99,0.32); }
+    tr.data-row.due-today td.col-expand { box-shadow: inset 4px 0 0 #fdd663; }
+    tr.data-row.due-today td.col-due    { color: #fdd663 !important; font-weight: 700; }
+    tr.data-row.due-today td.col-due::before { content: "🔥 "; font-size: 12px; }
+
+    tr.data-row.due-soon td {
+      background: rgba(249,226,175,0.10);
+      border-bottom-color: rgba(249,226,175,0.3) !important;
+    }
+    tr.data-row.due-soon:hover td    { background: rgba(249,226,175,0.20); }
+    tr.data-row.due-soon.expanded td { background: rgba(249,226,175,0.15); }
+    tr.data-row.due-soon td.col-expand { box-shadow: inset 3px 0 0 #f9e2af; }
+    tr.data-row.due-soon td.col-due    { color: #f9e2af !important; font-weight: 600; }
+    tr.data-row.due-soon td.col-due::before { content: "⏳ "; font-size: 12px; }
+
+    tr.data-row.due-week td {
+      background: rgba(138,180,250,0.07);
+      border-bottom-color: rgba(138,180,250,0.25) !important;
+    }
+    tr.data-row.due-week:hover td    { background: rgba(138,180,250,0.16); }
+    tr.data-row.due-week.expanded td { background: rgba(138,180,250,0.12); }
+    tr.data-row.due-week td.col-expand { box-shadow: inset 3px 0 0 #8ab4fa; }
+    tr.data-row.due-week td.col-due    { color: #8ab4fa !important; font-weight: 600; }
+    tr.data-row.due-week td.col-due::before { content: "📅 "; font-size: 12px; }
     #todo-table td {
       @apply px-3 py-2.5 text-[13.5px] align-middle border-b;
       border-color: rgba(255,255,255,0.08); color: #e8eaed;
@@ -552,6 +629,209 @@ const LAYOUT: &str = r##"<!doctype html>
       @apply text-center text-slate-500 py-8 text-sm;
     }
     .footer { @apply text-center text-[11px] text-slate-600 mt-8; }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+       LIGHT THEME OVERRIDES
+       Activated by `<html data-theme="light">`. Targets the most visible
+       surfaces (body, nav, cards, tables, badges) and recolors them for a
+       Google-Material-style light palette. Accent and warning hues keep
+       similar hues but use deeper shades for readability on white.
+       ═══════════════════════════════════════════════════════════════════════ */
+
+    html[data-theme="light"] body { background: #f5f6f8; color: #202124; }
+    html[data-theme="light"] h1,
+    html[data-theme="light"] h2,
+    html[data-theme="light"] h3,
+    html[data-theme="light"] h4 { color: #202124; }
+    html[data-theme="light"] code {
+      background: rgba(0,0,0,0.05); color: #1a73e8;
+    }
+
+    /* topbar */
+    html[data-theme="light"] nav.topbar {
+      background: #ffffff;
+      border-color: rgba(0,0,0,0.08);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    html[data-theme="light"] nav.topbar .brand { color: #202124; }
+    html[data-theme="light"] nav.topbar .brand .accent { color: #1a73e8; }
+    html[data-theme="light"] nav.topbar a { color: #5f6368; }
+    html[data-theme="light"] nav.topbar a:hover { background: rgba(0,0,0,0.05); color: #202124; }
+    html[data-theme="light"] nav.topbar a.active {
+      background: rgba(26,115,232,0.10); color: #1a73e8;
+      box-shadow: inset 0 -2px 0 #1a73e8;
+    }
+    html[data-theme="light"] nav.topbar .right { color: #5f6368; }
+    html[data-theme="light"] nav.topbar #theme-toggle {
+      background: rgba(0,0,0,0.04);
+      border-color: rgba(0,0,0,0.10);
+      color: #202124;
+    }
+    html[data-theme="light"] nav.topbar #theme-toggle:hover {
+      background: rgba(0,0,0,0.08);
+      border-color: rgba(0,0,0,0.18);
+    }
+
+    /* stats / cards / surfaces */
+    html[data-theme="light"] .stat,
+    html[data-theme="light"] .card,
+    html[data-theme="light"] .stats,
+    html[data-theme="light"] .dash-card,
+    html[data-theme="light"] .tbl-card {
+      background: #ffffff;
+      border-color: rgba(0,0,0,0.08);
+      color: #202124;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.04);
+    }
+    html[data-theme="light"] .stat .value,
+    html[data-theme="light"] .dash-card .title { color: #202124; }
+    html[data-theme="light"] .stat .label,
+    html[data-theme="light"] .stat .sub,
+    html[data-theme="light"] .dash-card .desc,
+    html[data-theme="light"] .dash-card .cta,
+    html[data-theme="light"] .dash-card .metric .k,
+    html[data-theme="light"] .tbl-card .rows,
+    html[data-theme="light"] .tbl-card .cols { color: #5f6368; }
+    html[data-theme="light"] .card h2 { color: #5f6368; }
+
+    /* list / session / job rows */
+    html[data-theme="light"] .list .item,
+    html[data-theme="light"] .session,
+    html[data-theme="light"] .job-row,
+    html[data-theme="light"] .msg {
+      background: #ffffff;
+      border-color: rgba(0,0,0,0.10);
+    }
+    html[data-theme="light"] .list .item .body,
+    html[data-theme="light"] .job-row .row-head .label,
+    html[data-theme="light"] .session-head .title { color: #202124; }
+    html[data-theme="light"] .list .item .id,
+    html[data-theme="light"] .list .item .meta,
+    html[data-theme="light"] .session-head .when,
+    html[data-theme="light"] .session-head .num,
+    html[data-theme="light"] .session-head .caret,
+    html[data-theme="light"] .job-row .row-head .id,
+    html[data-theme="light"] .job-row .row-head .meta { color: #5f6368; }
+    html[data-theme="light"] .job-row .cmd {
+      background: rgba(0,0,0,0.04); color: #202124;
+    }
+    html[data-theme="light"] .session-head:hover { background: rgba(0,0,0,0.03); }
+
+    /* toolbar (filter + group selectors) */
+    html[data-theme="light"] .toolbar label { color: #5f6368; }
+    html[data-theme="light"] .toolbar select,
+    html[data-theme="light"] .toolbar input {
+      background: #ffffff;
+      border-color: rgba(0,0,0,0.15);
+      color: #202124;
+    }
+    html[data-theme="light"] .toolbar select:focus,
+    html[data-theme="light"] .toolbar input:focus {
+      border-color: #1a73e8;
+      box-shadow: 0 0 0 2px rgba(26,115,232,0.15);
+    }
+
+    /* progress / bars */
+    html[data-theme="light"] .progress-bar,
+    html[data-theme="light"] .bar { background: rgba(0,0,0,0.08); }
+
+    /* todos table */
+    html[data-theme="light"] #todo-table {
+      background: #ffffff;
+      border-color: rgba(0,0,0,0.10);
+    }
+    html[data-theme="light"] #todo-table th {
+      background: #f1f3f4;
+      border-color: rgba(0,0,0,0.08);
+      color: #5f6368;
+    }
+    html[data-theme="light"] #todo-table th:hover { color: #1a73e8; }
+    html[data-theme="light"] #todo-table th.active .arr { color: #1a73e8; }
+    html[data-theme="light"] #todo-table td {
+      color: #202124;
+      border-color: rgba(0,0,0,0.06);
+    }
+    html[data-theme="light"] td.col-id,
+    html[data-theme="light"] td.col-expand,
+    html[data-theme="light"] td.col-date,
+    html[data-theme="light"] td.col-tags,
+    html[data-theme="light"] td.col-comments,
+    html[data-theme="light"] td.col-due,
+    html[data-theme="light"] td.col-text .desc-preview { color: #5f6368; }
+    html[data-theme="light"] td.col-completed { color: #137333; }
+    html[data-theme="light"] td.col-text.done-text { color: #80868b; }
+
+    html[data-theme="light"] tr.data-row:hover td      { background: rgba(0,0,0,0.04); }
+    html[data-theme="light"] tr.data-row.expanded td   { background: rgba(26,115,232,0.06); }
+
+    /* column dropdowns */
+    html[data-theme="light"] .col-dropdown {
+      background: #ffffff;
+      border-color: rgba(0,0,0,0.15);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    }
+    html[data-theme="light"] .col-dropdown-item { color: #202124; }
+    html[data-theme="light"] .col-dropdown-item:hover {
+      background: rgba(26,115,232,0.10); color: #1a73e8;
+    }
+    html[data-theme="light"] .col-dropdown-item.selected { color: #137333; }
+    html[data-theme="light"] .col-dropdown-item.clear-item {
+      color: #d93025; border-top-color: rgba(0,0,0,0.10);
+    }
+    html[data-theme="light"] .col-dropdown-item.clear-item:hover {
+      background: rgba(217,48,37,0.08);
+    }
+
+    /* tags */
+    html[data-theme="light"] .tag {
+      background: #f1f3f4; border-color: rgba(0,0,0,0.10); color: #3c4043;
+    }
+
+    /* due-date tiers (slightly stronger tints on white) */
+    html[data-theme="light"] tr.data-row.overdue td   { color: #b3261e !important; }
+    html[data-theme="light"] tr.data-row.overdue td.col-due { color: #b3261e !important; }
+    html[data-theme="light"] tr.data-row.due-today td { color: #b06000 !important; }
+    html[data-theme="light"] tr.data-row.due-today td.col-due { color: #b06000 !important; }
+    html[data-theme="light"] tr.data-row.due-soon td.col-due  { color: #8d6e00 !important; }
+    html[data-theme="light"] tr.data-row.due-week td.col-due  { color: #1a73e8 !important; }
+
+    /* group header row */
+    html[data-theme="light"] tr.group-header td {
+      background: #f1f3f4; color: #5f6368;
+      border-color: rgba(0,0,0,0.06);
+    }
+
+    /* detail panel + comments */
+    html[data-theme="light"] .detail-panel  { background: rgba(26,115,232,0.04); }
+    html[data-theme="light"] .detail-field  { background: #f8f9fa; border-color: rgba(0,0,0,0.06); }
+    html[data-theme="light"] .detail-field-lbl,
+    html[data-theme="light"] .detail-section-lbl { color: #5f6368; }
+    html[data-theme="light"] .detail-field-val,
+    html[data-theme="light"] .detail-desc        { color: #202124; }
+    html[data-theme="light"] .detail-desc.empty,
+    html[data-theme="light"] .no-comments        { color: #80868b; }
+    html[data-theme="light"] .comment            { background: #f8f9fa; border-color: rgba(0,0,0,0.06); }
+    html[data-theme="light"] .comment-body       { color: #202124; }
+    html[data-theme="light"] .comment-meta       { color: #80868b; }
+
+    /* messages */
+    html[data-theme="light"] .msg .head    { color: #5f6368; }
+    html[data-theme="light"] .msg .content { color: #202124; }
+
+    /* misc */
+    html[data-theme="light"] .empty,
+    html[data-theme="light"] .empty-state,
+    html[data-theme="light"] footer,
+    html[data-theme="light"] .footer       { color: #5f6368; }
+    html[data-theme="light"] .donut-center .pct { color: #202124; }
+    html[data-theme="light"] .donut-center .lbl { color: #5f6368; }
+    html[data-theme="light"] .donut .track      { stroke: rgba(0,0,0,0.08); }
+    html[data-theme="light"] .legend .item      { color: #3c4043; }
+
+    /* page lede / titles */
+    html[data-theme="light"] .page-lede,
+    html[data-theme="light"] .page-header .page-lede { color: #5f6368; }
+    html[data-theme="light"] h1.page-title { color: #202124; }
   }
 </style>
 </head>
@@ -566,7 +846,12 @@ const LAYOUT: &str = r##"<!doctype html>
         <a href="/dashboard/jobs"         data-key="jobs"         >Scheduler</a>
         <a href="/dashboard/tables"       data-key="tables"       >Database</a>
       </div>
-      <div class="right"><span class="pulse"></span>Live · <span id="generated">—</span></div>
+      <div class="right">
+        <button id="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle light/dark theme">
+          <span class="theme-icon">🌙</span>
+        </button>
+        <span class="pulse"></span>Live · <span id="generated">—</span>
+      </div>
     </div>
   </nav>
 
@@ -590,6 +875,26 @@ function stampGenerated(d) {
   const g = document.getElementById('generated');
   if (g && d && d.generated_at) g.textContent = d.generated_at;
 }
+
+// ── theme toggle (light/dark) — persisted in localStorage ──────────────────
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  const btn = document.querySelector('#theme-toggle .theme-icon');
+  if (btn) btn.textContent = (t === 'light') ? '☀' : '🌙';
+}
+function initThemeToggle() {
+  const stored = localStorage.getItem('omnilauncher.dashboard.theme') || 'dark';
+  applyTheme(stored);
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = cur === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('omnilauncher.dashboard.theme', next);
+    applyTheme(next);
+  });
+}
+initThemeToggle();
 setActive();
 {{SCRIPT}}
 </script>

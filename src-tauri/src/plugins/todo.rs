@@ -331,7 +331,47 @@ th .col-filter-badge{{display:inline-block;margin-left:5px;background:#cba6f7;co
 tr.data-row{{cursor:pointer;transition:background 120ms}}
 tr.data-row:hover td{{background:#2e2e40}}
 tr.data-row.expanded td{{background:#2a2a3c;border-bottom:none}}
-tr.data-row.overdue td.col-due{{color:#f38ba8;font-weight:600}}
+
+/* ── Due-date warning tiers ─────────────────────────────────────────────── */
+/* overdue: red, blinking — past due date                                   */
+/* due-today: orange, slow pulse — due within the next 24h                  */
+/* due-soon: yellow tint — due within 3 days                                */
+/* due-week: blue tint — due within 7 days                                  */
+@keyframes overdue-blink{{
+  0%,100%{{background-color:rgba(243,139,168,.22)}}
+  50%{{background-color:rgba(243,139,168,.55)}}
+}}
+@keyframes today-pulse{{
+  0%,100%{{background-color:rgba(250,179,135,.18)}}
+  50%{{background-color:rgba(250,179,135,.38)}}
+}}
+tr.data-row.overdue td{{animation:overdue-blink 1.2s ease-in-out infinite;border-bottom-color:#f38ba888;color:#fab8c8 !important}}
+tr.data-row.overdue:hover td{{animation:none;background:rgba(243,139,168,.6)}}
+tr.data-row.overdue.expanded td{{animation:none;background:rgba(243,139,168,.45)}}
+tr.data-row.overdue td.col-expand{{box-shadow:inset 4px 0 0 #f38ba8}}
+tr.data-row.overdue td.col-due{{color:#fff !important;font-weight:700}}
+tr.data-row.overdue td.col-due::before{{content:"⚠ ";font-size:12px}}
+
+tr.data-row.due-today td{{animation:today-pulse 2s ease-in-out infinite;border-bottom-color:#fab38766;color:#fab387}}
+tr.data-row.due-today:hover td{{animation:none;background:rgba(250,179,135,.42)}}
+tr.data-row.due-today.expanded td{{animation:none;background:rgba(250,179,135,.32)}}
+tr.data-row.due-today td.col-expand{{box-shadow:inset 4px 0 0 #fab387}}
+tr.data-row.due-today td.col-due{{color:#fab387 !important;font-weight:700}}
+tr.data-row.due-today td.col-due::before{{content:"🔥 ";font-size:12px}}
+
+tr.data-row.due-soon td{{background:rgba(249,226,175,.10);border-bottom-color:#f9e2af40}}
+tr.data-row.due-soon:hover td{{background:rgba(249,226,175,.20)}}
+tr.data-row.due-soon.expanded td{{background:rgba(249,226,175,.15)}}
+tr.data-row.due-soon td.col-expand{{box-shadow:inset 3px 0 0 #f9e2af}}
+tr.data-row.due-soon td.col-due{{color:#f9e2af !important;font-weight:600}}
+tr.data-row.due-soon td.col-due::before{{content:"⏳ ";font-size:12px}}
+
+tr.data-row.due-week td{{background:rgba(137,180,250,.07);border-bottom-color:#89b4fa30}}
+tr.data-row.due-week:hover td{{background:rgba(137,180,250,.16)}}
+tr.data-row.due-week.expanded td{{background:rgba(137,180,250,.12)}}
+tr.data-row.due-week td.col-expand{{box-shadow:inset 3px 0 0 #89b4fa}}
+tr.data-row.due-week td.col-due{{color:#89b4fa !important;font-weight:600}}
+tr.data-row.due-week td.col-due::before{{content:"📅 ";font-size:12px}}
 td{{padding:11px 12px;font-size:14px;vertical-align:middle;border-bottom:1px solid #2a2a3d}}
 td.col-expand{{width:24px;color:#6c7086;font-size:12px;padding-right:0}}
 td.col-id{{color:#6c7086;width:44px;font-size:12px;font-variant-numeric:tabular-nums}}
@@ -449,6 +489,26 @@ const columnFilters = {{}};
 
 function isOverdue(t) {{
   return t.status !== 'done' && t.due && t.due < TODAY;
+}}
+
+// Returns the urgency tier for a todo's due date:
+//   'overdue'   — past due
+//   'due-today' — due today (or tomorrow, within 1 day)
+//   'due-soon'  — due within 3 days
+//   'due-week'  — due within 7 days
+//   null        — no due date, done, or more than a week away
+function dueLevel(t) {{
+  if (t.status === 'done' || !t.due) return null;
+  if (t.due < TODAY) return 'overdue';
+  // Compute calendar-day difference using YYYY-MM-DD strings.
+  const d1 = Date.parse(t.due + 'T00:00:00');
+  const d0 = Date.parse(TODAY + 'T00:00:00');
+  if (isNaN(d1) || isNaN(d0)) return null;
+  const days = Math.round((d1 - d0) / 86400000);
+  if (days <= 1) return 'due-today';
+  if (days <= 3) return 'due-soon';
+  if (days <= 7) return 'due-week';
+  return null;
 }}
 
 function colValues(col) {{
@@ -619,11 +679,12 @@ function render() {{
 
 function makeDataRow(t) {{
   const tr=document.createElement('tr');
-  const over=isOverdue(t);
-  tr.className='data-row'+(expanded.has(t.id)?' expanded':'')+(over?' overdue':'');
+  const level=dueLevel(t);
+  tr.className='data-row'+(expanded.has(t.id)?' expanded':'')+(level?' '+level:'');
   tr.dataset.id=t.id;
   const tagHtml=t.tags?t.tags.split(',').map(s=>s.trim()).filter(Boolean).map(s=>`<span class="tag">${{esc(s)}}</span>`).join(''):'';
-  const dueDisplay=t.due?(over?`⚠ ${{t.due}}`:t.due):'—';
+  // CSS ::before provides the per-tier icon; just show the date here.
+  const dueDisplay=t.due?t.due:'—';
   const descPreview=t.desc?`<div class="desc-preview">${{esc(t.desc)}}</div>`:'';
   const completedDisplay=t.completed||'—';
   const commentCount=t.comments.length>0?`<span style="color:#a78bfa;font-weight:600">${{t.comments.length}}</span>`:'—';
