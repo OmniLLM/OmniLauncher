@@ -1248,6 +1248,11 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Serialise all tests that mutate OMNILAUNCHER_CONFIG_DIR (a global env-var)
+    // so they don't race each other when cargo runs tests in parallel.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn start_scheduler_does_not_require_current_tokio_runtime() {
@@ -1303,6 +1308,7 @@ mod tests {
 
     #[test]
     fn test_db_add_list_delete() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().expect("tmpdir");
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", dir.path().to_str().unwrap());
 
@@ -1320,6 +1326,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_query_list_empty() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().expect("tmpdir");
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", dir.path().to_str().unwrap());
 
@@ -1363,6 +1370,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_runs_due_job_and_records() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().expect("tmpdir");
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", dir.path().to_str().unwrap());
 
