@@ -143,11 +143,50 @@ pub fn load_settings() -> AppSettings {
                         orgs: s.github_orgs.clone(),
                     });
                 }
+                // Auto-detect gh CLI authenticated hosts when no servers configured
+                if s.github_servers.is_empty() {
+                    s.github_servers = detect_gh_hosts();
+                }
                 return s;
             }
         }
     }
-    AppSettings::default()
+    let mut s = AppSettings::default();
+    // Auto-detect gh CLI authenticated hosts for fresh installs
+    s.github_servers = detect_gh_hosts();
+    s
+}
+
+/// Parse `gh auth status` output to discover authenticated hostnames.
+/// Each un-indented line is a hostname (e.g. "github.com", "github.mycompany.com").
+pub fn detect_gh_hosts() -> Vec<GitHubServer> {
+    let output = std::process::Command::new("gh")
+        .args(["auth", "status"])
+        .output();
+    let output = match output {
+        Ok(o) => o,
+        Err(_) => return vec![],
+    };
+    // gh auth status writes to stderr
+    let text = String::from_utf8_lossy(&output.stderr);
+    let mut servers = Vec::new();
+    for line in text.lines() {
+        // Hostnames appear at the start of the line (no leading whitespace)
+        if !line.starts_with(' ') && !line.starts_with('\t') && !line.trim().is_empty() {
+            let hostname = line.trim().to_string();
+            // Skip lines that look like error messages or status indicators
+            if hostname.contains(' ') || hostname.starts_with('✓') || hostname.starts_with('✗') {
+                continue;
+            }
+            servers.push(GitHubServer {
+                hostname,
+                api_base: String::new(),
+                token: String::new(),
+                orgs: vec![],
+            });
+        }
+    }
+    servers
 }
 
 pub fn save_settings(settings: &AppSettings) -> bool {
