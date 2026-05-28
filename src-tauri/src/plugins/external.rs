@@ -375,7 +375,7 @@ fn build_interpreter_command(entry: &Path) -> Command {
             c.arg(entry);
             c
         }
-        Some("js") => {
+        Some("js") | Some("cjs") | Some("mjs") => {
             let mut c = Command::new("node");
             c.arg(entry);
             c

@@ -255,6 +255,7 @@ export default function App() {
   const [historyIdx, setHistoryIdx] = useState(-1);
   const inputHistoryRef = useRef<string[]>([]);
   const pendingQueueRef = useRef<string[]>([]);
+  const [queueDepth, setQueueDepth] = useState(0);
 
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
@@ -517,7 +518,10 @@ export default function App() {
         // Drain next queued prompt after loading state settles
         setTimeout(() => {
           const next = pendingQueueRef.current.shift();
-          if (next) doAiQuery(next);
+          if (next) {
+            setQueueDepth((d) => d - 1);
+            doAiQuery(next);
+          }
         }, 50);
         setTimeout(() => focusInput(), 50);
       };
@@ -718,6 +722,7 @@ export default function App() {
         setHistoryIdx(-1);
         if (loading) {
           pendingQueueRef.current.push(value);
+          setQueueDepth((d) => d + 1);
         } else {
           doAiQuery(value);
         }
@@ -731,6 +736,7 @@ export default function App() {
         setHistoryIdx(-1);
         if (loading) {
           pendingQueueRef.current.push(value);
+          setQueueDepth((d) => d + 1);
         } else {
           doAiQuery(value);
         }
@@ -1330,6 +1336,7 @@ export default function App() {
             onSubmit={handleSubmit}
             isAiMode={isAiMode}
             loading={loading}
+            queueDepth={queueDepth}
             onCancel={() => {
               invoke("ai_cancel").catch(() => {
                 /* no-op: backend will emit ai-error which finishes the turn */

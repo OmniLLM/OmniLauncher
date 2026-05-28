@@ -552,6 +552,23 @@ pub async fn update_plugin(name: String) -> Result<String, String> {
         .ok_or_else(|| format!("Plugin '{}' has no git remote configured.", name))?;
 
     let pull_result = run_git_command(&["pull", "--ff-only"], &target)?;
+    log::info!("update_plugin: pulled '{}'\n{}", name, pull_result.trim());
+
+    // Re-run foreign-format synthesis + dependency setup so updates to
+    // Raycast / Flow.Launcher source picks up new commands and rebuilds dist/.
+    let raycast_synth = super::raycast::synthesize_raycast_extensions_in(&target);
+    let flow_synth = super::flow::synthesize_flow_plugins_in(&target);
+    log::debug!(
+        "update_plugin: post-pull synth raycast={:?} flow={:?}",
+        raycast_synth,
+        flow_synth
+    );
+    if !raycast_synth.is_empty() {
+        super::raycast::try_build_extension(&target);
+    }
+    if !flow_synth.is_empty() {
+        super::flow::try_setup_dependencies(&target);
+    }
 
     Ok(format!("Updated {}\n{}", name, pull_result))
 }

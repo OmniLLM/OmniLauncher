@@ -7,6 +7,8 @@ interface Props {
   onSubmit: (v: string, forceAi: boolean) => void;
   isAiMode: boolean;
   loading: boolean;
+  /** Number of prompts queued behind the current one. */
+  queueDepth?: number;
   /** Called when the user clicks the spinner / Stop button while loading. */
   onCancel?: () => void;
   colors: Record<string, string>;
@@ -106,6 +108,7 @@ export default function SearchBar({
   onSubmit,
   isAiMode,
   loading,
+  queueDepth = 0,
   onCancel,
   colors,
   onSettingsClick,
@@ -277,6 +280,25 @@ export default function SearchBar({
               "⌕"
             )}
           </span>
+
+          {/* Queue depth badge */}
+          {loading && queueDepth > 0 && (
+            <span
+              style={{
+                fontSize: "10px",
+                background: `${colors.accent}30`,
+                color: colors.accent,
+                padding: "1px 5px",
+                borderRadius: "4px",
+                fontWeight: 600,
+                flexShrink: 0,
+                marginLeft: "4px",
+                lineHeight: 1,
+              }}
+            >
+              +{queueDepth}
+            </span>
+          )}
 
           {/* AI badge (shown inside left of input when "?" prefix is typed) */}
           {isAI && !isAiMode && (

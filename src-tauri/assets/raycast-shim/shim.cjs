@@ -136,6 +136,24 @@ async function runBuilt(found, commandName, userQuery) {
   const api = require(shimPath);
   api.__resetCapture();
 
+  // If OmniLauncher built a headless search bundle (dist/<name>.search.js),
+  // use it to answer the query without invoking any React hooks.
+  // The search bundle exports the extension's utility functions directly.
+  const searchBundlePath = path.join(extDir, "dist", `${commandName}.search.js`);
+  if (fs.existsSync(searchBundlePath)) {
+    try {
+      const searchMod = require(searchBundlePath);
+      const output = runHeadlessSearch(searchMod, userQuery || "", commandName);
+      if (output !== null) {
+        reply({ output });
+        return;
+      }
+    } catch (e) {
+      // Search bundle failed — fall through to normal execution path.
+      log(`raycast-shim: search bundle error for '${commandName}': ${e.message}`);
+    }
+  }
+
   let mod;
   try {
     mod = require(found.file);
@@ -171,6 +189,75 @@ async function runBuilt(found, commandName, userQuery) {
   } catch (e) {
     reply({ output: `Raycast command '${commandName}' threw: ${e.message}` });
   }
+}
+
+/**
+ * Try to run a headless search against a search bundle module.
+ * Looks for common patterns: getStaticResult, search, filter functions,
+ * or an exported list/array to search over.
+ * Returns output text, or null if no usable search function was found.
+ */
+function runHeadlessSearch(mod, userQuery, commandName) {
+  // Strip common exchange prefixes like "NASDAQ:AAPL" → "AAPL"
+  const normalizedQuery = userQuery.replace(/^[A-Z0-9]+:/i, "").trim();
+  const q = normalizedQuery.toLowerCase();
+
+  // 1. Look for a dedicated search/filter function by common names.
+  const searchFnNames = ["getStaticResult", "search", "filter", "query", "find", "lookup"];
+  for (const name of searchFnNames) {
+    if (typeof mod[name] === "function") {
+      try {
+        const results = mod[name](normalizedQuery);
+        // If the dedicated function returned results, use them.
+        // If it returned nothing, fall through to generic search so the shim
+        // can broaden the match (e.g. search descriptions, not just tickers).
+        if (Array.isArray(results) && results.length > 0) {
+          return formatResults(results, userQuery, commandName);
+        }
+      } catch {
+        // try next
+      }
+    }
+  }
+
+  // 2. Look for an exported array/list to search over generically.
+  for (const key of Object.keys(mod)) {
+    const val = mod[key];
+    if (Array.isArray(val) && val.length > 0 && typeof val[0] === "object") {
+      const hits = val.filter((item) => {
+        return Object.values(item).some(
+          (v) => typeof v === "string" && v.toLowerCase().includes(q)
+        );
+      });
+      return formatResults(hits, userQuery, commandName);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Format an array of result objects (or strings) into plain text output.
+ */
+function formatResults(results, userQuery, commandName) {
+  if (!Array.isArray(results) || results.length === 0) {
+    return `No results found for "${userQuery}".`;
+  }
+  return results
+    .slice(0, 20)
+    .map((r) => {
+      if (typeof r === "string") return r;
+      // Prefer common field names: query/title/name + description + url
+      const label = r.query || r.title || r.name || r.id || JSON.stringify(r);
+      const desc = r.description || r.subtitle || "";
+      const url = r.url || r.link || "";
+      return [label, desc, url].filter(Boolean).join(" — ");
+    })
+    .join("\n");
+}
+
+function log(msg) {
+  process.stderr.write(msg + "\n");
 }
 
 function runSource(found, commandName, userQuery) {

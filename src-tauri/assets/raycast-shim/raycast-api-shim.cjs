@@ -334,9 +334,9 @@ const OAuth = {
       return undefined;
     }
     async removeTokens() {}
-    RedirectMethod: { Web: "web", AppURI: "app-uri" };
   },
 };
+OAuth.PKCEClient.RedirectMethod = { Web: "web", AppURI: "app-uri" };
 
 module.exports = {
   __resetCapture,
