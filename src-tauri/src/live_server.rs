@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -38,11 +38,14 @@ impl LiveResponse {
     }
 }
 
-type RouteHandler = Arc<dyn Fn() -> LiveResponse + Send + Sync>;
+type RouteFuture = Pin<Box<dyn Future<Output = LiveResponse> + Send>>;
+type RouteHandler = Arc<dyn Fn() -> RouteFuture + Send + Sync>;
+type QueryRouteHandler = Arc<dyn Fn(String) -> RouteFuture + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct LiveServer {
     routes: Arc<RwLock<HashMap<String, RouteHandler>>>,
+    query_routes: Arc<RwLock<HashMap<String, QueryRouteHandler>>>,
 }
 
 impl LiveServer {
@@ -50,14 +53,36 @@ impl LiveServer {
         Self::default()
     }
 
-    pub async fn register_route<F>(&self, path: impl Into<String>, handler: F)
+    pub async fn register_route<F, Fut>(&self, path: impl Into<String>, handler: F)
     where
-        F: Fn() -> LiveResponse + Send + Sync + 'static,
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = LiveResponse> + Send + 'static,
     {
+        let wrapped: RouteHandler = Arc::new(move || {
+            let fut = handler();
+            Box::pin(fut) as RouteFuture
+        });
         self.routes
             .write()
             .await
-            .insert(normalize_path(&path.into()), Arc::new(handler));
+            .insert(normalize_path(&path.into()), wrapped);
+    }
+
+    /// Register a route whose handler receives the raw URL query string
+    /// (without leading `?`). Empty when the request had no query.
+    pub async fn register_route_with_query<F, Fut>(&self, path: impl Into<String>, handler: F)
+    where
+        F: Fn(String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = LiveResponse> + Send + 'static,
+    {
+        let wrapped: QueryRouteHandler = Arc::new(move |q| {
+            let fut = handler(q);
+            Box::pin(fut) as RouteFuture
+        });
+        self.query_routes
+            .write()
+            .await
+            .insert(normalize_path(&path.into()), wrapped);
     }
 
     pub fn url(&self, port: u16, path: &str) -> String {
@@ -85,6 +110,7 @@ impl LiveServer {
             };
 
             let routes = self.routes.clone();
+            let query_routes = self.query_routes.clone();
             tokio::spawn(async move {
                 let mut buf = [0_u8; 4096];
                 let read_len = match stream.read(&mut buf).await {
@@ -102,13 +128,15 @@ impl LiveServer {
                 let request = String::from_utf8_lossy(&buf[..read_len]);
                 let first_line = request.lines().next().unwrap_or_default();
                 let request_path = first_line.split_whitespace().nth(1).unwrap_or("/");
-                let path = normalize_request_target(request_path);
+                let (path, query) = split_path_query(request_path);
 
                 let response = if path == "/health" {
                     LiveResponse::json("{\"ok\":true}".to_string())
+                } else if let Some(handler) = query_routes.read().await.get(&path).cloned() {
+                    handler(query).await
                 } else {
                     match routes.read().await.get(&path).cloned() {
-                        Some(handler) => handler(),
+                        Some(handler) => handler().await,
                         None => LiveResponse::text("404 Not Found", "Not Found".to_string()),
                     }
                 };
@@ -123,9 +151,12 @@ impl LiveServer {
     }
 }
 
-fn normalize_request_target(target: &str) -> String {
-    let path_only = target.split('?').next().unwrap_or("/");
-    normalize_path(path_only)
+/// Split a request target like `/foo/bar?x=1&y=2` into (`/foo/bar`, `x=1&y=2`).
+fn split_path_query(target: &str) -> (String, String) {
+    match target.split_once('?') {
+        Some((p, q)) => (normalize_path(p), q.to_string()),
+        None => (normalize_path(target), String::new()),
+    }
 }
 
 fn normalize_path(path: &str) -> String {

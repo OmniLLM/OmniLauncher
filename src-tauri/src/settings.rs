@@ -36,7 +36,10 @@ impl GitHubServer {
         }
     }
 
-    /// Resolve a bearer token: explicit field first, then `gh auth token --hostname`.
+    /// Resolve a bearer token in this order:
+    ///   1. explicit `token` field
+    ///   2. `gh auth token --hostname <host>` (works for keyring + file storage)
+    ///   3. `oauth_token` field in gh's hosts.yml (file-stored tokens only)
     pub fn resolve_token(&self) -> Option<String> {
         if !self.token.is_empty() {
             return Some(self.token.clone());
@@ -44,19 +47,23 @@ impl GitHubServer {
         let hostname = if self.hostname.is_empty() {
             "github.com"
         } else {
-            &self.hostname
+            self.hostname.as_str()
         };
-        let output = std::process::Command::new("gh")
+        if let Ok(output) = std::process::Command::new("gh")
             .args(["auth", "token", "--hostname", hostname])
             .output()
-            .ok()?;
-        if output.status.success() {
-            let tok = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !tok.is_empty() {
-                return Some(tok);
+        {
+            if output.status.success() {
+                let tok = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !tok.is_empty() {
+                    return Some(tok);
+                }
             }
         }
-        None
+        read_gh_hosts_yml()
+            .into_iter()
+            .find(|h| h.hostname == hostname)
+            .and_then(|h| h.oauth_token)
     }
 }
 
@@ -157,36 +164,160 @@ pub fn load_settings() -> AppSettings {
     s
 }
 
-/// Parse `gh auth status` output to discover authenticated hostnames.
-/// Each un-indented line is a hostname (e.g. "github.com", "github.mycompany.com").
+/// Discover GitHub hostnames the user is authenticated to.
+///
+/// Priority:
+///   1. `gh auth status` output (reads BOTH stdout and stderr — gh ≥2.40 writes
+///      to stdout, older versions write to stderr).
+///   2. Parse hostnames from `~/.config/gh/hosts.yml` (or `%APPDATA%\GitHub CLI\hosts.yml`
+///      on Windows) — useful when `gh` isn't on PATH for the launched app.
 pub fn detect_gh_hosts() -> Vec<GitHubServer> {
-    let output = std::process::Command::new("gh")
+    let mut hostnames: Vec<String> = Vec::new();
+
+    if let Ok(output) = std::process::Command::new("gh")
         .args(["auth", "status"])
-        .output();
-    let output = match output {
-        Ok(o) => o,
-        Err(_) => return vec![],
-    };
-    // gh auth status writes to stderr
-    let text = String::from_utf8_lossy(&output.stderr);
-    let mut servers = Vec::new();
-    for line in text.lines() {
-        // Hostnames appear at the start of the line (no leading whitespace)
-        if !line.starts_with(' ') && !line.starts_with('\t') && !line.trim().is_empty() {
-            let hostname = line.trim().to_string();
-            // Skip lines that look like error messages or status indicators
-            if hostname.contains(' ') || hostname.starts_with('✓') || hostname.starts_with('✗') {
+        .output()
+    {
+        let combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for line in combined.lines() {
+            // Hostnames appear at column 0 (no leading whitespace) and contain a dot.
+            if line.starts_with(' ') || line.starts_with('\t') {
                 continue;
             }
-            servers.push(GitHubServer {
-                hostname,
-                api_base: String::new(),
-                token: String::new(),
-                orgs: vec![],
-            });
+            let trimmed = line.trim().trim_end_matches(':');
+            if trimmed.is_empty() || trimmed.contains(' ') {
+                continue;
+            }
+            // Skip decorative glyphs (✓ ✗ ! etc) and obvious non-hostnames.
+            let first = trimmed.chars().next().unwrap_or(' ');
+            if !first.is_ascii_alphanumeric() {
+                continue;
+            }
+            if !trimmed.contains('.') {
+                continue;
+            }
+            if !hostnames.iter().any(|h| h == trimmed) {
+                hostnames.push(trimmed.to_string());
+            }
         }
     }
-    servers
+
+    // Fallback: read hostnames from gh's hosts.yml (top-level keys).
+    if hostnames.is_empty() {
+        for entry in read_gh_hosts_yml() {
+            if !hostnames.iter().any(|h| h == &entry.hostname) {
+                hostnames.push(entry.hostname);
+            }
+        }
+    }
+
+    hostnames
+        .into_iter()
+        .map(|hostname| GitHubServer {
+            hostname,
+            api_base: String::new(),
+            token: String::new(),
+            orgs: vec![],
+        })
+        .collect()
+}
+
+/// One entry parsed from gh's `hosts.yml` config file.
+#[derive(Debug, Clone)]
+pub struct GhHostEntry {
+    pub hostname: String,
+    pub oauth_token: Option<String>,
+    #[allow(dead_code)]
+    pub user: Option<String>,
+}
+
+/// Locate gh's hosts.yml across platforms. Honors `GH_CONFIG_DIR` when set.
+fn gh_hosts_yml_path() -> Option<std::path::PathBuf> {
+    if let Ok(dir) = std::env::var("GH_CONFIG_DIR") {
+        let p = std::path::PathBuf::from(dir).join("hosts.yml");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let p = std::path::PathBuf::from(appdata)
+                .join("GitHub CLI")
+                .join("hosts.yml");
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        let p = std::path::PathBuf::from(xdg).join("gh").join("hosts.yml");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let p = home.join(".config").join("gh").join("hosts.yml");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Minimal hosts.yml parser. The file format is a flat map of `hostname:` blocks
+/// containing 2-space-indented `key: value` pairs. We only care about
+/// `oauth_token` and `user`; tokens stored in the OS keyring are absent here.
+pub fn read_gh_hosts_yml() -> Vec<GhHostEntry> {
+    let Some(path) = gh_hosts_yml_path() else {
+        return vec![];
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return vec![];
+    };
+    let mut entries: Vec<GhHostEntry> = vec![];
+    let mut current: Option<GhHostEntry> = None;
+    for raw in content.lines() {
+        let line = raw.trim_end();
+        if line.is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let is_top_level = !line.starts_with(' ') && !line.starts_with('\t');
+        if is_top_level {
+            if let Some(prev) = current.take() {
+                entries.push(prev);
+            }
+            let host = line.trim_end_matches(':').trim().to_string();
+            if !host.is_empty() {
+                current = Some(GhHostEntry {
+                    hostname: host,
+                    oauth_token: None,
+                    user: None,
+                });
+            }
+        } else if let Some(entry) = current.as_mut() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("oauth_token:") {
+                let v = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !v.is_empty() {
+                    entry.oauth_token = Some(v);
+                }
+            } else if let Some(rest) = trimmed.strip_prefix("user:") {
+                let v = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !v.is_empty() {
+                    entry.user = Some(v);
+                }
+            }
+        }
+    }
+    if let Some(prev) = current {
+        entries.push(prev);
+    }
+    entries
 }
 
 pub fn save_settings(settings: &AppSettings) -> bool {

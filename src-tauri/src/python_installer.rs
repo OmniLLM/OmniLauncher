@@ -110,7 +110,9 @@ fn asset_name_for_platform(py_ver: &str) -> String {
 
     // Fallback (shouldn't reach here for supported platforms)
     #[allow(unreachable_code)]
-    format!("cpython-{py_ver}+{TAG}-x86_64-unknown-linux-gnu-install_only.tar.gz")
+    {
+        format!("cpython-{py_ver}+{TAG}-x86_64-unknown-linux-gnu-install_only.tar.gz")
+    }
 }
 
 /// Download URL to a temp file, return path.

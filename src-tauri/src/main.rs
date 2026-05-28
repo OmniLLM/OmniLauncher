@@ -126,64 +126,68 @@ pub fn run() {
             live_server_port
         );
         live_server_task
-            .register_route("/dashboard", || {
+            .register_route("/dashboard", || async {
                 LiveResponse::html(omnilauncher_lib::dashboard::index_html())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/data", || {
+            .register_route("/dashboard/data", || async {
                 LiveResponse::json(omnilauncher_lib::dashboard::index_data_json())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/todos", || {
+            .register_route("/dashboard/todos", || async {
                 LiveResponse::html(omnilauncher_lib::dashboard::todos_html())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/todos/data", || {
+            .register_route("/dashboard/todos/data", || async {
                 LiveResponse::json(omnilauncher_lib::dashboard::todos_data_json())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/conversation", || {
+            .register_route("/dashboard/conversation", || async {
                 LiveResponse::html(omnilauncher_lib::dashboard::conversation_html())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/conversation/data", || {
+            .register_route("/dashboard/conversation/data", || async {
                 LiveResponse::json(omnilauncher_lib::dashboard::conversation_data_json())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/jobs", || {
+            .register_route("/dashboard/jobs", || async {
                 LiveResponse::html(omnilauncher_lib::dashboard::jobs_html())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/jobs/data", || {
+            .register_route("/dashboard/jobs/data", || async {
                 LiveResponse::json(omnilauncher_lib::dashboard::jobs_data_json())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/tables", || {
+            .register_route("/dashboard/tables", || async {
                 LiveResponse::html(omnilauncher_lib::dashboard::tables_html())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/tables/data", || {
+            .register_route("/dashboard/tables/data", || async {
                 LiveResponse::json(omnilauncher_lib::dashboard::tables_data_json())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/github", || {
+            .register_route("/dashboard/github", || async {
                 LiveResponse::html(omnilauncher_lib::dashboard::github_html())
             })
             .await;
         live_server_task
-            .register_route("/dashboard/github/data", || {
-                let rt = tokio::runtime::Handle::current();
-                LiveResponse::json(rt.block_on(omnilauncher_lib::dashboard::github_data_json()))
+            .register_route("/dashboard/github/data", || async {
+                LiveResponse::json(omnilauncher_lib::dashboard::github_data_json().await)
+            })
+            .await;
+        live_server_task
+            .register_route_with_query("/dashboard/github/repo", |q| async move {
+                LiveResponse::json(omnilauncher_lib::dashboard::github_repo_detail_json(q).await)
             })
             .await;
         log::info!(

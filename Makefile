@@ -1,6 +1,13 @@
-.PHONY: help dev dev-debug prod prod-debug restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle stop stop-running stop-dev-server
+.PHONY: help dev dev-debug prod prod-debug restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle stop stop-running stop-dev-server status logs
 
 SHELL := pwsh
+
+# Detect OS: Windows sets OS=Windows_NT; on Linux/macOS it is unset or different
+ifeq ($(OS),Windows_NT)
+  PLATFORM := windows
+else
+  PLATFORM := unix
+endif
 
 help:
 	@echo OmniLauncher - Makefile targets:
@@ -22,6 +29,8 @@ help:
 	@echo   format           Format Rust + frontend code
 	@echo   check            Run TypeScript + Rust type checks
 	@echo   test             Run all tests
+	@echo   status           Show app status (running, dev server, build)
+	@echo   logs             Tail the debug log file live
 
 dev: stop-running stop-dev-server
 	@cmd /c "set CARGO_TARGET_DIR=target\dev&& npm run tauri dev"
@@ -89,3 +98,17 @@ stop-running:
 
 stop-dev-server:
 	@powershell -NoProfile -Command 'Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { Stop-Process -Id ($$_.OwningProcess) -Force -ErrorAction SilentlyContinue }; exit 0'
+
+status:
+ifeq ($(PLATFORM),windows)
+	@pwsh -NoProfile -File scripts/status.ps1
+else
+	@bash scripts/status.sh
+endif
+
+logs:
+ifeq ($(PLATFORM),windows)
+	@pwsh -NoProfile -File scripts/logs.ps1
+else
+	@bash scripts/logs.sh
+endif
