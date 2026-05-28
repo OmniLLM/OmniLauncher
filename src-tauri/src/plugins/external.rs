@@ -422,6 +422,16 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
         }
     }
 
+    // Refresh the Raycast shim files for any already-installed Raycast
+    // extensions so shim improvements (bundled with the binary) propagate
+    // without requiring a manual re-install. Cheap (a few file writes) and
+    // a no-op for non-Raycast plugin directories.
+    for base in &dirs {
+        if base.exists() {
+            let _ = super::raycast::synthesize_raycast_extensions_in(base);
+        }
+    }
+
     let mut plugins: Vec<ExternalPlugin> = vec![];
 
     for base in &dirs {

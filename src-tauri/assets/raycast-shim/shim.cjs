@@ -171,6 +171,13 @@ async function runBuilt(found, commandName, userQuery) {
     fallbackText: userQuery || "",
   };
 
+  // Raycast view-mode commands are React components. Calling them outside a
+  // real renderer makes React 19's hook dispatcher resolve to null, so the
+  // first `useState()` call throws `Cannot read properties of null (reading
+  // 'useState')`. Install a stub dispatcher so the synchronous body can run
+  // and the shim can capture any side-effects (toast/HUD/clipboard) before
+  // returning a meaningful message instead of a React internals error.
+  const restoreDispatcher = installStubHookDispatcher();
   try {
     let returnValue;
     if (typeof fn === "function") {
@@ -183,12 +190,116 @@ async function runBuilt(found, commandName, userQuery) {
     } else if (typeof returnValue === "string") {
       outputText = returnValue;
     } else {
-      outputText = `Ran ${commandName}`;
+      // The component rendered (or returned a React element) but produced no
+      // captured output. View-mode commands need an interactive launcher; we
+      // can't fully render their UI here. Surface this clearly to the AI.
+      outputText = viewModeFallbackMessage(commandName, userQuery);
     }
     reply({ output: outputText });
   } catch (e) {
-    reply({ output: `Raycast command '${commandName}' threw: ${e.message}` });
+    reply({
+      output:
+        `Raycast command '${commandName}' is a view-mode UI command and can't be ` +
+        `fully executed headlessly (${e.message}). ` +
+        viewModeFallbackMessage(commandName, userQuery),
+    });
+  } finally {
+    restoreDispatcher();
   }
+}
+
+/**
+ * Replace React 19's hook dispatcher with a stub so hooks called outside a
+ * real renderer return sensible defaults instead of throwing on `null`.
+ * Returns a function that restores the original dispatcher.
+ *
+ * Stubs only the hooks needed for a typical synchronous first render:
+ * useState/useReducer return `[initial, noop]`, useEffect/useLayoutEffect/
+ * useInsertionEffect are noops, useMemo/useCallback invoke the factory
+ * synchronously, useRef returns `{current: initial ?? null}`, useContext
+ * returns the context's default value, and useId returns a deterministic id.
+ *
+ * This is best-effort: components that depend on async effects to populate
+ * data will still see only their initial loading state.
+ */
+function installStubHookDispatcher() {
+  let React;
+  try {
+    React = require("react");
+  } catch {
+    return () => {};
+  }
+  const internals =
+    React.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE ||
+    React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED;
+  if (!internals) return () => {};
+
+  // React 19 uses `H`; React 18 used `ReactCurrentDispatcher.current`.
+  const hasH = "H" in internals;
+  const original = hasH
+    ? internals.H
+    : internals.ReactCurrentDispatcher && internals.ReactCurrentDispatcher.current;
+
+  let idCounter = 0;
+  const noop = () => {};
+  const stub = {
+    useState: (init) => [typeof init === "function" ? init() : init, noop],
+    useReducer: (_r, init, initFn) => [
+      typeof initFn === "function" ? initFn(init) : init,
+      noop,
+    ],
+    useEffect: noop,
+    useLayoutEffect: noop,
+    useInsertionEffect: noop,
+    useMemo: (factory) => {
+      try {
+        return factory();
+      } catch {
+        return undefined;
+      }
+    },
+    useCallback: (cb) => cb,
+    useRef: (init) => ({ current: init === undefined ? null : init }),
+    useContext: (ctx) => (ctx && "_currentValue" in ctx ? ctx._currentValue : undefined),
+    useImperativeHandle: noop,
+    useDebugValue: noop,
+    useId: () => `omni-shim-id-${++idCounter}`,
+    useTransition: () => [false, noop],
+    useDeferredValue: (v) => v,
+    useSyncExternalStore: (_sub, get) => {
+      try {
+        return get();
+      } catch {
+        return undefined;
+      }
+    },
+    useOptimistic: (v) => [v, noop],
+    useActionState: (_action, init) => [init, noop, false],
+  };
+
+  if (hasH) {
+    internals.H = stub;
+    return () => {
+      internals.H = original;
+    };
+  }
+  if (internals.ReactCurrentDispatcher) {
+    internals.ReactCurrentDispatcher.current = stub;
+    return () => {
+      internals.ReactCurrentDispatcher.current = original;
+    };
+  }
+  return () => {};
+}
+
+function viewModeFallbackMessage(commandName, userQuery) {
+  const q = userQuery ? ` for "${userQuery}"` : "";
+  return (
+    `Raycast command '${commandName}' is an interactive view-mode UI command. ` +
+    `OmniLauncher's AI shim can't fully render its React-based interface headlessly` +
+    `${q}. Open the launcher and type the extension keyword to use it interactively, ` +
+    `or call a different tool (e.g. web_search / web_fetch) for this query.`
+  );
 }
 
 /**
