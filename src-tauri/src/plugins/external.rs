@@ -192,9 +192,7 @@ impl Plugin for ExternalPlugin {
 
     async fn execute_action(&self, id: &str, action_data: &str) -> Option<String> {
         let request = serde_json::json!({ "op": "execute", "id": id, "action_data": action_data });
-        let Some(output) = self.call_op(request, 10, "execute_action").await else {
-            return None;
-        };
+        let output = self.call_op(request, 10, "execute_action").await?;
         match serde_json::from_str::<serde_json::Value>(&output) {
             Ok(val) => Some(val["output"].as_str().unwrap_or("").to_string()),
             Err(_) => Some(output),
@@ -396,6 +394,31 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
 
     let mut plugins: Vec<ExternalPlugin> = vec![];
 
+    for base in &dirs {
+        if !base.exists() {
+            continue;
+        }
+        match std::fs::read_dir(base) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        for (plugin_dir, manifest) in discover_plugins_in_repo(&path) {
+                            log::info!(
+                                "Discovered external plugin '{}' from {}",
+                                manifest.name,
+                                plugin_dir.display()
+                            );
+                            plugins.push(ExternalPlugin::new(plugin_dir, manifest));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to scan plugin dir {}: {e}", base.display());
+            }
+        }
+    }
     plugins
 }
 
