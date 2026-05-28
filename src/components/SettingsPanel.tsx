@@ -9,6 +9,7 @@ interface AppSettings {
   hotkey: string;
   max_results: number;
   background_url: string;
+  capture_selection_on_open: boolean;
 }
 
 const BG_PRESETS = [
@@ -96,6 +97,7 @@ export default function SettingsPanel({
             hotkey: "Alt+Space",
             max_results: 10,
             background_url: "",
+            capture_selection_on_open: false,
           },
         );
         setModelFilter(initialSettings?.ai_model || "auto");
@@ -302,6 +304,44 @@ export default function SettingsPanel({
           <div className="settings__label">Hotkey</div>
           <div className="settings__input settings__input--readonly">
             {settings.hotkey}
+          </div>
+        </div>
+
+        <div>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              cursor: "pointer",
+              userSelect: "none",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={settings.capture_selection_on_open}
+              onChange={(e) =>
+                setSettings(
+                  (s) =>
+                    s && { ...s, capture_selection_on_open: e.target.checked },
+                )
+              }
+            />
+            <span className="settings__label" style={{ margin: 0 }}>
+              Capture selected text on open
+            </span>
+          </label>
+          <div
+            style={{
+              fontSize: "11px",
+              color: "var(--text-secondary, #9aa0a6)",
+              marginTop: "4px",
+              marginLeft: "22px",
+            }}
+          >
+            When on, the launcher pre-fills with whatever text was highlighted
+            in the previously focused window (prefixed <code>__sel__:</code>).
+            Always skipped when that window is OmniLauncher itself.
           </div>
         </div>
 

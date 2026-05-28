@@ -33,6 +33,50 @@ fn window_pos_path() -> std::path::PathBuf {
     p
 }
 
+/// Returns true when the OS foreground window appears to belong to
+/// OmniLauncher itself. Used to suppress selection capture so highlighted
+/// text inside our own dashboard / settings windows doesn't bleed back into
+/// the launcher input on the next hotkey press.
+#[cfg(target_os = "windows")]
+fn foreground_is_ours() -> bool {
+    // Single PowerShell call: print "<fg_pid> <parent_pid>" so we can decide
+    // ownership without spawning two separate processes per hotkey press.
+    let script = r#"
+Add-Type -Namespace W -Name U -MemberDefinition '
+[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint procId);
+' | Out-Null
+$h = [W.U]::GetForegroundWindow()
+$pid_ = 0
+[void][W.U]::GetWindowThreadProcessId($h, [ref]$pid_)
+$ppid = 0
+try {
+  $ppid = (Get-CimInstance Win32_Process -Filter "ProcessId=$pid_" -ErrorAction Stop).ParentProcessId
+} catch {}
+"$pid_ $ppid"
+"#;
+    let out = match std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut parts = stdout.trim().split_whitespace();
+    let fg_pid: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let parent_pid: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let our_pid = std::process::id();
+    fg_pid == our_pid || parent_pid == our_pid
+}
+
+#[cfg(not(target_os = "windows"))]
+fn foreground_is_ours() -> bool {
+    // On Linux/macOS we don't currently inspect the foreground window owner;
+    // err on the side of allowing capture (the setting still gates it).
+    false
+}
+
 fn debug_log_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_default()
@@ -295,12 +339,20 @@ pub fn run() {
                         if window.is_visible().unwrap_or(false) {
                             let _ = window.hide();
                         } else {
-                            // Read X11 PRIMARY selection before showing the window.
-                            // This captures whatever text the user had highlighted in
-                            // another app at the moment they triggered the hotkey.
-                            let selection =
+                            // Only capture the foreground selection when the
+                            // user has opted in via settings, AND the
+                            // foreground window isn't already one of ours
+                            // (avoids text inside our dashboard bleeding into
+                            // the launcher input on the next hotkey).
+                            let cfg = omnilauncher_lib::settings::load_settings();
+                            let selection = if cfg.capture_selection_on_open
+                                && !foreground_is_ours()
+                            {
                                 omnilauncher_lib::plugins::selection::read_x11_selection()
-                                    .unwrap_or_default();
+                                    .unwrap_or_default()
+                            } else {
+                                String::new()
+                            };
                             let _ = window.show();
                             let _ = window.set_focus();
                             let _ = window.emit("omnilauncher://shown", selection);

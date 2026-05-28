@@ -88,6 +88,13 @@ pub struct AppSettings {
     #[serde(default)]
     pub github_servers: Vec<GitHubServer>,
 
+    /// When true, capturing the text selected in the previously-focused window
+    /// is automatically pre-filled into the launcher (prefixed with `__sel__:`)
+    /// each time it's shown. Off by default — turning it on enables the
+    /// "highlight text → invoke launcher → see contextual actions" workflow.
+    #[serde(default)]
+    pub capture_selection_on_open: bool,
+
     // ── legacy single-server fields (migrated on first load) ──────────────────
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub github_token: String,
@@ -109,6 +116,7 @@ impl Default for AppSettings {
             background_url: String::new(),
             plugin_dirs: vec![],
             github_servers: vec![],
+            capture_selection_on_open: false,
             github_token: String::new(),
             github_server: String::new(),
             github_orgs: vec![],
