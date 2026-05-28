@@ -125,7 +125,12 @@ impl Default for AppSettings {
 }
 
 pub fn settings_path() -> std::path::PathBuf {
-    let config_dir = dirs::home_dir().unwrap_or_default().join(".config");
+    let config_dir = dirs::home_dir()
+        .unwrap_or_else(|| {
+            log::warn!("Could not determine home directory; using current directory for settings");
+            std::path::PathBuf::from(".")
+        })
+        .join(".config");
     config_dir.join("omnilauncher").join("settings.json")
 }
 
@@ -341,3 +346,23 @@ pub fn save_settings(settings: &AppSettings) -> bool {
     }
 }
 
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn test_settings_path_is_non_empty() {
+        let p = settings_path();
+        assert!(!p.as_os_str().is_empty());
+        assert!(p.to_string_lossy().contains("omnilauncher"));
+    }
+
+    #[test]
+    fn test_default_settings_values() {
+        let s = AppSettings::default();
+        assert_eq!(s.theme, "system");
+        assert_eq!(s.hotkey, "Alt+Space");
+        assert_eq!(s.max_results, 10);
+    }
+}
