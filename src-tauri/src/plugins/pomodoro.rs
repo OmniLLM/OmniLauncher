@@ -17,10 +17,58 @@ fn state_path() -> std::path::PathBuf {
     path_config::data_dir().join("pomodoro.json")
 }
 
+/// Per-state data for a Pomodoro timer phase — the "state" in the State pattern.
+pub struct PomodoroPhase {
+    pub duration_secs: u64,
+    pub label: &'static str,
+    pub icon: &'static str,
+    pub done_title: &'static str,
+    pub done_msg: &'static str,
+}
+
+/// All timer modes. Serializes as snake_case to stay compatible with existing
+/// persisted JSON files (`"work"`, `"short_break"`, `"long_break"`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PomodoroMode {
+    Work,
+    ShortBreak,
+    LongBreak,
+}
+
+impl PomodoroMode {
+    /// Return the phase data for this mode — duration, labels, notification text.
+    pub fn phase(&self) -> PomodoroPhase {
+        match self {
+            PomodoroMode::Work => PomodoroPhase {
+                duration_secs: 25 * 60,
+                label: "🍅 Work",
+                icon: "🍅",
+                done_title: "🍅 Pomodoro done!",
+                done_msg: "Time for a break!",
+            },
+            PomodoroMode::ShortBreak => PomodoroPhase {
+                duration_secs: 5 * 60,
+                label: "☕ Short Break",
+                icon: "☕",
+                done_title: "☕ Break over!",
+                done_msg: "Back to work!",
+            },
+            PomodoroMode::LongBreak => PomodoroPhase {
+                duration_secs: 15 * 60,
+                label: "🛋️ Long Break",
+                icon: "🛋️",
+                done_title: "🛋️ Long break over!",
+                done_msg: "Ready to focus again?",
+            },
+        }
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct PomodoroState {
-    mode: String,    // "work" | "short_break" | "long_break" | "idle"
-    started_at: i64, // unix seconds
+    mode: PomodoroMode,
+    started_at: i64,
     duration_secs: u64,
     session_count: u32,
 }
@@ -129,28 +177,24 @@ impl Plugin for PomodoroPlugin {
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = q.raw.trim();
         let state = load_state();
+        let sp = state_path().to_string_lossy().to_string();
 
-        // Status result always shown when prefix matches
+        // Build status result from current state (if any)
         let status_result = if let Some(ref s) = state {
+            let phase = s.mode.phase();
             let elapsed = elapsed_secs(s.started_at).max(0) as u64;
             let done = elapsed >= s.duration_secs;
-            let mode_label = match s.mode.as_str() {
-                "work" => "🍅 Work",
-                "short_break" => "☕ Short Break",
-                "long_break" => "🛋️ Long Break",
-                _ => "⏸️ Idle",
-            };
             let (icon, subtitle) = if done {
                 (
                     "✅",
-                    format!("{} — DONE! (session #{})", mode_label, s.session_count),
+                    format!("{} — DONE! (session #{})", phase.label, s.session_count),
                 )
             } else {
                 (
                     "⏱️",
                     format!(
                         "{} — {} remaining (session #{})",
-                        mode_label,
+                        phase.label,
                         format_remaining(s.duration_secs, s.started_at),
                         s.session_count
                     ),
@@ -169,31 +213,28 @@ impl Plugin for PomodoroPlugin {
             None
         };
 
-        let sp = state_path().to_string_lossy().to_string();
-
-        // Build action items based on subcommand
         let sub = raw.strip_prefix("pomo").unwrap_or("").trim();
         let mut results = vec![];
 
         if sub.is_empty() || sub.starts_with("st") {
-            // show start / status / stop
             if let Some(sr) = status_result {
                 results.push(sr);
             }
             if sub.is_empty() || "start".starts_with(sub) {
+                let phase = PomodoroMode::Work.phase();
                 let new_state = PomodoroState {
-                    mode: "work".to_string(),
+                    mode: PomodoroMode::Work,
                     started_at: now_secs(),
-                    duration_secs: 25 * 60,
+                    duration_secs: phase.duration_secs,
                     session_count: state.as_ref().map(|s| s.session_count + 1).unwrap_or(1),
                 };
                 save_state(&new_state);
-                let cmd = timer_shell(25 * 60, "🍅 Pomodoro done!", "Time for a break!", &sp);
+                let cmd = timer_shell(phase.duration_secs, phase.done_title, phase.done_msg, &sp);
                 results.push(QueryResult {
                     id: "pomo:start".to_string(),
-                    title: "🍅 Start Pomodoro (25 min)".to_string(),
+                    title: format!("{} Start Pomodoro (25 min)", phase.icon),
                     subtitle: Some("Begin a focused work session".to_string()),
-                    icon: Some("🍅".to_string()),
+                    icon: Some(phase.icon.to_string()),
                     score: 90,
                     action_type: "shell_bg".to_string(),
                     action_data: cmd,
@@ -213,12 +254,13 @@ impl Plugin for PomodoroPlugin {
         }
 
         if sub.is_empty() || "short".starts_with(sub) {
-            let cmd = timer_shell(5 * 60, "☕ Break over!", "Back to work!", &sp);
+            let phase = PomodoroMode::ShortBreak.phase();
+            let cmd = timer_shell(phase.duration_secs, phase.done_title, phase.done_msg, &sp);
             results.push(QueryResult {
                 id: "pomo:short".to_string(),
-                title: "☕ Short Break (5 min)".to_string(),
+                title: format!("{} Short Break (5 min)", phase.icon),
                 subtitle: Some("Quick breather".to_string()),
-                icon: Some("☕".to_string()),
+                icon: Some(phase.icon.to_string()),
                 score: 85,
                 action_type: "shell_bg".to_string(),
                 action_data: cmd,
@@ -226,12 +268,13 @@ impl Plugin for PomodoroPlugin {
         }
 
         if sub.is_empty() || "long".starts_with(sub) {
-            let cmd = timer_shell(15 * 60, "🛋️ Long break over!", "Ready to focus again?", &sp);
+            let phase = PomodoroMode::LongBreak.phase();
+            let cmd = timer_shell(phase.duration_secs, phase.done_title, phase.done_msg, &sp);
             results.push(QueryResult {
                 id: "pomo:long".to_string(),
-                title: "🛋️ Long Break (15 min)".to_string(),
+                title: format!("{} Long Break (15 min)", phase.icon),
                 subtitle: Some("After 4 pomodoros".to_string()),
-                icon: Some("🛋️".to_string()),
+                icon: Some(phase.icon.to_string()),
                 score: 82,
                 action_type: "shell_bg".to_string(),
                 action_data: cmd,
@@ -267,10 +310,11 @@ impl Plugin for PomodoroPlugin {
             }
             "status" => {
                 if let Some(s) = load_state() {
+                    let phase = s.mode.phase();
                     let remaining = format_remaining(s.duration_secs, s.started_at);
                     format!(
                         "Mode: {}, Remaining: {}, Session: #{}",
-                        s.mode, remaining, s.session_count
+                        phase.label, remaining, s.session_count
                     )
                 } else {
                     "No active pomodoro".to_string()
@@ -278,5 +322,61 @@ impl Plugin for PomodoroPlugin {
             }
             _ => "Unknown action".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod pomodoro_state_tests {
+    use super::*;
+
+    #[test]
+    fn test_work_phase_duration() {
+        assert_eq!(PomodoroMode::Work.phase().duration_secs, 25 * 60);
+    }
+
+    #[test]
+    fn test_short_break_phase_duration() {
+        assert_eq!(PomodoroMode::ShortBreak.phase().duration_secs, 5 * 60);
+    }
+
+    #[test]
+    fn test_long_break_phase_duration() {
+        assert_eq!(PomodoroMode::LongBreak.phase().duration_secs, 15 * 60);
+    }
+
+    #[test]
+    fn test_mode_serde_round_trip() {
+        let serialized = serde_json::to_string(&PomodoroMode::Work).unwrap();
+        assert_eq!(serialized, "\"work\"");
+        let deserialized: PomodoroMode = serde_json::from_str("\"work\"").unwrap();
+        assert_eq!(deserialized, PomodoroMode::Work);
+
+        let serialized = serde_json::to_string(&PomodoroMode::ShortBreak).unwrap();
+        assert_eq!(serialized, "\"short_break\"");
+
+        let serialized = serde_json::to_string(&PomodoroMode::LongBreak).unwrap();
+        assert_eq!(serialized, "\"long_break\"");
+    }
+
+    #[test]
+    fn test_work_phase_labels() {
+        let p = PomodoroMode::Work.phase();
+        assert_eq!(p.label, "🍅 Work");
+        assert_eq!(p.icon, "🍅");
+        assert!(p.done_title.contains("Pomodoro"));
+    }
+
+    #[test]
+    fn test_short_break_phase_labels() {
+        let p = PomodoroMode::ShortBreak.phase();
+        assert_eq!(p.label, "☕ Short Break");
+        assert_eq!(p.icon, "☕");
+    }
+
+    #[test]
+    fn test_long_break_phase_labels() {
+        let p = PomodoroMode::LongBreak.phase();
+        assert_eq!(p.label, "🛋️ Long Break");
+        assert_eq!(p.icon, "🛋️");
     }
 }
