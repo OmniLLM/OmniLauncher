@@ -653,11 +653,15 @@ pub fn try_build_extension(dir: &Path) {
 
     if cfg!(windows) {
         // `ray build` is a bash script + Darwin/Linux-only binary; it cannot
-        // run on native Windows. Use esbuild directly to compile the extension's
-        // TypeScript commands into dist/ so the shim's runBuilt path works.
-        if !esbuild_extension(dir) {
-            // esbuild failed — fall back to tsx so the source-loader path works.
-            ensure_tsx_installed(dir);
+        // run on native Windows. Try tsc first (typescript is always a
+        // devDependency of Raycast extensions), then fall back to esbuild,
+        // then tsx as a last resort.
+        if !tsc_build_extension(dir) {
+            if !esbuild_extension(dir) {
+                // Both compilers failed — install tsx so the source-loader
+                // fallback path works at execute time.
+                ensure_tsx_installed(dir);
+            }
         }
         return;
     }
@@ -794,6 +798,97 @@ fn esbuild_extension(dir: &Path) -> bool {
         }
     }
     any_success
+}
+
+/// Use `tsc` (via npx) to compile the extension's TypeScript source into
+/// `dist/`. This is the preferred Windows build path because `typescript`
+/// is always a devDependency of Raycast extensions (required by
+/// `@raycast/api`) and is therefore available after `npm install`.
+///
+/// Passes `--project tsconfig.json` when that file exists in `dir`, and
+/// always passes `--outDir dist --noEmit false` so output lands in `dist/`
+/// regardless of what the tsconfig says.
+///
+/// Returns `true` if tsc exits successfully AND `dist/` contains at least
+/// one `.js` file afterwards.
+fn tsc_build_extension(dir: &Path) -> bool {
+    let npx = if cfg!(windows) { "npx.cmd" } else { "npx" };
+
+    let dist_dir = dir.join("dist");
+    if let Err(e) = std::fs::create_dir_all(&dist_dir) {
+        log::warn!(
+            "raycast::tsc_build_extension: failed to create dist/ in {}: {e}",
+            dir.display()
+        );
+        return false;
+    }
+
+    let mut args = vec![
+        "--no-install".to_string(),
+        "tsc".to_string(),
+    ];
+
+    if dir.join("tsconfig.json").is_file() {
+        args.push("--project".to_string());
+        args.push(dir.join("tsconfig.json").to_string_lossy().into_owned());
+    }
+
+    args.push("--outDir".to_string());
+    args.push(dist_dir.to_string_lossy().into_owned());
+    // NOTE: do NOT add --noEmit or false here; --noEmit is a boolean presence
+    // flag and passing it at all suppresses output.
+
+    log::debug!(
+        "raycast::tsc_build_extension: running npx tsc --outDir dist for {}",
+        dir.display()
+    );
+
+    let result = Command::new(npx)
+        .args(&args)
+        .current_dir(dir)
+        .output();
+
+    match result {
+        Ok(out) if out.status.success() => {
+            // Verify dist/ was actually populated
+            let has_js = std::fs::read_dir(&dist_dir)
+                .ok()
+                .map(|rd| {
+                    rd.flatten()
+                        .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("js"))
+                })
+                .unwrap_or(false);
+
+            if has_js {
+                log::info!(
+                    "raycast::tsc_build_extension: compiled extension at {}",
+                    dir.display()
+                );
+                true
+            } else {
+                log::warn!(
+                    "raycast::tsc_build_extension: tsc succeeded but dist/ has no .js files in {}",
+                    dir.display()
+                );
+                false
+            }
+        }
+        Ok(out) => {
+            log::warn!(
+                "raycast::tsc_build_extension: tsc failed for {}: {}",
+                dir.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            false
+        }
+        Err(e) => {
+            log::warn!(
+                "raycast::tsc_build_extension: failed to spawn npx tsc for {}: {e}",
+                dir.display()
+            );
+            false
+        }
+    }
 }
 
 /// Generate a headless `dist/<name>.search.js` bundle for a Raycast view command
@@ -1131,5 +1226,69 @@ mod tests {
         assert!(!is_valid_extension_name("foo/bar"));
         assert!(is_valid_extension_name("hello-world"));
         assert!(is_valid_extension_name("gif_search"));
+    }
+
+    #[test]
+    fn tsc_build_extension_populates_dist() {
+        // This test requires node/npm/npx in PATH. Skip gracefully if not present.
+        if which("npx").is_none() {
+            return;
+        }
+
+        let dir = tmpdir();
+
+        // Minimal package.json with typescript devDep and one command
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{
+                "name": "tsc-test-ext",
+                "description": "test",
+                "dependencies": {"@raycast/api": "^1.39.0"},
+                "devDependencies": {"typescript": "^4.4.3"},
+                "commands": [{"name": "hello", "title": "Hello"}]
+            }"#,
+        )
+        .unwrap();
+
+        // Minimal tsconfig.json
+        std::fs::write(
+            dir.join("tsconfig.json"),
+            r#"{"compilerOptions": {"module": "commonjs", "target": "es2021", "outDir": "dist", "skipLibCheck": true, "jsx": "react-jsx", "esModuleInterop": true},"include": ["src/**/*"]}"#,
+        )
+        .unwrap();
+
+        // Minimal TypeScript source
+        std::fs::create_dir(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src").join("hello.tsx"),
+            r#"export function run() { console.log("hello"); }"#,
+        )
+        .unwrap();
+
+        // npm install to get typescript into node_modules
+        let install = std::process::Command::new(npm_executable())
+            .args(["install", "--ignore-scripts"])
+            .current_dir(&dir)
+            .output()
+            .expect("npm install failed to spawn");
+        if !install.status.success() {
+            // Can't install — skip test
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+
+        let result = tsc_build_extension(&dir);
+        assert!(result, "tsc_build_extension should return true");
+
+        let dist = dir.join("dist");
+        assert!(dist.is_dir(), "dist/ should exist after tsc build");
+
+        let has_js = std::fs::read_dir(&dist)
+            .unwrap()
+            .flatten()
+            .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("js"));
+        assert!(has_js, "dist/ should contain at least one .js file");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
