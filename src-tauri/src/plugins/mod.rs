@@ -38,6 +38,8 @@ pub trait Plugin: Send + Sync {
 
 pub struct PluginManager {
     pub plugins: Vec<Box<dyn Plugin>>,
+    /// Index from plugin name → index in `plugins` for O(1) tool lookup.
+    name_index: std::collections::HashMap<String, usize>,
 }
 
 fn keyword_matches(raw: &str, keyword: &str) -> bool {
@@ -61,11 +63,14 @@ impl Default for PluginManager {
 
 impl PluginManager {
     pub fn new() -> Self {
-        Self { plugins: vec![] }
+        Self { plugins: vec![], name_index: std::collections::HashMap::new() }
     }
 
     pub fn register(&mut self, p: Box<dyn Plugin>) {
+        let name = p.name().to_string();
+        let idx = self.plugins.len();
         self.plugins.push(p);
+        self.name_index.insert(name, idx);
     }
 
     /// Register a plugin, evicting any existing plugin that conflicts on name or keyword.
@@ -91,12 +96,21 @@ impl PluginManager {
                 self.unregister_by_keyword(kw);
             }
         }
+        let idx = self.plugins.len();
         self.plugins.push(p);
+        self.name_index.insert(name, idx);
+    }
+
+    fn rebuild_index(&mut self) {
+        self.name_index.clear();
+        for (i, p) in self.plugins.iter().enumerate() {
+            self.name_index.insert(p.name().to_string(), i);
+        }
     }
 
     /// Returns true if any registered plugin has this exact name.
     pub fn has_name(&self, name: &str) -> bool {
-        self.plugins.iter().any(|p| p.name() == name)
+        self.name_index.contains_key(name)
     }
 
     /// Returns true if any registered plugin has this exact keyword.
@@ -110,6 +124,7 @@ impl PluginManager {
     pub fn unregister_by_name(&mut self, name: &str) -> usize {
         let before = self.plugins.len();
         self.plugins.retain(|p| p.name() != name);
+        self.rebuild_index();
         before - self.plugins.len()
     }
 
@@ -118,6 +133,7 @@ impl PluginManager {
         let before = self.plugins.len();
         self.plugins
             .retain(|p| p.keyword() != Some(kw));
+        self.rebuild_index();
         before - self.plugins.len()
     }
 
@@ -151,10 +167,8 @@ impl PluginManager {
     }
 
     pub async fn execute_tool(&self, name: &str, args: serde_json::Value) -> String {
-        for p in &self.plugins {
-            if p.name() == name {
-                return p.execute_tool(args).await;
-            }
+        if let Some(&idx) = self.name_index.get(name) {
+            return self.plugins[idx].execute_tool(args).await;
         }
         "Tool not found".to_string()
     }
@@ -166,10 +180,8 @@ impl PluginManager {
         id: &str,
         action_data: &str,
     ) -> Option<String> {
-        for p in &self.plugins {
-            if p.name() == plugin_name {
-                return p.execute_action(id, action_data).await;
-            }
+        if let Some(&idx) = self.name_index.get(plugin_name) {
+            return self.plugins[idx].execute_action(id, action_data).await;
         }
         None
     }
@@ -219,3 +231,42 @@ pub mod web_fetch;
 pub mod web_search;
 pub mod window_resize;
 pub mod windows_settings;
+
+#[cfg(test)]
+mod plugin_manager_tests {
+    use super::*;
+
+    struct FakePlugin { name: &'static str, kw: Option<&'static str> }
+
+    #[async_trait::async_trait]
+    impl Plugin for FakePlugin {
+        fn name(&self) -> &str { self.name }
+        fn description(&self) -> &str { "fake" }
+        fn keyword(&self) -> Option<&str> { self.kw }
+        async fn query(&self, _q: &Query) -> Vec<QueryResult> { vec![] }
+    }
+
+    #[tokio::test]
+    async fn test_execute_tool_finds_by_name() {
+        let mut pm = PluginManager::new();
+        pm.register(Box::new(FakePlugin { name: "my_tool", kw: None }));
+        let result = pm.execute_tool("my_tool", serde_json::json!({})).await;
+        assert_eq!(result, "");
+    }
+
+    #[tokio::test]
+    async fn test_execute_tool_not_found() {
+        let pm = PluginManager::new();
+        let result = pm.execute_tool("nonexistent", serde_json::json!({})).await;
+        assert_eq!(result, "Tool not found");
+    }
+
+    #[test]
+    fn test_register_override_replaces_by_name() {
+        let mut pm = PluginManager::new();
+        pm.register(Box::new(FakePlugin { name: "tool_a", kw: None }));
+        pm.register_override(Box::new(FakePlugin { name: "tool_a", kw: None }));
+        // Should still be exactly 1 plugin
+        assert_eq!(pm.plugins.len(), 1);
+    }
+}
