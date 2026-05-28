@@ -391,6 +391,7 @@ const LAYOUT: &str = r##"<!doctype html>
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     }
     .job-row .row-grid .k { @apply mr-1; color: #9aa0a6; }
+    .job-row .row-grid .rel { @apply ml-1 text-[11px]; color: #9aa0a6; opacity: 0.8; }
     .job-row .cmd {
       @apply text-xs px-2.5 py-2 rounded font-mono break-all;
       background: rgba(255,255,255,0.05); color: #e8eaed;

@@ -269,6 +269,20 @@ fn tick_scheduler() {
             continue;
         };
 
+        // Sanity-check: if the schedule can't compute a real next-fire time
+        // (e.g. legacy malformed cron like "11:33"), disable it instead of
+        // letting it fall back to "fire every 60s".
+        if let Schedule::Cron(ref expr) = sched {
+            if next_cron_time(expr, now).is_none() {
+                eprintln!(
+                    "[scheduler] job #{} has invalid cron '{}' — disabling",
+                    job.id, expr
+                );
+                let _ = toggle_job(job.id, false);
+                continue;
+            }
+        }
+
         // Parse next_run as unix seconds
         let next: i64 = job
             .next_run
@@ -277,6 +291,11 @@ fn tick_scheduler() {
             .unwrap_or(0);
 
         if next <= now {
+            // Record the run BEFORE spawning the command. This guarantees the
+            // run is counted even if the spawned process hangs or panics, and
+            // immediately advances `next_run` so the next tick (30s later)
+            // doesn't re-fire the same job while it's still executing.
+            record_run(job.id, &sched);
             run_job(job.id, &job.label, &job.command, &sched);
         }
     }
@@ -285,7 +304,7 @@ fn tick_scheduler() {
 fn run_job(id: i64, label: &str, command: &str, schedule: &Schedule) {
     let cmd = command.to_string();
     let label = label.to_string();
-    let sched = schedule.clone();
+    let _ = schedule; // reserved for future use (e.g. timeout based on schedule)
 
     tokio::spawn(async move {
         #[cfg(windows)]
@@ -332,9 +351,8 @@ fn run_job(id: i64, label: &str, command: &str, schedule: &Schedule) {
             Err(e) => format!("❌ {}: failed to run: {}", label, e),
         };
 
-        // System notification
+        // System notification (run is already recorded — see tick_scheduler).
         send_notification(&label, &result_msg);
-        record_run(id, &sched);
     });
 }
 
@@ -413,6 +431,67 @@ fn parse_interval(s: &str) -> Option<u64> {
         return n.parse().ok();
     }
     None
+}
+
+/// Normalize a user-supplied schedule string into a validated `Schedule`.
+///
+/// Accepts:
+///   - intervals: "5m", "1h", "30s", "10min", "45sec"
+///   - daily time shorthand: "HH:MM" → cron "MM HH * * *"
+///   - explicit cron prefix: "cron:M H dom mon dow"
+///   - bare 5-field cron: "M H dom mon dow"
+///
+/// Returns `Err(msg)` when the string can't be parsed into a valid recurring
+/// schedule, so the caller can refuse to persist a job that would mis-fire.
+fn normalize_schedule(input: &str) -> Result<Schedule, String> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Err("empty schedule".to_string());
+    }
+
+    // Interval forms (5m, 1h, ...).
+    if let Some(secs) = parse_interval(s) {
+        if secs == 0 {
+            return Err("interval must be > 0 seconds".to_string());
+        }
+        return Ok(Schedule::Interval(secs));
+    }
+
+    // Strip optional "cron:" prefix.
+    let cron_body = s.strip_prefix("cron:").map(str::trim).unwrap_or(s);
+
+    // "HH:MM" daily shorthand.
+    if let Some((hh, mm)) = cron_body.split_once(':') {
+        if !hh.contains(' ') && !mm.contains(' ') {
+            if let (Ok(h), Ok(m)) = (hh.parse::<u32>(), mm.parse::<u32>()) {
+                if h < 24 && m < 60 {
+                    let expr = format!("{} {} * * *", m, h);
+                    if next_cron_time(&expr, now_unix()).is_some() {
+                        return Ok(Schedule::Cron(expr));
+                    }
+                }
+                return Err(format!(
+                    "invalid time '{}' — expected HH:MM (00-23:00-59)",
+                    cron_body
+                ));
+            }
+        }
+    }
+
+    // Full 5-field cron.
+    let fields: Vec<&str> = cron_body.split_whitespace().collect();
+    if fields.len() == 5 {
+        let expr = fields.join(" ");
+        if next_cron_time(&expr, now_unix()).is_some() {
+            return Ok(Schedule::Cron(expr));
+        }
+        return Err(format!("invalid cron expression '{}'", expr));
+    }
+
+    Err(format!(
+        "could not parse schedule '{}' — use '5m', '1h', 'HH:MM', or 'M H dom mon dow'",
+        input
+    ))
 }
 
 // ─── Plugin impl ──────────────────────────────────────────────────────────────
@@ -519,7 +598,7 @@ impl Plugin for SchedulerPlugin {
                         "action": { "type": "string", "description": "'list', 'add', 'delete', 'enable', or 'disable'" },
                         "id": { "type": "integer", "description": "Job ID (required for delete/enable/disable)" },
                         "label": { "type": "string", "description": "Job label (required for add)" },
-                        "schedule": { "type": "string", "description": "Schedule for add: interval like '5m','1h','30s' or cron '*/5 * * * *'" },
+                        "schedule": { "type": "string", "description": "Schedule for add. One of: interval ('5m','1h','30s','45sec','10min'); daily time 'HH:MM' (e.g. '09:30' = every day at 9:30); 5-field cron '*/5 * * * *'. Plain values like '11:33' MUST be in HH:MM 24h form." },
                         "command": { "type": "string", "description": "Shell command to run (required for add)" }
                     },
                     "required": ["action"]
@@ -557,10 +636,9 @@ impl Plugin for SchedulerPlugin {
                     Some(c) if !c.is_empty() => c,
                     _ => return "Error: 'command' is required for add".to_string(),
                 };
-                let schedule = if let Some(secs) = parse_interval(sched_str) {
-                    Schedule::Interval(secs)
-                } else {
-                    Schedule::Cron(sched_str.to_string())
+                let schedule = match normalize_schedule(sched_str) {
+                    Ok(s) => s,
+                    Err(e) => return format!("Error: {}", e),
                 };
                 match add_job(label, &schedule, cmd) {
                     Ok(id) => format!("Job #{} added: {} — {} | cmd: {}", id, label, schedule.display(), cmd),
@@ -648,7 +726,7 @@ fn hint_results() -> Vec<QueryResult> {
         QueryResult {
             id: "sched:hint:add".to_string(),
             title: "sched add \"Label\" every 5m <command>".to_string(),
-            subtitle: Some("Add a recurring job (5m, 1h, 30s, or cron: * * * * *)".to_string()),
+            subtitle: Some("Add a recurring job (every 5m/1h/30s · at 09:30 · or 5-field cron)".to_string()),
             icon: Some("➕".to_string()),
             score: 75,
             action_type: "none".to_string(),
@@ -730,6 +808,24 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
         }
     }
 
+    // Try "at HH:MM <command>" — daily-at-time shorthand.
+    if let Some(at_rest) = after_label.strip_prefix("at ") {
+        if let Some((time, cmd)) = at_rest.split_once(' ') {
+            if let Ok(sched) = normalize_schedule(time) {
+                let stored = sched.to_stored();
+                return vec![QueryResult {
+                    id: "sched:add:preview".to_string(),
+                    title: format!("📅 Add job \"{}\" — daily at {}", label, time),
+                    subtitle: Some(format!("cmd: {}", cmd)),
+                    icon: Some("➕".to_string()),
+                    score: 100,
+                    action_type: "sched_add".to_string(),
+                    action_data: format!("{}|||{}|||{}", label, stored, cmd),
+                }];
+            }
+        }
+    }
+
     // Try cron "M H dom mon dow <command>" (5 fields then command)
     let words: Vec<&str> = after_label.splitn(6, ' ').collect();
     if words.len() == 6 {
@@ -738,16 +834,7 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
             words[0], words[1], words[2], words[3], words[4]
         );
         let cmd = words[5];
-        // Validate: each of first 5 must look cron-ish
-        let looks_cron = words[..5].iter().all(|w| {
-            *w == "*"
-                || w.starts_with("*/")
-                || w.parse::<u32>().is_ok()
-                || w.contains('-')
-                || w.contains(',')
-        });
-        if looks_cron {
-            let sched = Schedule::Cron(cron_expr.clone());
+        if let Ok(sched) = normalize_schedule(&cron_expr) {
             let stored = sched.to_stored();
             return vec![QueryResult {
                 id: "sched:add:preview".to_string(),

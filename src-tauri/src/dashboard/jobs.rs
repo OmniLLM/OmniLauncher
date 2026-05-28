@@ -68,6 +68,30 @@ pub fn jobs_html() -> String {
     "##;
 
     let script = r##"
+    // Format a Unix-epoch-seconds string as a human-readable local timestamp
+    // with a "(in 30s)" / "(5m ago)" relative suffix. Falls back gracefully
+    // if the value is empty or already non-numeric.
+    function fmtTime(v){
+      if (v === undefined || v === null || v === '') return '—';
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) return String(v);
+      const d = new Date(n * 1000);
+      if (isNaN(d.getTime())) return String(v);
+      const pad = x => String(x).padStart(2,'0');
+      const abs = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      return `${abs} ${relTime(n)}`;
+    }
+    function relTime(unixSec){
+      const diff = unixSec - Math.floor(Date.now()/1000);
+      const future = diff >= 0;
+      const s = Math.abs(diff);
+      let label;
+      if (s < 60)        label = `${s}s`;
+      else if (s < 3600) label = `${Math.round(s/60)}m`;
+      else if (s < 86400) label = `${Math.round(s/3600)}h`;
+      else                label = `${Math.round(s/86400)}d`;
+      return `<span class="rel">(${future ? `in ${label}` : `${label} ago`})</span>`;
+    }
     function statCard(label,value,sub,cls){return `<div class="stat ${cls||''}"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div>${sub?`<div class="sub">${esc(sub)}</div>`:''}</div>`;}
     function renderStats(d){
       document.getElementById('stats').innerHTML = [
@@ -90,8 +114,8 @@ pub fn jobs_html() -> String {
           </div>
           <div class="row-grid">
             <div><span class="k">Schedule:</span> <code>${esc(j.schedule)}</code></div>
-            <div><span class="k">Last run:</span> ${esc(j.last_run||'—')}</div>
-            <div><span class="k">Next run:</span> ${esc(j.next_run||'—')}</div>
+            <div><span class="k">Last run:</span> ${fmtTime(j.last_run)}</div>
+            <div><span class="k">Next run:</span> ${fmtTime(j.next_run)}</div>
           </div>
           <div class="cmd">${esc(j.command)}</div>
         </div>`).join('');
