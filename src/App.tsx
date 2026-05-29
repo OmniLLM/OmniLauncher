@@ -256,6 +256,7 @@ export default function App() {
   const inputHistoryRef = useRef<string[]>([]);
   const pendingQueueRef = useRef<string[]>([]);
   const [queueDepth, setQueueDepth] = useState(0);
+  const [queuedPrompts, setQueuedPrompts] = useState<string[]>([]);
 
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
@@ -519,7 +520,8 @@ export default function App() {
         setTimeout(() => {
           const next = pendingQueueRef.current.shift();
           if (next) {
-            setQueueDepth((d) => d - 1);
+            setQueuedPrompts((prev) => prev.slice(1));
+            setQueueDepth(pendingQueueRef.current.length);
             doAiQuery(next);
           }
         }, 50);
@@ -568,6 +570,12 @@ export default function App() {
     },
     [focusInput, loading, refreshSessions],
   );
+
+  const enqueueAiQuery = useCallback((value: string) => {
+    pendingQueueRef.current.push(value);
+    setQueuedPrompts((prev) => [...prev, value]);
+    setQueueDepth(pendingQueueRef.current.length);
+  }, []);
 
   const handleQueryChange = useCallback(
     (value: string) => {
@@ -627,6 +635,9 @@ export default function App() {
       console.error("clear_conversation error:", e);
     }
     setConversationHistory([]);
+    pendingQueueRef.current = [];
+    setQueuedPrompts([]);
+    setQueueDepth(0);
     setResults([]);
     setQuery("");
     setShowSessionPicker(false);
@@ -644,6 +655,9 @@ export default function App() {
           .filter((m) => m.role === "user" || m.role === "assistant")
           .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
         setConversationHistory(turns);
+        pendingQueueRef.current = [];
+        setQueuedPrompts([]);
+        setQueueDepth(0);
         setCurrentSessionId(sessionId);
       } catch (e) {
         console.error("switch_ai_session error:", e);
@@ -662,6 +676,9 @@ export default function App() {
         const newCur = await invoke<number>("delete_ai_session", { sessionId });
         if (currentSessionId === sessionId) {
           setConversationHistory([]);
+          pendingQueueRef.current = [];
+          setQueuedPrompts([]);
+          setQueueDepth(0);
           setCurrentSessionId(newCur || null);
         }
       } catch (e) {
@@ -721,8 +738,7 @@ export default function App() {
         }
         setHistoryIdx(-1);
         if (loading) {
-          pendingQueueRef.current.push(value);
-          setQueueDepth((d) => d + 1);
+          enqueueAiQuery(value);
         } else {
           doAiQuery(value);
         }
@@ -735,15 +751,14 @@ export default function App() {
         }
         setHistoryIdx(-1);
         if (loading) {
-          pendingQueueRef.current.push(value);
-          setQueueDepth((d) => d + 1);
+          enqueueAiQuery(value);
         } else {
           doAiQuery(value);
         }
         setQuery("");
       }
     },
-    [aiModeEnabled, doAiQuery, handleNewConversation],
+    [aiModeEnabled, doAiQuery, enqueueAiQuery, handleNewConversation, loading],
   );
 
   const handleExecute = useCallback(
@@ -837,7 +852,7 @@ export default function App() {
     if (isAiMode && chatScrollRef.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
-  }, [conversationHistory, isAiMode]);
+  }, [conversationHistory, queuedPrompts, isAiMode]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1244,7 +1259,7 @@ export default function App() {
               scrollbarColor: `${colors.surface2} transparent`,
             }}
           >
-            {conversationHistory.length === 0 && (
+            {conversationHistory.length === 0 && queuedPrompts.length === 0 && (
               <div
                 style={{
                   flex: 1,
@@ -1275,6 +1290,14 @@ export default function App() {
 
             {conversationHistory.map((turn, i) => (
               <ChatBubble key={i} turn={turn} colors={colors} />
+            ))}
+
+            {queuedPrompts.map((prompt, i) => (
+              <QueuedPromptBubble
+                key={`queued-${i}-${prompt}`}
+                prompt={prompt}
+                colors={colors}
+              />
             ))}
           </div>
         )}
@@ -1449,6 +1472,53 @@ function toolIcon(tool: string): string {
   if (tool.includes("app")) return "🚀";
   if (tool.includes("clip")) return "📋";
   return "🔧";
+}
+
+function QueuedPromptBubble({
+  prompt,
+  colors,
+}: {
+  prompt: string;
+  colors: typeof DARK_COLORS;
+}) {
+  return (
+    <div
+      className="omni-bubble-enter"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        gap: "5px",
+        opacity: 0.72,
+      }}
+    >
+      <span
+        style={{
+          fontSize: "11px",
+          color: colors.sub,
+          paddingRight: "6px",
+          letterSpacing: 0,
+        }}
+      >
+        Queued
+      </span>
+      <div
+        style={{
+          maxWidth: "78%",
+          padding: "9px 14px",
+          borderRadius: "16px 16px 4px 16px",
+          background: `${colors.userBubble}80`,
+          color: colors.userBubbleText,
+          fontSize: "14px",
+          lineHeight: "1.65",
+          wordBreak: "break-word",
+          border: `1px dashed ${colors.accent}66`,
+        }}
+      >
+        {prompt}
+      </div>
+    </div>
+  );
 }
 
 function ChatBubble({
