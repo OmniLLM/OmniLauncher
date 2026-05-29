@@ -679,7 +679,7 @@ fn install_staged_plugin(dest: &PathBuf) -> Result<String, String> {
     // OmniLauncher plugins. Both calls are no-ops on directories that don't
     // look like the corresponding format.
     let raycast_synth = super::raycast::synthesize_raycast_extensions_in(dest);
-    let flow_synth = super::flow::synthesize_flow_plugins_in(dest);
+    let (flow_synth, flow_errors) = super::flow::synthesize_flow_plugins_in_with_errors(dest);
     log::debug!(
         "install_staged_plugin: raycast_synthesized={:?} flow_synthesized={:?}",
         raycast_synth,
@@ -700,6 +700,9 @@ fn install_staged_plugin(dest: &PathBuf) -> Result<String, String> {
     );
     if discovered.is_empty() {
         let _ = force_remove_dir_all(dest);
+        if !flow_errors.is_empty() {
+            return Err(flow_errors.join("\n"));
+        }
         return Err(
             "No valid plugin.json found in the plugin directory or its immediate subdirectories."
                 .to_string(),
@@ -1012,6 +1015,37 @@ mod tests {
         assert_eq!(
             error,
             "No valid plugin.json found in the plugin directory or its immediate subdirectories."
+        );
+    }
+
+    #[tokio::test]
+    async fn install_csharp_flow_plugin_reports_unsupported_runtime() {
+        let source = TempDir::new().unwrap();
+        let target = TempDir::new().unwrap();
+        std::fs::write(
+            source.path().join("plugin.json"),
+            r#"{
+                "ID":"c3406b5c-22f0-4984-b018-3dae897cab3f",
+                "ActionKeyword":"d",
+                "Name":"Dictionary",
+                "Description":"English dictionary.",
+                "Version":"2.3.2",
+                "Language":"csharp",
+                "ExecuteFileName":"Dictionary.dll"
+            }"#,
+        )
+        .unwrap();
+
+        let error = install_plugin(
+            source.path().to_string_lossy().to_string(),
+            Some(target.path().to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error.contains("Flow.Launcher csharp plugins") && error.contains("not supported"),
+            "{error}"
         );
     }
 

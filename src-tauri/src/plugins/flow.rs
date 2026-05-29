@@ -283,25 +283,34 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
 /// Walk one level deep under `repo_dir` and synthesize plugin files for
 /// every Flow.Launcher plugin found. Top-level matches take priority.
 pub fn synthesize_flow_plugins_in(repo_dir: &Path) -> Vec<String> {
+    let (synthesized, _errors) = synthesize_flow_plugins_in_with_errors(repo_dir);
+    synthesized
+}
+
+pub fn synthesize_flow_plugins_in_with_errors(repo_dir: &Path) -> (Vec<String>, Vec<String>) {
     log::debug!(
         "synthesize_flow_plugins_in: scanning '{}'",
         repo_dir.display()
     );
     let mut synthesized = Vec::new();
+    let mut errors = Vec::new();
 
     if is_flow_plugin(repo_dir) {
         match synthesize_plugin_files(repo_dir) {
             Ok(name) => synthesized.push(name),
-            Err(e) => log::warn!(
-                "Failed to synthesize Flow.Launcher adapter for {}: {e}",
-                repo_dir.display()
-            ),
+            Err(e) => {
+                log::warn!(
+                    "Failed to synthesize Flow.Launcher adapter for {}: {e}",
+                    repo_dir.display()
+                );
+                errors.push(e);
+            }
         }
-        return synthesized;
+        return (synthesized, errors);
     }
 
     let Ok(entries) = std::fs::read_dir(repo_dir) else {
-        return synthesized;
+        return (synthesized, errors);
     };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -311,14 +320,17 @@ pub fn synthesize_flow_plugins_in(repo_dir: &Path) -> Vec<String> {
         if is_flow_plugin(&path) {
             match synthesize_plugin_files(&path) {
                 Ok(name) => synthesized.push(name),
-                Err(e) => log::warn!(
-                    "Failed to synthesize Flow.Launcher adapter for {}: {e}",
-                    path.display()
-                ),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to synthesize Flow.Launcher adapter for {}: {e}",
+                        path.display()
+                    );
+                    errors.push(e);
+                }
             }
         }
     }
-    synthesized
+    (synthesized, errors)
 }
 
 /// Best-effort setup of the plugin's runtime dependencies. Silent on
