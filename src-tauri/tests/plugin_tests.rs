@@ -807,7 +807,7 @@ async fn test_todo_view_tool_returns_live_page_url() {
         .await;
 
     assert!(
-        result.contains("http://127.0.0.1:1421/todo"),
+        result.contains("http://127.0.0.1:1421/dashboard/todos"),
         "Got: {}",
         result
     );
@@ -821,7 +821,7 @@ async fn test_todo_view_tool_reports_browser_open_success() {
         .await;
 
     // In headless/CI environments xdg-open may not exist; accept either outcome
-    let mentions_url = result.contains("http://127.0.0.1:1421/todo");
+    let mentions_url = result.contains("http://127.0.0.1:1421/dashboard/todos");
     assert!(
         mentions_url,
         "Expected response to mention the todo URL, got: {}",
@@ -1289,7 +1289,7 @@ async fn test_scheduler_add_and_delete() {
                 "action": "add",
                 "label": "_test_job_xyz",
                 "schedule": "5m",
-                "command": "echo hello"
+                "command": "#!sh\necho hello"
             }),
         )
         .await;
