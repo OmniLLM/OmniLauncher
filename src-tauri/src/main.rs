@@ -1678,6 +1678,28 @@ async fn vision_analyze(
     Ok(content)
 }
 
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let debug_enabled = args.iter().any(|arg| arg == "--debug");
+    init_debug_logging(debug_enabled);
+
+    if debug_enabled {
+        log::info!("Running with --debug");
+        log::debug!("CLI args: {:?}", args);
+    } else if TermLogger::init(
+        LevelFilter::Info,
+        ConfigBuilder::new().build(),
+        TerminalMode::Stderr,
+        ColorChoice::Never,
+    )
+    .is_ok()
+    {
+        log::info!("Running without debug file logging");
+    }
+
+    run();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1721,26 +1743,4 @@ mod tests {
         drop(first);
         assert!(state.ai_in_flight.clone().try_acquire_owned().is_ok());
     }
-}
-
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let debug_enabled = args.iter().any(|arg| arg == "--debug");
-    init_debug_logging(debug_enabled);
-
-    if debug_enabled {
-        log::info!("Running with --debug");
-        log::debug!("CLI args: {:?}", args);
-    } else if TermLogger::init(
-        LevelFilter::Info,
-        ConfigBuilder::new().build(),
-        TerminalMode::Stderr,
-        ColorChoice::Never,
-    )
-    .is_ok()
-    {
-        log::info!("Running without debug file logging");
-    }
-
-    run();
 }

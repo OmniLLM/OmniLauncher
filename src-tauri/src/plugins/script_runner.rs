@@ -85,10 +85,9 @@ fn shell_run_cmd(path: &std::path::Path) -> Vec<String> {
 fn argv_to_shell_string(argv: &[String]) -> String {
     argv.iter()
         .map(|arg| {
-            if arg
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.' | ':' | '='))
-            {
+            if arg.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.' | ':' | '=')
+            }) {
                 arg.clone()
             } else {
                 // Single-quote and escape embedded single quotes.
