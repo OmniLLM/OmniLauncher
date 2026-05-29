@@ -543,6 +543,13 @@ pub async fn update_plugin(name: String) -> Result<String, String> {
         ));
     }
 
+    if super::flow::clean_generated_adapter_files_in(&target)? {
+        log::info!(
+            "update_plugin: cleaned generated Flow adapter files for '{}' before pull",
+            name
+        );
+    }
+
     let status = run_git_command(&["status", "--porcelain"], &target)?;
     if !status.is_empty() {
         return Err(format!(

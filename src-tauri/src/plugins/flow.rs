@@ -345,6 +345,61 @@ pub fn synthesize_flow_plugins_in_with_errors(repo_dir: &Path) -> (Vec<String>, 
     (synthesized, errors)
 }
 
+/// Remove OmniLauncher-generated Flow adapter files before `git pull`.
+/// This restores Flow's original `plugin.json` from `flow.plugin.json`, then
+/// update_plugin re-synthesizes the adapter after the pull completes.
+pub fn clean_generated_adapter_files_in(repo_dir: &Path) -> Result<bool, String> {
+    let mut cleaned = false;
+    if clean_generated_adapter_files(repo_dir)? {
+        cleaned = true;
+    }
+
+    if let Ok(entries) = std::fs::read_dir(repo_dir) {
+        for entry in entries.flatten() {
+            let child = entry.path();
+            if !child.is_dir() {
+                continue;
+            }
+            if clean_generated_adapter_files(&child)? {
+                cleaned = true;
+            }
+        }
+    }
+
+    Ok(cleaned)
+}
+
+fn clean_generated_adapter_files(dir: &Path) -> Result<bool, String> {
+    let plugin_json = dir.join("plugin.json");
+    let flow_manifest = dir.join(FLOW_MANIFEST_FILENAME);
+    let plugin_json_text = std::fs::read_to_string(&plugin_json).unwrap_or_default();
+    if !plugin_json_text.contains(SHIM_FILENAME) || !flow_manifest.is_file() {
+        return Ok(false);
+    }
+
+    let original = std::fs::read(&flow_manifest)
+        .map_err(|e| format!("Failed to read {}: {e}", flow_manifest.display()))?;
+    std::fs::write(&plugin_json, original)
+        .map_err(|e| format!("Failed to restore {}: {e}", plugin_json.display()))?;
+
+    let shim = dir.join(SHIM_FILENAME);
+    if shim.exists() {
+        std::fs::remove_file(&shim)
+            .map_err(|e| format!("Failed to remove {}: {e}", shim.display()))?;
+    }
+    if flow_manifest.exists() {
+        std::fs::remove_file(&flow_manifest)
+            .map_err(|e| format!("Failed to remove {}: {e}", flow_manifest.display()))?;
+    }
+    let host_dir = dir.join(HOST_DIRNAME);
+    if host_dir.exists() {
+        std::fs::remove_dir_all(&host_dir)
+            .map_err(|e| format!("Failed to remove {}: {e}", host_dir.display()))?;
+    }
+
+    Ok(true)
+}
+
 /// Setup plugin runtime dependencies and build outputs needed by the shim.
 /// Returns an error for missing required tools so the installer can notify users.
 pub fn try_setup_dependencies(dir: &Path) -> Result<(), String> {
@@ -774,6 +829,31 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.join("plugin.json")).unwrap())
                 .unwrap();
         assert_eq!(m["entry"], SHIM_FILENAME);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clean_generated_adapter_files_restores_flow_manifest() {
+        let dir = tmpdir();
+        let flow_json = r#"{
+                "ID":"tz","Name":"Timezone","ActionKeyword":"tz",
+                "Language":"python","ExecuteFileName":"main.py","Version":"1"
+            }"#;
+        std::fs::write(dir.join("plugin.json"), flow_json).unwrap();
+        synthesize_plugin_files(&dir).unwrap();
+
+        assert!(dir.join(SHIM_FILENAME).exists());
+        assert!(dir.join(FLOW_MANIFEST_FILENAME).exists());
+        let generated = std::fs::read_to_string(dir.join("plugin.json")).unwrap();
+        assert!(generated.contains(SHIM_FILENAME));
+
+        assert!(clean_generated_adapter_files_in(&dir).unwrap());
+        let restored = std::fs::read_to_string(dir.join("plugin.json")).unwrap();
+        assert!(restored.contains("ExecuteFileName"));
+        assert!(restored.contains("main.py"));
+        assert!(!dir.join(SHIM_FILENAME).exists());
+        assert!(!dir.join(FLOW_MANIFEST_FILENAME).exists());
+
         std::fs::remove_dir_all(&dir).ok();
     }
 
