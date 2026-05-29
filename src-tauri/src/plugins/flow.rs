@@ -9,8 +9,8 @@
 //!      uses the same filename for its own manifest).
 //!   2. Write an OmniLauncher `plugin.json` that points at our JS shim.
 //!   3. Copy the shim file (`flow-shim.cjs`) into the plugin directory.
-//!   4. Best-effort: `pip install -r requirements.txt` for Python plugins,
-//!      or `npm install && npm run build` for JS/TS plugins.
+//!   4. Install/build runtime dependencies where needed: Python requirements,
+//!      npm packages, or .NET C#/F# projects.
 //!
 //! At runtime, the shim translates between OmniLauncher's stdin/stdout
 //! protocol and Flow's JSON-RPC-over-argv protocol.
@@ -21,7 +21,10 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 const SHIM_JS: &str = include_str!("../../assets/flow-shim/shim.cjs");
+const HOST_CSPROJ: &str = include_str!("../../assets/flow-shim/host/OmniFlowHost.csproj");
+const HOST_PROGRAM: &str = include_str!("../../assets/flow-shim/host/Program.cs");
 const SHIM_FILENAME: &str = "flow-shim.cjs";
+const HOST_DIRNAME: &str = ".omnilauncher-flow-host";
 const FLOW_MANIFEST_FILENAME: &str = "flow.plugin.json";
 
 #[derive(Debug, Deserialize)]
@@ -193,9 +196,9 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
         .as_deref()
         .unwrap_or("")
         .to_ascii_lowercase();
-    if matches!(language.as_str(), "csharp" | "fsharp") {
+    if matches!(language.as_str(), "csharp" | "fsharp") && !cfg!(windows) {
         return Err(format!(
-            "Flow.Launcher {} plugins (C#/F#) are not supported by OmniLauncher.",
+            "Flow.Launcher {} plugins (C#/F#) are currently supported only on Windows.",
             language
         ));
     }
@@ -220,6 +223,15 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
     // Write the shim file.
     std::fs::write(dir.join(SHIM_FILENAME), SHIM_JS)
         .map_err(|e| format!("Failed to write {SHIM_FILENAME}: {e}"))?;
+    if matches!(language.as_str(), "csharp" | "fsharp") {
+        let host_dir = dir.join(HOST_DIRNAME);
+        std::fs::create_dir_all(&host_dir)
+            .map_err(|e| format!("Failed to create {HOST_DIRNAME}: {e}"))?;
+        std::fs::write(host_dir.join("OmniFlowHost.csproj"), HOST_CSPROJ)
+            .map_err(|e| format!("Failed to write OmniFlowHost.csproj: {e}"))?;
+        std::fs::write(host_dir.join("Program.cs"), HOST_PROGRAM)
+            .map_err(|e| format!("Failed to write Program.cs: {e}"))?;
+    }
 
     // Decide whether to overwrite the OmniLauncher plugin.json:
     //   - If it currently contains Flow fields (ID/ExecuteFileName) it's
@@ -333,12 +345,29 @@ pub fn synthesize_flow_plugins_in_with_errors(repo_dir: &Path) -> (Vec<String>, 
     (synthesized, errors)
 }
 
-/// Best-effort setup of the plugin's runtime dependencies. Silent on
-/// failure — runtime errors will show up as result subtitles.
-pub fn try_setup_dependencies(dir: &Path) {
-    let Some(manifest) = read_flow_manifest(dir) else {
-        return;
-    };
+/// Setup plugin runtime dependencies and build outputs needed by the shim.
+/// Returns an error for missing required tools so the installer can notify users.
+pub fn try_setup_dependencies(dir: &Path) -> Result<(), String> {
+    if let Some(manifest) = read_flow_manifest(dir) {
+        setup_dependencies_for_plugin_dir(dir, manifest)?;
+    }
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let child = entry.path();
+            if !child.is_dir() {
+                continue;
+            }
+            if let Some(manifest) = read_flow_manifest(&child) {
+                setup_dependencies_for_plugin_dir(&child, manifest)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn setup_dependencies_for_plugin_dir(dir: &Path, manifest: FlowManifest) -> Result<(), String> {
     let language = manifest
         .Language
         .as_deref()
@@ -349,7 +378,7 @@ pub fn try_setup_dependencies(dir: &Path) {
         "python" => {
             let req = dir.join("requirements.txt");
             if !req.is_file() {
-                return;
+                return Ok(());
             }
             let py = pick_python_executable();
             log::info!(
@@ -373,42 +402,193 @@ pub fn try_setup_dependencies(dir: &Path) {
                 Ok(o) if o.status.success() => {
                     log::info!("Installed Python deps for Flow plugin at {}", dir.display());
                 }
-                Ok(o) => log::warn!(
-                    "pip install failed for {}: {}",
-                    dir.display(),
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ),
-                Err(e) => log::warn!("pip install failed for {}: {e}", dir.display()),
+                Ok(o) => {
+                    return Err(format!(
+                        "Failed to install Python dependencies for Flow plugin '{}': {}",
+                        plugin_display_name(&manifest, dir),
+                        command_error(&o)
+                    ));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Python is required to install Flow plugin '{}', but running '{}' failed: {}",
+                        plugin_display_name(&manifest, dir),
+                        py,
+                        e
+                    ));
+                }
             }
         }
         "javascript" | "typescript" => {
             if !dir.join("package.json").is_file() {
-                return;
+                return Ok(());
             }
             if which("npm").is_none() {
-                log::info!(
-                    "npm not found; skipping setup for Flow JS plugin at {}",
-                    dir.display()
-                );
-                return;
+                return Err(format!(
+                    "npm is required to install Flow plugin '{}'. Install Node.js/npm and try again.",
+                    plugin_display_name(&manifest, dir)
+                ));
             }
             log::info!(
                 "Running 'npm install' for Flow JS plugin at {}",
                 dir.display()
             );
-            let _ = Command::new(npm_exe())
+            match Command::new(npm_exe())
                 .arg("install")
                 .current_dir(dir)
-                .output();
+                .output()
+            {
+                Ok(o) if o.status.success() => {}
+                Ok(o) => {
+                    return Err(format!(
+                        "npm install failed for Flow plugin '{}': {}",
+                        plugin_display_name(&manifest, dir),
+                        command_error(&o)
+                    ));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "npm is required to install Flow plugin '{}', but running npm failed: {}",
+                        plugin_display_name(&manifest, dir),
+                        e
+                    ));
+                }
+            }
             if language == "typescript" {
-                let _ = Command::new(npm_exe())
+                match Command::new(npm_exe())
                     .args(["run", "build"])
                     .current_dir(dir)
-                    .output();
+                    .output()
+                {
+                    Ok(o) if o.status.success() => {}
+                    Ok(o) => {
+                        return Err(format!(
+                            "npm run build failed for Flow plugin '{}': {}",
+                            plugin_display_name(&manifest, dir),
+                            command_error(&o)
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "npm is required to build Flow plugin '{}', but running npm failed: {}",
+                            plugin_display_name(&manifest, dir),
+                            e
+                        ));
+                    }
+                }
+            }
+        }
+        "csharp" | "fsharp" => {
+            if which("dotnet").is_none() {
+                return Err(format!(
+                    ".NET SDK is required to install Flow {} plugin '{}'. Install the .NET SDK and try again.",
+                    language,
+                    plugin_display_name(&manifest, dir)
+                ));
+            }
+            log::info!(
+                "Running 'dotnet build -c Release' for Flow plugin at {}",
+                dir.display()
+            );
+            match Command::new("dotnet")
+                .args(["build", "-c", "Release"])
+                .current_dir(dir)
+                .output()
+            {
+                Ok(o) if o.status.success() => {
+                    log::info!("Built Flow {} plugin at {}", language, dir.display());
+                }
+                Ok(o) => {
+                    return Err(format!(
+                        "dotnet build failed for Flow plugin '{}': {}",
+                        plugin_display_name(&manifest, dir),
+                        command_error(&o)
+                    ));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        ".NET SDK is required to build Flow plugin '{}', but running dotnet failed: {}",
+                        plugin_display_name(&manifest, dir),
+                        e
+                    ));
+                }
+            }
+
+            let host_project = dir.join(HOST_DIRNAME).join("OmniFlowHost.csproj");
+            if !host_project.is_file() {
+                return Err(format!(
+                    "OmniLauncher Flow .NET host project is missing at {}. Reinstall the plugin.",
+                    host_project.display()
+                ));
+            }
+            let host_out = dir.join(HOST_DIRNAME).join("out");
+            let host_out_str = host_out.to_string_lossy().into_owned();
+            log::info!(
+                "Publishing OmniLauncher Flow .NET host at {}",
+                host_out.display()
+            );
+            match Command::new("dotnet")
+                .args([
+                    "publish",
+                    ".omnilauncher-flow-host/OmniFlowHost.csproj",
+                    "-c",
+                    "Release",
+                    "-o",
+                    &host_out_str,
+                ])
+                .current_dir(dir)
+                .output()
+            {
+                Ok(o) if o.status.success() => {
+                    log::info!(
+                        "Published OmniLauncher Flow .NET host at {}",
+                        host_out.display()
+                    );
+                }
+                Ok(o) => {
+                    return Err(format!(
+                        "dotnet publish failed for OmniLauncher Flow host used by plugin '{}': {}",
+                        plugin_display_name(&manifest, dir),
+                        command_error(&o)
+                    ));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        ".NET SDK is required to publish the OmniLauncher Flow host for plugin '{}', but running dotnet failed: {}",
+                        plugin_display_name(&manifest, dir),
+                        e
+                    ));
+                }
             }
         }
         _ => {}
     }
+    Ok(())
+}
+
+fn plugin_display_name(manifest: &FlowManifest, dir: &Path) -> String {
+    manifest
+        .Name
+        .clone()
+        .or_else(|| manifest.ID.clone())
+        .unwrap_or_else(|| {
+            dir.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("flow-plugin")
+                .to_string()
+        })
+}
+
+fn command_error(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr.chars().take(1200).collect();
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stdout.is_empty() {
+        return stdout.chars().take(1200).collect();
+    }
+    format!("command exited with status {}", output.status)
 }
 
 fn pick_python_executable() -> String {
@@ -552,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_csharp_plugin() {
+    fn synthesizes_csharp_plugin_with_dotnet_host() {
         let dir = tmpdir();
         std::fs::write(
             dir.join("plugin.json"),
@@ -562,8 +742,16 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let err = synthesize_plugin_files(&dir).unwrap_err();
-        assert!(err.contains("not supported"));
+        let result = synthesize_plugin_files(&dir);
+        if cfg!(windows) {
+            assert_eq!(result.unwrap(), "x");
+            assert!(dir.join(SHIM_FILENAME).exists());
+            assert!(dir.join(HOST_DIRNAME).join("OmniFlowHost.csproj").exists());
+            assert!(dir.join(HOST_DIRNAME).join("Program.cs").exists());
+        } else {
+            let err = result.unwrap_err();
+            assert!(err.contains("currently supported only on Windows"));
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

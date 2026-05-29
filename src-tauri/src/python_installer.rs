@@ -37,17 +37,29 @@ fn python_bin_rel() -> &'static str {
 /// Download & extract python-build-standalone into `~/.omnilauncher/python/`.
 /// Returns the path to the python binary on success.
 pub async fn install_bundled_python() -> Result<PathBuf, String> {
+    install_bundled_python_with_progress(|_| {}).await
+}
+
+pub async fn install_bundled_python_with_progress<F>(mut progress: F) -> Result<PathBuf, String>
+where
+    F: FnMut(&str),
+{
     let dest = bundled_python_dir();
     let exe = dest.join(python_bin_rel());
     if exe.exists() {
+        progress("Python is already installed.");
         return Ok(exe);
     }
 
+    progress("Resolving Python runtime package.");
     let url = resolve_download_url().await?;
+    progress("Downloading Python runtime package.");
     let archive = download_to_temp(&url).await?;
 
+    progress("Preparing Python install directory.");
     std::fs::create_dir_all(&dest).map_err(|e| format!("mkdir ~/.omnilauncher/python: {e}"))?;
 
+    progress("Extracting Python runtime.");
     if url.ends_with(".zip") {
         extract_zip(&archive, &dest)?;
     } else {
@@ -55,6 +67,7 @@ pub async fn install_bundled_python() -> Result<PathBuf, String> {
     }
 
     // python-build-standalone extracts into a sub-dir like `python/`; flatten.
+    progress("Finalizing Python runtime layout.");
     flatten_single_subdir(&dest)?;
 
     // Make binary executable on Unix.
@@ -71,6 +84,7 @@ pub async fn install_bundled_python() -> Result<PathBuf, String> {
     }
 
     if exe.exists() {
+        progress("Python runtime is ready.");
         Ok(exe)
     } else {
         Err(format!(

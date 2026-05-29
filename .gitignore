@@ -4,6 +4,13 @@ dist/
 src-tauri/target/
 target/
 
+# Flow/.NET build artifacts
+src-tauri/assets/flow-shim/host/bin/
+src-tauri/assets/flow-shim/host/obj/
+**/.omnilauncher-flow-host/bin/
+**/.omnilauncher-flow-host/obj/
+**/.omnilauncher-flow-host/out/
+
 # AI analysis/session artifacts (root level)
 SOURCE_FILES_MANIFEST.md
 omnilauncher_analysis.md

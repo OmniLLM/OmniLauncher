@@ -28,6 +28,12 @@ const executeFile = manifest.ExecuteFileName || manifest.executeFileName || "";
 const actionKeyword = String(manifest.ActionKeyword || manifest.actionKeyword || "*");
 const pluginName = manifest.Name || manifest.name || path.basename(extDir);
 const pluginIcon = manifest.IcoPath || manifest.icoPath || "";
+const dotnetHostDll = path.join(
+  extDir,
+  ".omnilauncher-flow-host",
+  "out",
+  "OmniFlowHost.dll"
+);
 
 function reply(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -84,6 +90,45 @@ function resolveSpawn(executePath, requestJson) {
   }
 }
 
+function callDotnetHost(op, payload, timeoutMs) {
+  if (!fs.existsSync(dotnetHostDll)) {
+    return {
+      error:
+        `Flow.Launcher ${language} plugin '${pluginName}' has no built OmniLauncher .NET host. ` +
+        `Update or reinstall the plugin.`,
+    };
+  }
+
+  const result = spawnSync(
+    "dotnet",
+    [dotnetHostDll, extDir, op, JSON.stringify(payload || {})],
+    {
+      cwd: extDir,
+      timeout: timeoutMs,
+      encoding: "utf8",
+      env: process.env,
+    }
+  );
+
+  if (result.error) {
+    return { error: `Failed to run OmniLauncher .NET host: ${result.error.message}` };
+  }
+
+  const stdout = (result.stdout || "").trim();
+  if (!stdout) {
+    const stderr = (result.stderr || "").trim().slice(0, 800);
+    return { error: stderr || `OmniLauncher .NET host exited with code ${result.status}` };
+  }
+
+  try {
+    const parsed = JSON.parse(stdout.slice(stdout.indexOf("{") >= 0 ? stdout.indexOf("{") : 0));
+    if (parsed.error) return { error: parsed.error };
+    return { value: parsed };
+  } catch (e) {
+    return { error: `OmniLauncher .NET host returned non-JSON output: ${e.message}` };
+  }
+}
+
 // ─── Flow.Launcher JSON-RPC bridge ───────────────────────────────────────────
 
 function callFlowPlugin(rpcRequest, timeoutMs) {
@@ -91,11 +136,7 @@ function callFlowPlugin(rpcRequest, timeoutMs) {
     return { error: "flow.plugin.json missing ExecuteFileName" };
   }
   if (language === "csharp" || language === "fsharp") {
-    return {
-      error:
-        `Flow.Launcher C#/F# plugin '${pluginName}' is not supported by ` +
-        `OmniLauncher (no .NET host).`,
-    };
+    return callDotnetHost("query", { query: rpcRequest.parameters?.[0] || "" }, timeoutMs);
   }
 
   const spawn = resolveSpawn(executeFile, JSON.stringify(rpcRequest));
@@ -164,6 +205,22 @@ function resolveIcon(icoPath) {
 }
 
 function translateResults(flowResp) {
+  if (Array.isArray(flowResp?.results)) {
+    return flowResp.results.map((item, i) => ({
+      id: `${pluginName}::${item.Index ?? i}`,
+      title: String(item.Title || item.title || ""),
+      subtitle: item.SubTitle || item.subTitle || item.subtitle || undefined,
+      icon: resolveIcon(item.IcoPath || item.icoPath || item.IconPath),
+      score: typeof (item.Score ?? item.score) === "number" ? (item.Score ?? item.score) : 50,
+      action_type: "plugin_execute",
+      action_data: JSON.stringify({
+        kind: "dotnet-flow-action",
+        query: flowResp.query || lastDotnetQuery || "",
+        index: item.Index ?? i,
+      }),
+    }));
+  }
+
   const arr =
     pickField(flowResp, "result", "Result", "results", "Results") || [];
   if (!Array.isArray(arr)) return [];
@@ -194,6 +251,8 @@ function translateResults(flowResp) {
   });
 }
 
+let lastDotnetQuery = "";
+
 function stripActionKeyword(query) {
   if (!actionKeyword || actionKeyword === "*") return query || "";
   const trimmed = (query || "").trim();
@@ -207,6 +266,7 @@ function stripActionKeyword(query) {
 
 function handleQuery(rawQuery) {
   const stripped = stripActionKeyword(rawQuery);
+  lastDotnetQuery = stripped;
   const rpc = { method: "query", parameters: [stripped] };
   const out = callFlowPlugin(rpc, 3500);
   if (out.error) {
@@ -224,6 +284,19 @@ function handleExecute(actionData) {
     action = JSON.parse(actionData);
   } catch {
     action = { method: "", parameters: [] };
+  }
+  if (action.kind === "dotnet-flow-action") {
+    const out = callDotnetHost(
+      "execute",
+      { query: action.query || "", index: Number(action.index) },
+      10000
+    );
+    if (out.error) {
+      reply({ output: out.error });
+      return;
+    }
+    reply({ output: out.value?.output || "Action executed." });
+    return;
   }
   const method = action.method || action.Method || "";
   const parameters = action.parameters || action.Parameters || [];

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 interface PluginInfo {
   name: string;
@@ -91,6 +92,21 @@ interface AppSettings {
   [key: string]: unknown;
 }
 
+interface RuntimeDependency {
+  id: string;
+  label: string;
+  installed: boolean;
+  installable: boolean;
+  install_command?: string | null;
+  detail: string;
+}
+
+interface RuntimeProgressEvent {
+  id: string;
+  label: string;
+  message: string;
+}
+
 interface PluginManagerProps {
   colors: {
     bg: string;
@@ -112,6 +128,9 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
   const [source, setSource] = useState("");
   const [targetDir, setTargetDir] = useState<string>(""); // "" = default
   const [extraDirs, setExtraDirs] = useState<string[]>([]);
+  const [runtimeDeps, setRuntimeDeps] = useState<RuntimeDependency[]>([]);
+  const [runtimeInstalling, setRuntimeInstalling] = useState<string | null>(null);
+  const [runtimeProgress, setRuntimeProgress] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<{
     type: "idle" | "loading" | "success" | "error";
     message: string;
@@ -121,6 +140,12 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
     invoke<PluginRepo[]>("list_plugins")
       .then((list) => setRepos(list))
       .catch(() => setRepos([]));
+  }, []);
+
+  const refreshRuntimeDeps = useCallback(() => {
+    invoke<RuntimeDependency[]>("list_plugin_runtime_dependencies")
+      .then((deps) => setRuntimeDeps(deps))
+      .catch(() => setRuntimeDeps([]));
   }, []);
 
   const collections = useMemo<PluginCollection[]>(() => {
@@ -173,11 +198,34 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
 
   useEffect(() => {
     refresh();
+    refreshRuntimeDeps();
     // Load extra plugin_dirs from settings
     invoke<AppSettings>("get_settings")
       .then((s) => setExtraDirs(s.plugin_dirs ?? []))
       .catch(() => {});
-  }, [refresh]);
+  }, [refresh, refreshRuntimeDeps]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    listen<RuntimeProgressEvent>("omnilauncher://plugin-runtime-progress", (event) => {
+      const { id, label, message } = event.payload;
+      setRuntimeProgress((current) => ({ ...current, [id]: message }));
+      setStatus({ type: "loading", message: `${label}: ${message}` });
+    }).then((dispose) => {
+      if (disposed) {
+        dispose();
+      } else {
+        unlisten = dispose;
+      }
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   const handleInstall = async () => {
     const trimmed = source.trim();
@@ -191,8 +239,29 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
       setStatus({ type: "success", message: `✓ ${message}` });
       setSource("");
       refresh();
+      refreshRuntimeDeps();
     } catch (e) {
       setStatus({ type: "error", message: `✗ ${e}` });
+    }
+  };
+
+  const handleInstallRuntime = async (dep: RuntimeDependency) => {
+    setRuntimeInstalling(dep.id);
+    setRuntimeProgress((current) => ({ ...current, [dep.id]: "Starting…" }));
+    setStatus({ type: "loading", message: `Installing ${dep.label}…` });
+    try {
+      const message = await invoke<string>("install_plugin_runtime_dependency", { id: dep.id });
+      setStatus({ type: "success", message: `✓ ${message}` });
+      setRuntimeProgress((current) => {
+        const next = { ...current };
+        delete next[dep.id];
+        return next;
+      });
+      refreshRuntimeDeps();
+    } catch (e) {
+      setStatus({ type: "error", message: `✗ ${e}` });
+    } finally {
+      setRuntimeInstalling(null);
     }
   };
 
@@ -449,6 +518,126 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
           }}
         >
           {status.message}
+        </div>
+      )}
+
+      {runtimeDeps.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gap: "6px",
+            background: colors.surface,
+            border: `1px solid ${colors.surface2}`,
+            borderRadius: "8px",
+            padding: "9px 10px",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "8px",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "11px",
+                color: colors.sub,
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                textTransform: "uppercase",
+              }}
+            >
+              Runtimes
+            </span>
+            <button
+              type="button"
+              onClick={refreshRuntimeDeps}
+              disabled={status.type === "loading"}
+              style={{
+                background: "none",
+                border: `1px solid ${colors.surface2}`,
+                borderRadius: "6px",
+                padding: "3px 8px",
+                color: colors.sub,
+                fontSize: "11px",
+                cursor: status.type === "loading" ? "default" : "pointer",
+              }}
+              title="Refresh runtime checks"
+            >
+              Refresh
+            </button>
+          </div>
+          <div style={{ display: "grid", gap: "5px" }}>
+            {runtimeDeps.map((dep) => {
+              const busy = runtimeInstalling === dep.id;
+              const progress = runtimeProgress[dep.id];
+              return (
+                <div
+                  key={dep.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    minWidth: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      color: dep.installed ? "#a6e3a1" : "#f9e2af",
+                      border: `1px solid ${dep.installed ? "#a6e3a155" : "#f9e2af66"}`,
+                      borderRadius: "999px",
+                      padding: "1px 7px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {dep.installed ? "READY" : "MISSING"}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: "12px", color: colors.text, fontWeight: 600 }}>
+                      {dep.label}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "11px",
+                        color: colors.sub,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={dep.install_command || dep.detail}
+                    >
+                      {progress || (dep.installed ? dep.detail : dep.install_command || dep.detail)}
+                    </div>
+                  </div>
+                  {!dep.installed && (
+                    <button
+                      type="button"
+                      onClick={() => handleInstallRuntime(dep)}
+                      disabled={status.type === "loading" || busy}
+                      style={{
+                        background: dep.installable ? colors.accent : "none",
+                        border: `1px solid ${dep.installable ? colors.accent : colors.surface2}`,
+                        borderRadius: "7px",
+                        padding: "5px 9px",
+                        color: dep.installable ? "#FFFFFF" : colors.sub,
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        cursor: status.type === "loading" || busy ? "default" : "pointer",
+                        opacity: status.type === "loading" || busy ? 0.65 : 1,
+                        flexShrink: 0,
+                      }}
+                      title={dep.installable ? `Install ${dep.label}` : dep.install_command || dep.detail}
+                    >
+                      {busy ? "Installing" : dep.installable ? "Install" : "Details"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

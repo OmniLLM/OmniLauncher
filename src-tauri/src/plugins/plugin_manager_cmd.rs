@@ -570,7 +570,7 @@ pub async fn update_plugin(name: String) -> Result<String, String> {
         super::raycast::try_build_extension(&target);
     }
     if !flow_synth.is_empty() {
-        super::flow::try_setup_dependencies(&target);
+        super::flow::try_setup_dependencies(&target)?;
     }
 
     Ok(format!("Updated {}\n{}", name, pull_result))
@@ -689,7 +689,10 @@ fn install_staged_plugin(dest: &PathBuf) -> Result<String, String> {
         super::raycast::try_build_extension(dest);
     }
     if !flow_synth.is_empty() {
-        super::flow::try_setup_dependencies(dest);
+        if let Err(error) = super::flow::try_setup_dependencies(dest) {
+            let _ = force_remove_dir_all(dest);
+            return Err(error);
+        }
     }
 
     let discovered = discover_plugins_in_repo(dest);
@@ -1019,7 +1022,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_csharp_flow_plugin_reports_unsupported_runtime() {
+    async fn install_csharp_flow_plugin_synthesizes_host() {
         let source = TempDir::new().unwrap();
         let target = TempDir::new().unwrap();
         std::fs::write(
@@ -1035,18 +1038,46 @@ mod tests {
             }"#,
         )
         .unwrap();
+        std::fs::write(
+            source.path().join("Dictionary.csproj"),
+            r#"<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0-windows</TargetFramework>
+        <OutputType>Library</OutputType>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="Flow.Launcher.Plugin" Version="2.1.1" />
+    </ItemGroup>
+</Project>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source.path().join("Plugin.cs"),
+            r#"using System.Collections.Generic;
+using Flow.Launcher.Plugin;
 
-        let error = install_plugin(
+public sealed class DictionaryPlugin : IPlugin
+{
+        public void Init(PluginInitContext context) { }
+        public List<Result> Query(Query query) => new();
+}"#,
+        )
+        .unwrap();
+
+        let result = install_plugin(
             source.path().to_string_lossy().to_string(),
             Some(target.path().to_string_lossy().to_string()),
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-        assert!(
-            error.contains("Flow.Launcher csharp plugins") && error.contains("not supported"),
-            "{error}"
-        );
+        assert_eq!(result, "Installed Dictionary");
+        let installed_dir = target.path().join(source.path().file_name().unwrap());
+        assert!(installed_dir.join("flow-shim.cjs").exists());
+        assert!(installed_dir
+            .join(".omnilauncher-flow-host")
+            .join("Program.cs")
+            .exists());
     }
 
     #[test]
