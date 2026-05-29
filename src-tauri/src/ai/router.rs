@@ -178,7 +178,7 @@ impl Router {
         plugin_manager: &PluginManager,
         ai_client: &AiClient,
         context: &ConversationContext,
-        skill_manager: &SkillManager,
+        skill_manager: &mut SkillManager,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> AiResponse {
         match Self::decide(input) {
@@ -203,7 +203,7 @@ impl Router {
         plugin_manager: &PluginManager,
         ai_client: &AiClient,
         context: &ConversationContext,
-        skill_manager: &SkillManager,
+        skill_manager: &mut SkillManager,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> AiResponse {
         if is_skill_inventory_query(query) {
@@ -1197,7 +1197,9 @@ fn is_skill_inventory_query(query: &str) -> bool {
     mentions_skills && asks_to_list
 }
 
-fn skill_inventory_response(skill_manager: &SkillManager) -> AiResponse {
+fn skill_inventory_response(skill_manager: &mut SkillManager) -> AiResponse {
+    // Reload from disk so the list always reflects the current state of the skills directory.
+    skill_manager.reload();
     let metas = skill_manager.list_meta();
     if metas.is_empty() {
         return AiResponse {

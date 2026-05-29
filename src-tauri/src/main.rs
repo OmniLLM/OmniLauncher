@@ -541,13 +541,13 @@ async fn ai_query(
             let pm_lock = pm.lock().await;
             let client = ai_client.lock().await;
             let ctx = conversation.lock().await;
-            let skill_lock = skill_mgr.lock().await;
+            let mut skill_lock = skill_mgr.lock().await;
             Router::ai_route(
                 &query,
                 &pm_lock,
                 &client,
                 &ctx,
-                &skill_lock,
+                &mut *skill_lock,
                 Some(progress_tx),
             )
             .await
