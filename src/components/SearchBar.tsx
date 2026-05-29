@@ -437,15 +437,20 @@ export default function SearchBar({
           {isAiMode && (
             <span
               style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "30px",
                 fontSize: "11px",
                 background: `${colors.accent}22`,
                 color: colors.accent,
-                padding: "3px 8px",
-                borderRadius: "6px",
+                padding: "0 10px",
+                borderRadius: "8px",
                 fontWeight: 600,
                 letterSpacing: "0.04em",
                 flexShrink: 0,
                 border: `1px solid ${colors.accent}33`,
+                boxSizing: "border-box",
               }}
             >
               AI
