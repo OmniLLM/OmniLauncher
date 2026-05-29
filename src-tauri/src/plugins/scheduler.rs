@@ -368,9 +368,11 @@ pub fn record_run(id: i64, schedule: &Schedule) {
 }
 
 fn unix_to_iso(t: i64) -> String {
-    // Simple ISO8601 UTC — no chrono dep needed
-    // We store as seconds-since-epoch string for easy comparison
-    format!("{}", t)
+    // ISO-8601 UTC (RFC-3339). Falls back to raw seconds if the timestamp is out
+    // of chrono's range.
+    chrono::DateTime::<chrono::Utc>::from_timestamp(t, 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| t.to_string())
 }
 
 // ─── Background scheduler task ────────────────────────────────────────────────
@@ -1277,11 +1279,11 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use tokio::sync::Mutex;
 
     // Serialise all tests that mutate OMNILAUNCHER_CONFIG_DIR (a global env-var)
     // so they don't race each other when cargo runs tests in parallel.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
     #[test]
     fn start_scheduler_does_not_require_current_tokio_runtime() {
@@ -1337,7 +1339,7 @@ mod tests {
 
     #[test]
     fn test_db_add_list_delete() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().expect("tmpdir");
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", dir.path().to_str().unwrap());
 
@@ -1355,7 +1357,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_query_list_empty() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().await;
         let dir = tempfile::tempdir().expect("tmpdir");
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", dir.path().to_str().unwrap());
 
@@ -1399,7 +1401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_runs_due_job_and_records() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().await;
         let dir = tempfile::tempdir().expect("tmpdir");
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", dir.path().to_str().unwrap());
 

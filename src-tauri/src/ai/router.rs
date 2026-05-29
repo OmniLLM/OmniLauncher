@@ -185,7 +185,7 @@ impl Router {
         ai_client: &AiClient,
         context: &ConversationContext,
         skill_manager: &mut SkillManager,
-        progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        progress_tx: Option<tokio::sync::mpsc::Sender<String>>,
     ) -> AiResponse {
         match Self::decide(input) {
             RouteDecision::Local => {
@@ -218,7 +218,7 @@ impl Router {
         ai_client: &AiClient,
         context: &ConversationContext,
         skill_manager: &mut SkillManager,
-        progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        progress_tx: Option<tokio::sync::mpsc::Sender<String>>,
     ) -> AiResponse {
         let tools = plugin_manager.all_tool_schemas();
 
@@ -357,7 +357,10 @@ impl Router {
                                 plugin_manager.tool_display_name(&tc.function.name);
                             all_tools_used.push(tool_display_name.clone());
                             if let Some(ref tx) = progress_tx {
-                                let _ = tx.send(tool_display_name);
+                                // Fire-and-forget progress event. try_send avoids
+                                // .await blocking the tool loop if the UI is slow
+                                // to drain — drop the event in that case.
+                                let _ = tx.try_send(tool_display_name);
                             }
                             let args: serde_json::Value =
                                 serde_json::from_str(&tc.function.arguments).unwrap_or_default();

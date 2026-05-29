@@ -880,10 +880,10 @@ fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use tempfile::TempDir;
+    use tokio::sync::Mutex;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
     #[test]
     fn parse_github_subdir_url_handles_tree_with_trailing_slash() {
@@ -1090,7 +1090,7 @@ public sealed class DictionaryPlugin : IPlugin
 
     #[test]
     fn list_plugins_groups_legacy_split_collection_dirs() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.blocking_lock();
         let target = TempDir::new().unwrap();
         write_test_plugin(&target.path().join("color"), "color");
         write_test_plugin(&target.path().join("currency"), "currency");
@@ -1118,7 +1118,7 @@ public sealed class DictionaryPlugin : IPlugin
 
     #[tokio::test]
     async fn update_plugin_pulls_latest_git_commit() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().await;
 
         let remote = TempDir::new().unwrap();
         git(&["init", "--bare"], remote.path());

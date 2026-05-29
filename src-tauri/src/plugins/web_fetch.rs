@@ -5,6 +5,13 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// Compiled once at first use instead of recompiling on every `strip_html` call.
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_default()
+});
+
 static RE_SCRIPT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
 static RE_STYLE: LazyLock<Regex> =
@@ -63,13 +70,7 @@ impl Plugin for WebFetchPlugin {
             return format!("Error: guardrail denied web_fetch: {}", reason);
         }
 
-        let client = match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return format!("Error creating client: {}", e),
-        };
+        let client = &*CLIENT;
 
         match client.get(url).send().await {
             Ok(resp) => {

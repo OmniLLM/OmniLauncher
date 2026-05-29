@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use omnilauncher_lib::create_plugin_manager;
 use omnilauncher_lib::plugins::{Plugin, PluginManager, Query, QueryResult};
 use std::collections::HashSet;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 
-static TODO_LOCK: Mutex<()> = Mutex::new(());
+static TODO_LOCK: Mutex<()> = Mutex::const_new(());
 
 struct KeywordOnlyPlugin {
     keyword: &'static str,
@@ -469,7 +469,7 @@ async fn test_git_status_runs() {
 
 #[tokio::test]
 async fn test_todo_lifecycle() {
-    let _guard = TODO_LOCK.lock().unwrap();
+    let _guard = TODO_LOCK.lock().await;
     let dir = temp_config_dir("todo_lifecycle");
     unsafe {
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir);
@@ -853,7 +853,7 @@ async fn test_slash_todo_view_query_opens_live_page() {
 
 #[tokio::test]
 async fn test_todo_status_transitions_and_list_output() {
-    let _guard = TODO_LOCK.lock().unwrap();
+    let _guard = TODO_LOCK.lock().await;
     let dir = temp_config_dir("todo_status");
     unsafe {
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir);
@@ -905,7 +905,7 @@ async fn test_todo_status_transitions_and_list_output() {
 
 #[tokio::test]
 async fn test_todo_query_and_live_json_include_status() {
-    let _guard = TODO_LOCK.lock().unwrap();
+    let _guard = TODO_LOCK.lock().await;
     let dir = temp_config_dir("todo_query");
     unsafe {
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir);
@@ -944,7 +944,7 @@ async fn test_todo_query_and_live_json_include_status() {
 
 #[tokio::test]
 async fn test_todo_live_html_defines_status_helpers_used_by_render() {
-    let _guard = TODO_LOCK.lock().unwrap();
+    let _guard = TODO_LOCK.lock().await;
     let dir = temp_config_dir("todo_html_helpers");
     unsafe {
         std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir);

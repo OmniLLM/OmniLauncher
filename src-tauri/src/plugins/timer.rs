@@ -1,6 +1,12 @@
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use regex::Regex;
+use std::sync::LazyLock;
+
+static DURATION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\d+)\s*(s|sec|second|seconds|m|min|minute|minutes|h|hr|hour|hours)$")
+        .expect("static duration regex compiles")
+});
 
 pub struct TimerPlugin;
 
@@ -86,9 +92,7 @@ impl Plugin for TimerPlugin {
 
 /// Parse a duration string like "5m", "30s", "1h", "90s"
 fn parse_duration(input: &str) -> Option<u64> {
-    let re = Regex::new(r"^(\d+)\s*(s|sec|second|seconds|m|min|minute|minutes|h|hr|hour|hours)$")
-        .ok()?;
-    if let Some(caps) = re.captures(input.trim()) {
+    if let Some(caps) = DURATION_RE.captures(input.trim()) {
         let value: u64 = caps.get(1)?.as_str().parse().ok()?;
         let unit = caps.get(2)?.as_str().to_lowercase();
         match unit.as_str() {

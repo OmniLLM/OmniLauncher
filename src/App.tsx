@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, memo, lazy, Suspense } from "react";
 import { renderMarkdown } from "./utils/markdown";
 import { isAiPrefix } from "./utils/aiPrefix";
 import { invoke } from "@tauri-apps/api/core";
@@ -7,9 +7,11 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SearchBar from "./components/SearchBar";
 import ResultList from "./components/ResultList";
 import FavoritesList from "./components/FavoritesList";
-import SettingsWindow from "./components/SettingsWindow";
-import PluginManager from "./components/PluginManager";
-import SkillManager from "./components/SkillManager";
+
+// Code-split heavy on-demand panels so they don't bloat the initial launcher bundle.
+const SettingsWindow = lazy(() => import("./components/SettingsWindow"));
+const PluginManager = lazy(() => import("./components/PluginManager"));
+const SkillManager = lazy(() => import("./components/SkillManager"));
 
 interface QueryResult {
   id: string;
@@ -238,9 +240,7 @@ export default function App() {
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(
     getSystemTheme(),
   );
-  const [backgroundUrl, setBackgroundUrl] = useState<string>(
-    "https://blz-contentstack-images.akamaized.net/v3/assets/bltf408a0557f4e4998/blt27903959c912debc/69fba009d002ee6d7deb5875/shop_carousel_ow_26_s2_mythicskin_desktop.webp?imwidth=1568&imdensity=1",
-  );
+  const [backgroundUrl, setBackgroundUrl] = useState<string>("");
   const [conversationHistory, setConversationHistory] = useState<
     ConversationTurn[]
   >([]);
@@ -619,6 +619,11 @@ export default function App() {
 
   const handleQueryChange = useCallback(
     (value: string) => {
+      // Strip the internal "__sel__:" sentinel if it ever surfaces in the
+      // visible input (e.g. user backspaces into auto-populated selection).
+      if (value.startsWith("__sel__:")) {
+        value = value.slice("__sel__:".length);
+      }
       setHistoryIdx(-1);
       if (isHelpQuery(value)) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -1079,7 +1084,9 @@ export default function App() {
         }}
       >
         {showSettings && (
-          <SettingsWindow onClose={() => setShowSettings(false)} />
+          <Suspense fallback={null}>
+            <SettingsWindow onClose={() => setShowSettings(false)} />
+          </Suspense>
         )}
         {!showSettings && (<>
         {/* ── AI MODE: top bar ─────────────────────────────────────────── */}
@@ -1270,7 +1277,7 @@ export default function App() {
                             borderRadius: "5px",
                           }}
                           onMouseEnter={(e) => {
-                            e.currentTarget.style.background = "#a33";
+                            e.currentTarget.style.background = "var(--danger)";
                             e.currentTarget.style.color = "#fff";
                           }}
                           onMouseLeave={(e) => {
@@ -1349,18 +1356,22 @@ export default function App() {
 
         {/* ── PLUGIN MANAGER panel ─────────────────────────────────────── */}
         {showPluginManager && !isAiMode && (
-          <PluginManager
-            colors={colors}
-            onClose={() => setShowPluginManager(false)}
-          />
+          <Suspense fallback={null}>
+            <PluginManager
+              colors={colors}
+              onClose={() => setShowPluginManager(false)}
+            />
+          </Suspense>
         )}
 
         {/* ── SKILL MANAGER panel ──────────────────────────────────────── */}
         {showSkillManager && (
-          <SkillManager
-            colors={colors}
-            onClose={() => setShowSkillManager(false)}
-          />
+          <Suspense fallback={null}>
+            <SkillManager
+              colors={colors}
+              onClose={() => setShowSkillManager(false)}
+            />
+          </Suspense>
         )}
 
         {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
@@ -1430,9 +1441,9 @@ export default function App() {
       {exportToast && (
         <div style={{
           position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)",
-          background: "#1a2d4a", border: "1px solid rgba(94,129,244,0.4)",
+          background: "var(--bg-elevated)", border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)",
           borderRadius: 8, padding: "8px 16px",
-          fontSize: 12, color: "#5E81F4", fontWeight: 600,
+          fontSize: 12, color: "var(--accent)", fontWeight: 600,
           zIndex: 9998, animation: "omni-fade-in 150ms ease both",
           pointerEvents: "none",
         }}>
@@ -1453,15 +1464,15 @@ export default function App() {
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: "#0d1117",
-              border: "1px solid rgba(255,255,255,0.1)",
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
               borderRadius: 14,
               padding: "20px 28px",
               minWidth: 320,
               boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
             }}
           >
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#e8eaf6", marginBottom: 16, letterSpacing: "0.04em" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 16, letterSpacing: "0.04em" }}>
               ⌨ Keyboard Shortcuts
             </div>
             {[
@@ -1487,12 +1498,12 @@ export default function App() {
                   background: "rgba(255,255,255,0.08)",
                   border: "1px solid rgba(255,255,255,0.15)",
                   borderRadius: 5, padding: "2px 8px",
-                  color: "#5E81F4",
+                  color: "var(--accent)",
                 }}>{key}</kbd>
-                <span style={{ fontSize: 12, color: "#8892b0", marginLeft: 16 }}>{desc}</span>
+                <span style={{ fontSize: 12, color: "var(--text-secondary)", marginLeft: 16 }}>{desc}</span>
               </div>
             ))}
-            <div style={{ fontSize: 11, color: "#4a5568", marginTop: 12, textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 12, textAlign: "center" }}>
               Press F1 or click outside to close
             </div>
           </div>
@@ -1562,7 +1573,7 @@ function QueuedPromptBubble({
   );
 }
 
-function ChatBubble({
+const ChatBubble = memo(function ChatBubble({
   turn,
   colors,
 }: {
@@ -1570,6 +1581,11 @@ function ChatBubble({
   colors: typeof DARK_COLORS;
 }) {
   const isUser = turn.role === "user";
+  // Memoize the expensive markdown render so streaming a sibling bubble doesn't re-render this one.
+  const renderedHtml = useMemo(
+    () => (isUser ? null : renderMarkdown(turn.content)),
+    [isUser, turn.content],
+  );
 
   return (
     <div
@@ -1638,13 +1654,13 @@ function ChatBubble({
         ) : (
           <span
             className={turn.isStreaming ? "omni-cursor" : ""}
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(turn.content) }}
+            dangerouslySetInnerHTML={{ __html: renderedHtml || "" }}
           />
         )}
       </div>
     </div>
   );
-}
+});
 
 // ─── Loading dots (3-dot pulse) ────────────────────────────────────────────
 

@@ -1,6 +1,12 @@
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use regex::Regex;
+use std::sync::LazyLock;
+
+static CONVERT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(\d+(?:\.\d+)?)\s*([a-z]+)\s+(?:to|in)\s+([a-z]+)$")
+        .expect("static converter regex compiles")
+});
 
 pub struct UnitConverterPlugin;
 
@@ -88,8 +94,7 @@ impl Plugin for UnitConverterPlugin {
 impl UnitConverterPlugin {
     fn parse_and_convert(&self, input: &str) -> Option<String> {
         // Pattern: number + unit + optional "to" + unit
-        let re = Regex::new(r"(?i)^(\d+(?:\.\d+)?)\s*([a-z]+)\s+(?:to|in)\s+([a-z]+)$").ok()?;
-        if let Some(caps) = re.captures(input) {
+        if let Some(caps) = CONVERT_RE.captures(input) {
             let value: f64 = caps.get(1)?.as_str().parse().ok()?;
             let from_unit = caps.get(2)?.as_str().to_lowercase();
             let to_unit = caps.get(3)?.as_str().to_lowercase();

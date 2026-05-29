@@ -1,6 +1,15 @@
 use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
+use std::sync::LazyLock;
+
+/// Shared HTTP client — built once, reuses connection pool across all calls.
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default()
+});
 
 /// HTTP API client tool - inspired by hermes web_extract and openclaw browser tools
 pub struct HttpClientPlugin;
@@ -57,13 +66,7 @@ impl Plugin for HttpClientPlugin {
             return format!("Error: guardrail denied http_request: {}", reason);
         }
 
-        let client = match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return format!("Error creating client: {}", e),
-        };
+        let client = &*CLIENT;
 
         let mut req = match method.to_uppercase().as_str() {
             "GET" => client.get(url),

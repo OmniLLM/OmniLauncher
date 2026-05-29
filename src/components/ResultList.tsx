@@ -132,6 +132,8 @@ export default function ResultList({
   return (
     <>
       <div
+        role="listbox"
+        aria-activedescendant={selected >= 0 ? `omni-opt-${selected}` : undefined}
         style={{
           overflowY: "auto",
           maxHeight: "400px",
@@ -147,6 +149,9 @@ export default function ResultList({
           return (
             <div
               key={r.id}
+              id={`omni-opt-${i}`}
+              role="option"
+              aria-selected={isSelected}
               onClick={() => onExecute(r)}
               onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, item: r }); }}
               onMouseEnter={() => {
@@ -166,9 +171,7 @@ export default function ResultList({
                 borderLeft: isSelected
                   ? `3px solid ${colors.accent}`
                   : "3px solid transparent",
-                // Staggered fade-in
                 animation: `omni-fade-in 180ms ease both`,
-                animationDelay: `${i * 25}ms`,
               }}
             >
               {/* Icon */}

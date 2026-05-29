@@ -2,6 +2,15 @@ use crate::plugins::{Plugin, Query, QueryResult};
 use crate::settings::{load_settings, GitHubServer};
 use async_trait::async_trait;
 use reqwest::Client;
+use std::sync::LazyLock;
+
+static GH_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("OmniLauncher/1.0")
+        .build()
+        .unwrap_or_default()
+});
 
 pub struct GitHubPlugin;
 
@@ -9,13 +18,7 @@ pub struct GitHubPlugin;
 
 async fn gh_get(server: &GitHubServer, path: &str) -> Result<serde_json::Value, String> {
     let url = format!("{}{}", server.effective_api_base(), path);
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("OmniLauncher/1.0")
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let mut req = client
+    let mut req = GH_CLIENT
         .get(&url)
         .header("Accept", "application/vnd.github+json");
     if let Some(tok) = server.resolve_token() {

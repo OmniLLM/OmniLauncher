@@ -522,7 +522,7 @@ async fn ai_query(
         // Keep permit alive for duration of task
         let _permit = permit;
 
-        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<String>(64);
 
         // Spawn a task to forward tool-call events to the window
         let win_for_progress = window.clone();
