@@ -17,7 +17,7 @@ const MAX_TIMEOUT_SECS: u64 = 600;
 const ALLOWED_AGENTS: &[&str] = &["claude", "codex", "omnicode", "opencode"];
 
 fn is_allowed_agent(name: &str) -> bool {
-    ALLOWED_AGENTS.iter().any(|a| *a == name)
+    ALLOWED_AGENTS.contains(&name)
 }
 
 fn build_prompt(prompt: &str, context: Option<&str>) -> String {

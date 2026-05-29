@@ -660,12 +660,10 @@ pub fn try_build_extension(dir: &Path) {
         // run on native Windows. Try tsc first (typescript is always a
         // devDependency of Raycast extensions), then fall back to esbuild,
         // then tsx as a last resort.
-        if !tsc_build_extension(dir) {
-            if !esbuild_extension(dir) {
-                // Both compilers failed — install tsx so the source-loader
-                // fallback path works at execute time.
-                ensure_tsx_installed(dir);
-            }
+        if !tsc_build_extension(dir) && !esbuild_extension(dir) {
+            // Both compilers failed — install tsx so the source-loader
+            // fallback path works at execute time.
+            ensure_tsx_installed(dir);
         }
         return;
     }

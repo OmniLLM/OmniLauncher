@@ -1028,6 +1028,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[tokio::test]
     async fn install_csharp_flow_plugin_synthesizes_host() {
         let source = TempDir::new().unwrap();

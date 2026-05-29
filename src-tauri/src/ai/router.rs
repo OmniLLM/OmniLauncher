@@ -73,6 +73,7 @@ impl ConversationContext {
 /// Token estimate. Closer to real BPE behavior than `len/4`:
 ///   - Counts whitespace-separated words and adds a fraction for punctuation
 ///     and long words (which BPE typically splits into multiple sub-tokens).
+///
 /// Empirically within ~15% of tiktoken for English+code, without the dependency.
 fn estimate_tokens(text: &str) -> usize {
     if text.is_empty() {

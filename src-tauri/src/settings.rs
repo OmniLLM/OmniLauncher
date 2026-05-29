@@ -171,10 +171,11 @@ pub fn load_settings() -> AppSettings {
             }
         }
     }
-    let mut s = AppSettings::default();
     // Auto-detect gh CLI authenticated hosts for fresh installs
-    s.github_servers = detect_gh_hosts();
-    s
+    AppSettings {
+        github_servers: detect_gh_hosts(),
+        ..AppSettings::default()
+    }
 }
 
 /// Discover GitHub hostnames the user is authenticated to.

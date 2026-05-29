@@ -549,7 +549,7 @@ async fn ai_query(
                 &pm_lock,
                 &client,
                 &ctx,
-                &mut *skill_lock,
+                &mut skill_lock,
                 Some(progress_tx),
             )
             .await

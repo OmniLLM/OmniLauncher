@@ -168,7 +168,7 @@ fn fetch_orgs_via_gh_cli(hostname: &str) -> Result<Vec<String>, String> {
                 && !l.contains(' ')
                 && l.chars()
                     .next()
-                    .map_or(false, |c| c.is_ascii_alphanumeric())
+                    .is_some_and(|c| c.is_ascii_alphanumeric())
         })
         .map(|l| l.to_string())
         .collect();
