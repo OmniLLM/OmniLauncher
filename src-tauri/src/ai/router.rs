@@ -206,10 +206,6 @@ impl Router {
         skill_manager: &mut SkillManager,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> AiResponse {
-        if is_skill_inventory_query(query) {
-            return skill_inventory_response(skill_manager);
-        }
-
         let tools = plugin_manager.all_tool_schemas();
 
         let os_info = get_os_info();
@@ -1180,23 +1176,6 @@ fn get_command_help(cmd: &str) -> String {
     }
 }
 
-fn is_skill_inventory_query(query: &str) -> bool {
-    let normalized = query
-        .trim()
-        .to_lowercase()
-        .replace(['?', '.', '!', ','], " ");
-    let words: Vec<&str> = normalized.split_whitespace().collect();
-    let mentions_skills = words.iter().any(|word| *word == "skill" || *word == "skills");
-    let asks_to_list = words.iter().any(|word| {
-        matches!(
-            *word,
-            "show" | "list" | "display" | "available" | "installed" | "what" | "which"
-        )
-    });
-
-    mentions_skills && asks_to_list
-}
-
 fn skill_inventory_response(skill_manager: &mut SkillManager) -> AiResponse {
     // Reload from disk so the list always reflects the current state of the skills directory.
     skill_manager.reload();
@@ -1430,12 +1409,4 @@ mod tests {
         assert_eq!(Router::strip_ai_prefix("Ai tell me something"), "tell me something");
     }
 
-    #[test]
-    fn test_skill_inventory_query_detection() {
-        assert!(is_skill_inventory_query("show your skills"));
-        assert!(is_skill_inventory_query("which skills are installed?"));
-        assert!(is_skill_inventory_query("list available skill"));
-        assert!(!is_skill_inventory_query("use frontend-design skill for this UI"));
-        assert!(!is_skill_inventory_query("help me design a frontend"));
-    }
 }
