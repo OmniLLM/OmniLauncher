@@ -99,6 +99,37 @@ impl Plugin for NetworkPlugin {
         if command.is_empty() {
             return "Error: 'command' parameter is required. Options: ip, localip, flush, connections, ports, wifi, ping <host>, dns <host>".to_string();
         }
+
+        // Host-derived commands MUST NOT be interpolated into a shell string —
+        // a hostname like "x; rm -rf ~" would otherwise be executed by `sh -c`.
+        // Build an explicit argv and run the program directly (no shell).
+        if let Some(host) = command.strip_prefix("ping ") {
+            let host = host.trim();
+            if !is_valid_host(host) {
+                return format!("Invalid host: '{}'", host);
+            }
+            let argv: Vec<&str> = if cfg!(target_os = "windows") {
+                vec!["ping", "-n", "4", host]
+            } else {
+                vec!["ping", "-c", "4", host]
+            };
+            return run_argv(&argv);
+        }
+        if let Some(host) = command.strip_prefix("dns ") {
+            let host = host.trim();
+            if !is_valid_host(host) {
+                return format!("Invalid host: '{}'", host);
+            }
+            let argv: Vec<&str> = if cfg!(target_os = "windows") {
+                vec!["nslookup", host]
+            } else {
+                vec!["dig", "+short", host]
+            };
+            return run_argv(&argv);
+        }
+
+        // Canned commands use pipes/findstr and are constant strings (no user
+        // input), so running them through a shell is safe.
         let shell_cmd = if command == "ip" {
             get_ip_cmd()
         } else if command == "localip" {
@@ -111,15 +142,6 @@ impl Plugin for NetworkPlugin {
             ports_cmd()
         } else if command == "wifi" {
             wifi_cmd()
-        } else if let Some(host) = command.strip_prefix("ping ") {
-            format!("ping {}", host.trim())
-        } else if let Some(host) = command.strip_prefix("dns ") {
-            let h = host.trim();
-            if cfg!(target_os = "windows") {
-                format!("nslookup {}", h)
-            } else {
-                format!("dig +short {}", h)
-            }
         } else {
             return format!("Unknown command: '{}'. Options: ip, localip, flush, connections, ports, wifi, ping <host>, dns <host>", command);
         };
@@ -147,6 +169,38 @@ impl Plugin for NetworkPlugin {
             }
             Err(e) => format!("Error running command: {}", e),
         }
+    }
+}
+
+/// Validate a hostname/IP before handing it to a process. Rejects anything that
+/// is not a plain hostname or IP literal so shell metacharacters / whitespace
+/// can never reach a command, even though we already avoid the shell.
+fn is_valid_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+}
+
+/// Run a program directly (no shell) and format stdout/stderr.
+fn run_argv(argv: &[&str]) -> String {
+    let Some((prog, rest)) = argv.split_first() else {
+        return "Error: empty command".to_string();
+    };
+    match std::process::Command::new(prog).args(rest).output() {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            if !stdout.is_empty() {
+                stdout
+            } else if !stderr.is_empty() {
+                stderr
+            } else {
+                "Command completed with no output".to_string()
+            }
+        }
+        Err(e) => format!("Error running command: {}", e),
     }
 }
 

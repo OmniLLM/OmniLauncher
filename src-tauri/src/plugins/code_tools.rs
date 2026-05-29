@@ -1,3 +1,4 @@
+use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::process::Command;
@@ -49,6 +50,14 @@ impl Plugin for PatchPlugin {
 
         if path.is_empty() || old_string.is_empty() {
             return "Error: path and old_string are required".to_string();
+        }
+
+        // file_edit both reads and writes; enforce both guardrails.
+        if let GuardrailAction::Deny(reason) = Guardrails::check_file_read(path) {
+            return format!("Error: guardrail denied file_edit: {}", reason);
+        }
+        if let GuardrailAction::Deny(reason) = Guardrails::check_file_write(path) {
+            return format!("Error: guardrail denied file_edit: {}", reason);
         }
 
         let content = match std::fs::read_to_string(path) {

@@ -1,5 +1,16 @@
+use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
+use regex::Regex;
+use std::sync::LazyLock;
+
+/// Compiled once at first use instead of recompiling on every `strip_html` call.
+static RE_SCRIPT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
+static RE_STYLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap());
+static RE_TAGS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
+static RE_WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 /// Fetch web page content - inspired by claude-code/opencode webfetch tool
 pub struct WebFetchPlugin;
@@ -48,6 +59,10 @@ impl Plugin for WebFetchPlugin {
             return "Error: no URL provided".to_string();
         }
 
+        if let GuardrailAction::Deny(reason) = Guardrails::check_url(url) {
+            return format!("Error: guardrail denied web_fetch: {}", reason);
+        }
+
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .build()
@@ -81,17 +96,11 @@ impl Plugin for WebFetchPlugin {
 fn strip_html(html: &str) -> String {
     // Simple HTML to text: remove tags, decode basic entities
     let mut text = html.to_string();
-    // Remove script/style blocks
-    let re_script = regex::Regex::new(r"(?is)<script[^>]*>.*?</script>")
-        .unwrap_or_else(|_| regex::Regex::new(".^").unwrap());
-    text = re_script.replace_all(&text, "").to_string();
-    let re_style = regex::Regex::new(r"(?is)<style[^>]*>.*?</style>")
-        .unwrap_or_else(|_| regex::Regex::new(".^").unwrap());
-    text = re_style.replace_all(&text, "").to_string();
+    // Remove script/style blocks (regexes compiled once, see statics above)
+    text = RE_SCRIPT.replace_all(&text, "").to_string();
+    text = RE_STYLE.replace_all(&text, "").to_string();
     // Remove tags
-    let re_tags =
-        regex::Regex::new(r"<[^>]+>").unwrap_or_else(|_| regex::Regex::new(".^").unwrap());
-    text = re_tags.replace_all(&text, " ").to_string();
+    text = RE_TAGS.replace_all(&text, " ").to_string();
     // Decode entities
     text = text
         .replace("&amp;", "&")
@@ -101,7 +110,6 @@ fn strip_html(html: &str) -> String {
         .replace("&#39;", "'")
         .replace("&nbsp;", " ");
     // Collapse whitespace
-    let re_ws = regex::Regex::new(r"\s+").unwrap_or_else(|_| regex::Regex::new(".^").unwrap());
-    text = re_ws.replace_all(&text, " ").to_string();
+    text = RE_WS.replace_all(&text, " ").to_string();
     text.trim().to_string()
 }

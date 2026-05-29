@@ -31,39 +31,72 @@ fn scripts_dir() -> PathBuf {
     path_config::data_dir().join("scripts")
 }
 
-/// Build the shell command string to run `path` with the right interpreter.
+/// Build the argv (program + arguments) to run `path` with the right interpreter.
+/// Returning a structured vec instead of a single shell string keeps paths
+/// containing spaces intact — splitting a shell string on whitespace would
+/// destroy them.
 /// - .ps1          → powershell -NoProfile -File <path>  (Windows)
 ///   pwsh -NoProfile -File <path>        (Linux/macOS — PowerShell Core)
 /// - .bat / .cmd   → cmd /C <path>                       (Windows only; skipped on others)
 /// - .py           → python3 <path>  (Linux/macOS) | python <path> (Windows)
 /// - .sh / .bash   → bash <path>
-fn shell_run_cmd(path: &std::path::Path) -> String {
+fn shell_run_cmd(path: &std::path::Path) -> Vec<String> {
     let p = path.display().to_string();
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "ps1" => {
-            if cfg!(target_os = "windows") {
-                format!("powershell -NoProfile -File \"{}\"", p)
+            let prog = if cfg!(target_os = "windows") {
+                "powershell"
             } else {
-                format!("pwsh -NoProfile -File \"{}\"", p)
-            }
+                "pwsh"
+            };
+            vec![
+                prog.to_string(),
+                "-NoProfile".to_string(),
+                "-File".to_string(),
+                p,
+            ]
         }
         "bat" | "cmd" => {
             if cfg!(target_os = "windows") {
-                format!("cmd /C \"{}\"", p)
+                vec!["cmd".to_string(), "/C".to_string(), p]
             } else {
                 // batch files are Windows-only; best effort
-                format!("echo 'batch script not supported on this platform: {}'", p)
+                vec![
+                    "echo".to_string(),
+                    format!("batch script not supported on this platform: {}", p),
+                ]
             }
         }
         "py" => {
-            if cfg!(target_os = "windows") {
-                format!("python \"{}\"", p)
+            let prog = if cfg!(target_os = "windows") {
+                "python"
             } else {
-                format!("python3 \"{}\"", p)
-            }
+                "python3"
+            };
+            vec![prog.to_string(), p]
         }
-        _ => format!("bash \"{}\"", p), // .sh / .bash
+        _ => vec!["bash".to_string(), p], // .sh / .bash
     }
+}
+
+/// Render an argv as a shell command string with each argument quoted, for use
+/// as a "shell" action that is later passed to a shell. Keeps spaces in paths
+/// from being misinterpreted as argument boundaries.
+fn argv_to_shell_string(argv: &[String]) -> String {
+    argv.iter()
+        .map(|arg| {
+            if arg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.' | ':' | '='))
+            {
+                arg.clone()
+            } else {
+                // Single-quote and escape embedded single quotes.
+                format!("'{}'", arg.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn parse_meta(path: &PathBuf) -> Option<ScriptMeta> {
@@ -215,7 +248,7 @@ impl Plugin for ScriptRunnerPlugin {
                     icon: None,
                     score,
                     action_type: "shell".to_string(),
-                    action_data: shell_run_cmd(&s.path),
+                    action_data: argv_to_shell_string(&shell_run_cmd(&s.path)),
                 }
             })
             .collect()
@@ -254,11 +287,12 @@ impl Plugin for ScriptRunnerPlugin {
         });
         match found {
             Some(s) => {
-                let cmd_str = shell_run_cmd(&s.path);
-                let mut iter = cmd_str.split_whitespace();
-                let prog = iter.next().unwrap_or("bash");
-                let rest: Vec<&str> = iter.collect();
-                match std::process::Command::new(prog).args(&rest).output() {
+                let argv = shell_run_cmd(&s.path);
+                let (prog, rest) = match argv.split_first() {
+                    Some((p, r)) => (p.as_str(), r),
+                    None => return "Failed to run script: empty command".to_string(),
+                };
+                match std::process::Command::new(prog).args(rest).output() {
                     Ok(out) => {
                         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                         let stderr = String::from_utf8_lossy(&out.stderr).to_string();

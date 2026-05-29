@@ -75,32 +75,53 @@ impl Plugin for ProcessManagerPlugin {
             };
             let mut system = System::new_all();
             system.refresh_all();
-            let killed: Vec<String> = system
-                .processes_by_name(name.as_ref())
-                .map(|proc| {
-                    let pname = proc.name().to_string();
-                    let pid = proc.pid().as_u32();
-                    proc.kill();
-                    format!("{} (PID: {})", pname, pid)
-                })
-                .collect();
+            let mut killed: Vec<String> = Vec::new();
+            let mut failed: Vec<String> = Vec::new();
+            for proc in system.processes_by_name(name.as_ref()) {
+                let pname = proc.name().to_string();
+                let pid = proc.pid().as_u32();
+                let entry = format!("{} (PID: {})", pname, pid);
+                if proc.kill() {
+                    killed.push(entry);
+                } else {
+                    failed.push(entry);
+                }
+            }
 
             if killed.is_empty() {
+                let (title, subtitle, data) = if failed.is_empty() {
+                    (
+                        format!("No process found: {}", name),
+                        "No matching processes to kill".to_string(),
+                        format!("No process '{}' found", name),
+                    )
+                } else {
+                    (
+                        format!("Failed to kill {} process(es)", failed.len()),
+                        format!("Could not kill: {}", failed.join(", ")),
+                        format!("Failed to kill: {}", failed.join(", ")),
+                    )
+                };
                 return vec![QueryResult {
                     id: "ps:kill:none".to_string(),
-                    title: format!("No process found: {}", name),
-                    subtitle: Some("No matching processes to kill".to_string()),
+                    title,
+                    subtitle: Some(subtitle),
                     icon: Some("❌".to_string()),
                     score: 50,
                     action_type: "copy".to_string(),
-                    action_data: format!("No process '{}' found", name),
+                    action_data: data,
                 }];
             }
 
+            let subtitle = if failed.is_empty() {
+                killed.join(", ")
+            } else {
+                format!("{} (failed: {})", killed.join(", "), failed.join(", "))
+            };
             return vec![QueryResult {
                 id: "ps:kill:done".to_string(),
                 title: format!("Killed {} process(es)", killed.len()),
-                subtitle: Some(killed.join(", ")),
+                subtitle: Some(subtitle),
                 icon: Some("✅".to_string()),
                 score: 100,
                 action_type: "copy".to_string(),
@@ -193,20 +214,33 @@ impl Plugin for ProcessManagerPlugin {
                 };
                 let mut system = System::new_all();
                 system.refresh_all();
-                let killed: Vec<String> = system
-                    .processes_by_name(name.as_ref())
-                    .map(|proc| {
-                        let pname = proc.name().to_string();
-                        let pid = proc.pid().as_u32();
-                        proc.kill();
-                        format!("{} (PID: {})", pname, pid)
-                    })
-                    .collect();
+                let mut killed: Vec<String> = Vec::new();
+                let mut failed: Vec<String> = Vec::new();
+                for proc in system.processes_by_name(name.as_ref()) {
+                    let pname = proc.name().to_string();
+                    let pid = proc.pid().as_u32();
+                    let entry = format!("{} (PID: {})", pname, pid);
+                    if proc.kill() {
+                        killed.push(entry);
+                    } else {
+                        failed.push(entry);
+                    }
+                }
 
                 if killed.is_empty() {
-                    format!("No process found with name '{}'", name)
-                } else {
+                    if failed.is_empty() {
+                        format!("No process found with name '{}'", name)
+                    } else {
+                        format!("Failed to kill: {}", failed.join(", "))
+                    }
+                } else if failed.is_empty() {
                     format!("Killed: {}", killed.join(", "))
+                } else {
+                    format!(
+                        "Killed: {}\nFailed to kill: {}",
+                        killed.join(", "),
+                        failed.join(", ")
+                    )
                 }
             }
             _ => "Unknown action: use 'list' or 'kill'".to_string(),
