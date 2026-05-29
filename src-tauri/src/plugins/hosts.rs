@@ -114,7 +114,14 @@ impl Plugin for HostsPlugin {
             .take(50)
             .collect();
         if entries.is_empty() {
-            format!("No hosts entries found{}", if filter.is_empty() { String::new() } else { format!(" matching '{}'", filter) })
+            format!(
+                "No hosts entries found{}",
+                if filter.is_empty() {
+                    String::new()
+                } else {
+                    format!(" matching '{}'", filter)
+                }
+            )
         } else {
             entries.join("\n")
         }

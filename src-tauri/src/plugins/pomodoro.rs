@@ -302,7 +302,10 @@ impl Plugin for PomodoroPlugin {
     }
 
     async fn execute_tool(&self, args: serde_json::Value) -> String {
-        let action = args["command"].as_str().or_else(|| args["action"].as_str()).unwrap_or("");
+        let action = args["command"]
+            .as_str()
+            .or_else(|| args["action"].as_str())
+            .unwrap_or("");
         match action {
             "stop" => {
                 clear_state();

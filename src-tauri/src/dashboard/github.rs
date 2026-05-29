@@ -166,7 +166,9 @@ fn fetch_orgs_via_gh_cli(hostname: &str) -> Result<Vec<String>, String> {
             !l.is_empty()
                 && !l.starts_with("Showing ")
                 && !l.contains(' ')
-                && l.chars().next().map_or(false, |c| c.is_ascii_alphanumeric())
+                && l.chars()
+                    .next()
+                    .map_or(false, |c| c.is_ascii_alphanumeric())
         })
         .map(|l| l.to_string())
         .collect();
@@ -232,7 +234,10 @@ pub async fn github_data_json() -> String {
             if owner.is_empty() {
                 continue;
             }
-            if !effective_orgs.iter().any(|o| o.eq_ignore_ascii_case(&owner)) {
+            if !effective_orgs
+                .iter()
+                .any(|o| o.eq_ignore_ascii_case(&owner))
+            {
                 continue;
             }
             by_owner.entry(owner).or_default().push(r);

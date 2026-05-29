@@ -183,7 +183,9 @@ impl Plugin for BrowserBookmarksPlugin {
         let bookmarks = Self::load_all_bookmarks();
         let matches: Vec<_> = bookmarks
             .into_iter()
-            .filter(|(name, url)| name.to_lowercase().contains(&query) || url.to_lowercase().contains(&query))
+            .filter(|(name, url)| {
+                name.to_lowercase().contains(&query) || url.to_lowercase().contains(&query)
+            })
             .take(20)
             .collect();
         if matches.is_empty() {

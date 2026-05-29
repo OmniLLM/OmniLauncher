@@ -229,9 +229,7 @@ impl Plugin for AgentDelegatePlugin {
         if let Some(tasks_val) = args.get("tasks") {
             if let Ok(tasks) = serde_json::from_value::<Vec<SubTask>>(tasks_val.clone()) {
                 if !tasks.is_empty() {
-                    if let Some(bad) =
-                        tasks.iter().find(|t| !is_allowed_agent(&t.agent_name))
-                    {
+                    if let Some(bad) = tasks.iter().find(|t| !is_allowed_agent(&t.agent_name)) {
                         return format!(
                             "Error: agent_name '{}' is not in the allowed list {:?}",
                             bad.agent_name, ALLOWED_AGENTS

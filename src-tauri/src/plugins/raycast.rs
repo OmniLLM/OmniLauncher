@@ -25,8 +25,7 @@ use serde::{Deserialize, Serialize};
 
 const SHIM_JS: &str = include_str!("../../assets/raycast-shim/shim.cjs");
 const API_SHIM_JS: &str = include_str!("../../assets/raycast-shim/raycast-api-shim.cjs");
-const SOURCE_LOADER_JS: &str =
-    include_str!("../../assets/raycast-shim/raycast-source-loader.cjs");
+const SOURCE_LOADER_JS: &str = include_str!("../../assets/raycast-shim/raycast-source-loader.cjs");
 
 const SHIM_FILENAME: &str = "raycast-shim.cjs";
 const API_SHIM_FILENAME: &str = "raycast-api-shim.cjs";
@@ -107,10 +106,7 @@ fn build_tool_schema(pkg: &RaycastPackage) -> Option<serde_json::Value> {
         .unwrap_or("Raycast extension");
 
     let description = if cmds.len() > 1 {
-        format!(
-            "{} (Raycast extension). Commands:\n{}",
-            base_desc, descs
-        )
+        format!("{} (Raycast extension). Commands:\n{}", base_desc, descs)
     } else {
         format!("{} (Raycast extension)", base_desc)
     };
@@ -157,14 +153,20 @@ fn read_package(dir: &Path) -> Option<RaycastPackage> {
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
-            log::trace!("raycast::read_package: no package.json at {}: {e}", path.display());
+            log::trace!(
+                "raycast::read_package: no package.json at {}: {e}",
+                path.display()
+            );
             return None;
         }
     };
     let trimmed = content.trim_start_matches('\u{feff}');
     serde_json::from_str(trimmed)
         .map_err(|e| {
-            log::debug!("raycast::read_package: failed to parse {}: {e}", path.display());
+            log::debug!(
+                "raycast::read_package: failed to parse {}: {e}",
+                path.display()
+            );
             e
         })
         .ok()
@@ -184,7 +186,11 @@ pub fn is_raycast_extension(dir: &Path) -> bool {
     let Some(pkg) = read_package(dir) else {
         return false;
     };
-    let has_commands = pkg.commands.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+    let has_commands = pkg
+        .commands
+        .as_ref()
+        .map(|c| !c.is_empty())
+        .unwrap_or(false);
     let has_api = depends_on_raycast_api(&pkg);
     log::trace!(
         "raycast::is_raycast_extension: dir={} name='{}' has_commands={} has_api={}",
@@ -473,9 +479,7 @@ pub async fn install_raycast_extension(
     .and_then(|_| run_git(vec!["checkout".into()]));
 
     if let Err(e) = checkout_result {
-        log::warn!(
-            "raycast::install_raycast_extension: sparse-checkout failed: {e}"
-        );
+        log::warn!("raycast::install_raycast_extension: sparse-checkout failed: {e}");
         let _ = force_remove_dir_all(&stage);
         return Err(e);
     }
@@ -545,8 +549,8 @@ pub async fn install_raycast_extension(
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dst)
         .map_err(|e| format!("Failed to create '{}': {e}", dst.display()))?;
-    for entry in std::fs::read_dir(src)
-        .map_err(|e| format!("Failed to read '{}': {e}", src.display()))?
+    for entry in
+        std::fs::read_dir(src).map_err(|e| format!("Failed to read '{}': {e}", src.display()))?
     {
         let entry = entry.map_err(|e| format!("Directory entry error: {e}"))?;
         let from = entry.path();
@@ -703,11 +707,17 @@ pub fn try_build_extension(dir: &Path) {
 /// Returns true if at least one command was compiled successfully.
 fn esbuild_extension(dir: &Path) -> bool {
     let Some(pkg) = read_package(dir) else {
-        log::warn!("raycast::esbuild_extension: no package.json in {}", dir.display());
+        log::warn!(
+            "raycast::esbuild_extension: no package.json in {}",
+            dir.display()
+        );
         return false;
     };
     let Some(commands) = pkg.commands.as_ref().filter(|c| !c.is_empty()) else {
-        log::warn!("raycast::esbuild_extension: no commands in {}", dir.display());
+        log::warn!(
+            "raycast::esbuild_extension: no commands in {}",
+            dir.display()
+        );
         return false;
     };
 
@@ -823,10 +833,7 @@ fn tsc_build_extension(dir: &Path) -> bool {
         return false;
     }
 
-    let mut args = vec![
-        "--no-install".to_string(),
-        "tsc".to_string(),
-    ];
+    let mut args = vec!["--no-install".to_string(), "tsc".to_string()];
 
     if dir.join("tsconfig.json").is_file() {
         args.push("--project".to_string());
@@ -843,10 +850,7 @@ fn tsc_build_extension(dir: &Path) -> bool {
         dir.display()
     );
 
-    let result = Command::new(npx)
-        .args(&args)
-        .current_dir(dir)
-        .output();
+    let result = Command::new(npx).args(&args).current_dir(dir).output();
 
     match result {
         Ok(out) if out.status.success() => {
@@ -898,13 +902,7 @@ fn tsc_build_extension(dir: &Path) -> bool {
 /// never collides with extension source) that imports every `*.ts`/`*.tsx` file
 /// from `src/utils/` and re-exports their named exports. Esbuild bundles it, then
 /// we delete the temp file. The extension's own source files are never touched.
-fn build_search_bundle(
-    dir: &Path,
-    npx: &str,
-    dist_dir: &Path,
-    _entry: &Path,
-    file_stem: &str,
-) {
+fn build_search_bundle(dir: &Path, npx: &str, dist_dir: &Path, _entry: &Path, file_stem: &str) {
     let src_utils = dir.join("src").join("utils");
     if !src_utils.is_dir() {
         return;
@@ -935,7 +933,9 @@ fn build_search_bundle(
     let temp_entry_name = format!("__omni_search_entry_{file_stem}.mts");
     let temp_entry = src_utils.join(&temp_entry_name);
 
-    let mut exports_src = String::from("// OmniLauncher-generated headless search entrypoint — not part of the extension source\n");
+    let mut exports_src = String::from(
+        "// OmniLauncher-generated headless search entrypoint — not part of the extension source\n",
+    );
     for f in &util_files {
         if let Some(stem) = f.file_stem().and_then(|s| s.to_str()) {
             exports_src.push_str(&format!("export * from \"./{stem}\";\n"));
@@ -943,9 +943,7 @@ fn build_search_bundle(
     }
 
     if let Err(e) = std::fs::write(&temp_entry, &exports_src) {
-        log::warn!(
-            "raycast::build_search_bundle: failed to write temp entry for {file_stem}: {e}"
-        );
+        log::warn!("raycast::build_search_bundle: failed to write temp entry for {file_stem}: {e}");
         return;
     }
 
@@ -1009,10 +1007,7 @@ fn run_npm_install(dir: &Path) -> bool {
 
     match first {
         Ok(out) if out.status.success() => {
-            log::info!(
-                "raycast::run_npm_install: ok for {}",
-                dir.display()
-            );
+            log::info!("raycast::run_npm_install: ok for {}", dir.display());
             return true;
         }
         Ok(out) => {

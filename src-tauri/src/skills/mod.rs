@@ -159,12 +159,7 @@ fn normalize_skill_url(url: &str) -> String {
             let scheme = parts[0].trim_end_matches(':');
             return format!(
                 "{}://{}/{}/{}/raw/{}/{}",
-                scheme,
-                domain,
-                owner,
-                repo,
-                branch,
-                path
+                scheme, domain, owner, repo, branch, path
             );
         }
     }
@@ -300,8 +295,12 @@ impl SkillManager {
     /// Update a skill by re-fetching from its stored source URL.
     pub fn update_skill(&mut self, name: &str) -> Result<String, String> {
         let source_file = Self::skill_dir().join(name).join(".source");
-        let url = std::fs::read_to_string(&source_file)
-            .map_err(|_| format!("Skill '{}' has no update source (was not installed from a URL).", name))?;
+        let url = std::fs::read_to_string(&source_file).map_err(|_| {
+            format!(
+                "Skill '{}' has no update source (was not installed from a URL).",
+                name
+            )
+        })?;
         let url = url.trim().to_string();
         self.install_from_url(&url)
             .map(|_| format!("Updated skill: {}", name))
@@ -345,7 +344,10 @@ impl SkillManager {
             self.skills.retain(|s| s.meta.name != name);
             Ok(format!("Deleted skill: {}", name))
         } else {
-            Err(format!("Skill '{}' not found in user skills directory.", name))
+            Err(format!(
+                "Skill '{}' not found in user skills directory.",
+                name
+            ))
         }
     }
 

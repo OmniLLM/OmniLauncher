@@ -83,7 +83,11 @@ fn discover_tables(conn: &Connection) -> Vec<Value> {
                             rusqlite::types::Value::Integer(i) => json!(i),
                             rusqlite::types::Value::Real(f) => json!(f),
                             rusqlite::types::Value::Text(s) => {
-                                let t = if s.len() > 100 { format!("{}…", &s[..100]) } else { s };
+                                let t = if s.len() > 100 {
+                                    format!("{}…", &s[..100])
+                                } else {
+                                    s
+                                };
                                 Value::String(t)
                             }
                             rusqlite::types::Value::Blob(_) => Value::String("<blob>".into()),

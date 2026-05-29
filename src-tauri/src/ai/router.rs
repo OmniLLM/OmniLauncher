@@ -87,7 +87,12 @@ fn estimate_tokens(text: &str) -> usize {
     // Each newline and run of punctuation usually adds a token.
     let punct = text
         .chars()
-        .filter(|c| matches!(c, '\n' | '.' | ',' | ';' | ':' | '(' | ')' | '{' | '}' | '[' | ']' | '"' | '\''))
+        .filter(|c| {
+            matches!(
+                c,
+                '\n' | '.' | ',' | ';' | ':' | '(' | ')' | '{' | '}' | '[' | ']' | '"' | '\''
+            )
+        })
         .count();
     tokens + punct / 2
 }
@@ -193,7 +198,15 @@ impl Router {
             }
             RouteDecision::Ai => {
                 let prompt = Self::strip_ai_prefix(input);
-                Self::ai_route(prompt, plugin_manager, ai_client, context, skill_manager, progress_tx).await
+                Self::ai_route(
+                    prompt,
+                    plugin_manager,
+                    ai_client,
+                    context,
+                    skill_manager,
+                    progress_tx,
+                )
+                .await
             }
         }
     }
@@ -339,9 +352,11 @@ impl Router {
                         let mut tool_result_messages: Vec<Message> = vec![];
 
                         for tc in &tool_calls {
-                            all_tools_used.push(tc.function.name.clone());
+                            let tool_display_name =
+                                plugin_manager.tool_display_name(&tc.function.name);
+                            all_tools_used.push(tool_display_name.clone());
                             if let Some(ref tx) = progress_tx {
-                                let _ = tx.send(tc.function.name.clone());
+                                let _ = tx.send(tool_display_name);
                             }
                             let args: serde_json::Value =
                                 serde_json::from_str(&tc.function.arguments).unwrap_or_default();
@@ -944,9 +959,7 @@ impl Router {
                 let subarg = sub_parts.get(1).unwrap_or(&"").trim();
 
                 match subcmd {
-                    "list" | "" => {
-                        skill_inventory_response(skill_manager)
-                    }
+                    "list" | "" => skill_inventory_response(skill_manager),
                     "view" => {
                         if subarg.is_empty() {
                             return AiResponse {
@@ -991,11 +1004,12 @@ impl Router {
                                 is_ai: false,
                             };
                         }
-                        let result = if subarg.starts_with("http://") || subarg.starts_with("https://") {
-                            skill_manager.install_from_url(subarg)
-                        } else {
-                            skill_manager.install_from_path(subarg)
-                        };
+                        let result =
+                            if subarg.starts_with("http://") || subarg.starts_with("https://") {
+                                skill_manager.install_from_url(subarg)
+                            } else {
+                                skill_manager.install_from_path(subarg)
+                            };
                         match result {
                             Ok(msg) => AiResponse {
                                 content: format!("✓ {}", msg),
@@ -1406,7 +1420,9 @@ mod tests {
         assert_eq!(Router::strip_ai_prefix("ai 🦀 hello"), "🦀 hello");
         assert_eq!(Router::strip_ai_prefix("AI hello world"), "hello world");
         // Mixed case
-        assert_eq!(Router::strip_ai_prefix("Ai tell me something"), "tell me something");
+        assert_eq!(
+            Router::strip_ai_prefix("Ai tell me something"),
+            "tell me something"
+        );
     }
-
 }

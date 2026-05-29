@@ -664,7 +664,11 @@ impl Plugin for EmojiPickerPlugin {
             .iter()
             .filter_map(|(emoji, name, keywords)| {
                 let s = score_emoji(name, keywords, &query);
-                if s == 0 { None } else { Some((s, emoji, name)) }
+                if s == 0 {
+                    None
+                } else {
+                    Some((s, emoji, name))
+                }
             })
             .collect();
         if results.is_empty() {

@@ -4,17 +4,17 @@
 //! merged in under `/dashboard/todos`. The legacy `/todo` route has been
 //! decommissioned in favor of this single entry point.
 
-use crate::plugins::todo;
 use super::common::render_page;
+use crate::plugins::todo;
 
 pub fn todos_html() -> String {
     let raw_html = todo::todo_live_html();
-    
+
     // Extract the inner HTML inside <body>...</body> and <script>...</script>
     let body_start = raw_html.find("<body>").map(|i| i + 6).unwrap_or(0);
     let body_end = raw_html.find("</body>").unwrap_or(raw_html.len());
     let mut body_content = raw_html[body_start..body_end].to_string();
-    
+
     // Remove the `<div class="container">` and matching trailing `</div>` and `<header>...</header>`
     // to match other dashboard pages beautifully. we will wrap page contents nicely!
     if let Some(h_start) = body_content.find("<header>") {

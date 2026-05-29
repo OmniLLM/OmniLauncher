@@ -250,8 +250,7 @@ pub fn run() {
             // Re-hydrate from SQLite so follow-up questions survive restarts.
             let sid = omnilauncher_lib::db::conversation::current_session_id();
             ctx.session_id = sid;
-            ctx.messages =
-                omnilauncher_lib::db::conversation::load_recent_for_session(sid, 20);
+            ctx.messages = omnilauncher_lib::db::conversation::load_recent_for_session(sid, 20);
             ctx
         })),
         ai_in_flight: Arc::new(Semaphore::new(1)),
@@ -284,7 +283,10 @@ pub fn run() {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
                     if let (Some(x), Some(y)) = (val["x"].as_i64(), val["y"].as_i64()) {
                         let _ = window.set_position(tauri::Position::Physical(
-                            tauri::PhysicalPosition { x: x as i32, y: y as i32 }
+                            tauri::PhysicalPosition {
+                                x: x as i32,
+                                y: y as i32,
+                            },
                         ));
                     }
                 }
@@ -346,14 +348,13 @@ pub fn run() {
                             // (avoids text inside our dashboard bleeding into
                             // the launcher input on the next hotkey).
                             let cfg = omnilauncher_lib::settings::load_settings();
-                            let selection = if cfg.capture_selection_on_open
-                                && !foreground_is_ours()
-                            {
-                                omnilauncher_lib::plugins::selection::read_x11_selection()
-                                    .unwrap_or_default()
-                            } else {
-                                String::new()
-                            };
+                            let selection =
+                                if cfg.capture_selection_on_open && !foreground_is_ours() {
+                                    omnilauncher_lib::plugins::selection::read_x11_selection()
+                                        .unwrap_or_default()
+                                } else {
+                                    String::new()
+                                };
                             let _ = window.show();
                             let _ = window.set_focus();
                             let _ = window.emit("omnilauncher://shown", selection);
@@ -519,8 +520,7 @@ async fn ai_query(
         // Keep permit alive for duration of task
         let _permit = permit;
 
-        let (progress_tx, mut progress_rx) =
-            tokio::sync::mpsc::unbounded_channel::<String>();
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
         // Spawn a task to forward tool-call events to the window
         let win_for_progress = window.clone();
@@ -599,10 +599,7 @@ async fn ai_cancel(
     let mut slot = state.current_ai_task.lock().await;
     if let Some(handle) = slot.take() {
         handle.abort();
-        let _ = window.emit(
-            "omnilauncher://ai-error",
-            "Cancelled by user".to_string(),
-        );
+        let _ = window.emit("omnilauncher://ai-error", "Cancelled by user".to_string());
         Ok(true)
     } else {
         Ok(false)
@@ -620,8 +617,8 @@ async fn clear_conversation(state: tauri::State<'_, AppState>) -> Result<bool, S
 }
 
 #[tauri::command]
-async fn list_ai_sessions(
-) -> Result<Vec<omnilauncher_lib::db::conversation::SessionInfo>, String> {
+async fn list_ai_sessions() -> Result<Vec<omnilauncher_lib::db::conversation::SessionInfo>, String>
+{
     Ok(omnilauncher_lib::db::conversation::list_sessions())
 }
 
@@ -637,8 +634,7 @@ async fn switch_ai_session(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
     omnilauncher_lib::db::conversation::touch_for_switch(session_id);
-    let msgs =
-        omnilauncher_lib::db::conversation::load_recent_for_session(session_id, 200);
+    let msgs = omnilauncher_lib::db::conversation::load_recent_for_session(session_id, 200);
     let mut ctx = state.conversation.lock().await;
     ctx.clear();
     ctx.session_id = session_id;
@@ -1403,7 +1399,11 @@ mod tests {
         let sem = Arc::new(Semaphore::new(1));
         let state = AppState {
             plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
-            ai_client: Arc::new(Mutex::new(AiClient::new(String::new(), String::new(), String::new()))),
+            ai_client: Arc::new(Mutex::new(AiClient::new(
+                String::new(),
+                String::new(),
+                String::new(),
+            ))),
             settings: Arc::new(Mutex::new(AppSettings::default())),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
             ai_in_flight: sem.clone(),

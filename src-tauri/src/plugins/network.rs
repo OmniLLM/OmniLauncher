@@ -125,15 +125,25 @@ impl Plugin for NetworkPlugin {
         };
 
         let output = if cfg!(target_os = "windows") {
-            std::process::Command::new("cmd").args(["/C", &shell_cmd]).output()
+            std::process::Command::new("cmd")
+                .args(["/C", &shell_cmd])
+                .output()
         } else {
-            std::process::Command::new("sh").args(["-c", &shell_cmd]).output()
+            std::process::Command::new("sh")
+                .args(["-c", &shell_cmd])
+                .output()
         };
         match output {
             Ok(o) => {
                 let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
                 let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-                if !stdout.is_empty() { stdout } else if !stderr.is_empty() { stderr } else { "Command completed with no output".to_string() }
+                if !stdout.is_empty() {
+                    stdout
+                } else if !stderr.is_empty() {
+                    stderr
+                } else {
+                    "Command completed with no output".to_string()
+                }
             }
             Err(e) => format!("Error running command: {}", e),
         }

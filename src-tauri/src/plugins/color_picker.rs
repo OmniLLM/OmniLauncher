@@ -94,14 +94,20 @@ impl Plugin for ColorPickerPlugin {
         if color.is_empty() {
             return "Error: 'color' parameter is required".to_string();
         }
-        if let Some((r, g, b)) = parse_hex(&color).or_else(|| parse_rgb(&color)).or_else(|| named_color(&color)) {
+        if let Some((r, g, b)) = parse_hex(&color)
+            .or_else(|| parse_rgb(&color))
+            .or_else(|| named_color(&color))
+        {
             let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
             let rgb = format!("rgb({}, {}, {})", r, g, b);
             let (h, s, l) = rgb_to_hsl(r, g, b);
             let hsl = format!("hsl({}, {}%, {}%)", h, s, l);
             format!("HEX: {}\nRGB: {}\nHSL: {}", hex, rgb, hsl)
         } else {
-            format!("Could not parse color: '{}'. Use hex (#ff0000), rgb(255,0,0), or a color name.", color)
+            format!(
+                "Could not parse color: '{}'. Use hex (#ff0000), rgb(255,0,0), or a color name.",
+                color
+            )
         }
     }
 }

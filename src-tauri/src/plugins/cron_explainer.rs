@@ -284,7 +284,10 @@ impl Plugin for CronExplainerPlugin {
         }
         match explain_cron(expr) {
             Some(human) => format!("{}\n(Expression: {})", human, expr),
-            None => format!("Invalid cron expression: '{}'. Expected 5 fields: min hour dom month dow", expr),
+            None => format!(
+                "Invalid cron expression: '{}'. Expected 5 fields: min hour dom month dow",
+                expr
+            ),
         }
     }
 }

@@ -452,6 +452,35 @@ export default function SearchBar({
             </span>
           )}
 
+          {isAiMode && loading && onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              aria-label="Cancel running AI request"
+              title="Cancel running request"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+                minHeight: "30px",
+                padding: "5px 10px",
+                borderRadius: "8px",
+                border: `1px solid ${colors.accent}55`,
+                background: `${colors.accent}20`,
+                color: colors.accent,
+                fontSize: "12px",
+                fontWeight: 700,
+                letterSpacing: 0,
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              <span style={{ fontSize: "12px", lineHeight: 1 }}>■</span>
+              Cancel
+            </button>
+          )}
+
           {/* Theme toggle button */}
           {onThemeToggle && (
             <ThemeToggleButton

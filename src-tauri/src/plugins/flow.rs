@@ -65,7 +65,11 @@ struct SyntheticManifest<'a> {
 /// the Flow.Launcher plugin. Flow plugins are a single search surface, so
 /// the tool has just a `query` parameter; the shim will run a Flow `query`
 /// and auto-invoke the first result's action.
-fn build_tool_schema(plugin_name: &str, manifest: &FlowManifest) -> serde_json::Value {
+fn build_tool_schema(
+    function_name: &str,
+    plugin_name: &str,
+    manifest: &FlowManifest,
+) -> serde_json::Value {
     let description = manifest
         .Description
         .as_deref()
@@ -76,7 +80,7 @@ fn build_tool_schema(plugin_name: &str, manifest: &FlowManifest) -> serde_json::
     serde_json::json!({
         "type": "function",
         "function": {
-            "name": plugin_name,
+            "name": function_name,
             "description": description,
             "parameters": {
                 "type": "object",
@@ -90,6 +94,30 @@ fn build_tool_schema(plugin_name: &str, manifest: &FlowManifest) -> serde_json::
             }
         }
     })
+}
+
+fn tool_function_name(manifest: &FlowManifest, display_name: &str) -> String {
+    let raw = manifest
+        .ID
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(display_name);
+    let mut sanitized: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    sanitized = sanitized.trim_matches('_').to_string();
+    if sanitized.is_empty() {
+        "flow_plugin".to_string()
+    } else {
+        sanitized
+    }
 }
 
 /// Read a Flow.Launcher manifest from `dir` if it exists and looks Flow-shaped.
@@ -135,13 +163,17 @@ fn primary_keyword(m: &FlowManifest) -> String {
         }
     }
     if let Some(list) = &m.ActionKeywords {
-        if let Some(first) = list.iter().find(|s| !s.trim().is_empty() && s.trim() != "*") {
+        if let Some(first) = list
+            .iter()
+            .find(|s| !s.trim().is_empty() && s.trim() != "*")
+        {
             return first.trim().to_string();
         }
     }
     // Fall back to lowercase plugin name slug so the user can still trigger it
     let name = m.Name.clone().unwrap_or_else(|| "flow".to_string());
-    name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-")
+    name.to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric(), "-")
 }
 
 /// Synthesize OmniLauncher manifest + shim for a single Flow.Launcher
@@ -182,10 +214,7 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
         std::fs::write(dir.join(FLOW_MANIFEST_FILENAME), &original)
             .map_err(|e| format!("Failed to write {FLOW_MANIFEST_FILENAME}: {e}"))?;
     } else if !dir.join(FLOW_MANIFEST_FILENAME).is_file() {
-        return Err(format!(
-            "{} has no Flow manifest to adapt.",
-            dir.display()
-        ));
+        return Err(format!("{} has no Flow manifest to adapt.", dir.display()));
     }
 
     // Write the shim file.
@@ -205,9 +234,9 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
 
     if should_write_manifest {
         let name = manifest
-            .ID
+            .Name
             .clone()
-            .or_else(|| manifest.Name.clone())
+            .or_else(|| manifest.ID.clone())
             .unwrap_or_else(|| {
                 dir.file_name()
                     .and_then(|n| n.to_str())
@@ -221,6 +250,7 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
         let version = manifest.Version.as_deref().unwrap_or("0.0.0");
         let keyword = primary_keyword(&manifest);
         let icon = "🚀";
+        let function_name = tool_function_name(&manifest, &name);
 
         let synthetic = SyntheticManifest {
             name: &name,
@@ -230,7 +260,7 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
             icon,
             entry: SHIM_FILENAME,
             entry_windows: SHIM_FILENAME,
-            tool_schema: Some(build_tool_schema(&name, &manifest)),
+            tool_schema: Some(build_tool_schema(&function_name, &name, &manifest)),
         };
         let json = serde_json::to_string_pretty(&synthetic)
             .map_err(|e| format!("Failed to serialize plugin.json: {e}"))?;
@@ -245,8 +275,8 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
         dir.display()
     );
     Ok(manifest
-        .ID
-        .or(manifest.Name)
+        .Name
+        .or(manifest.ID)
         .unwrap_or_else(|| "flow-plugin".into()))
 }
 
@@ -316,7 +346,15 @@ pub fn try_setup_dependencies(dir: &Path) {
                 dir.display()
             );
             let out = Command::new(&py)
-                .args(["-m", "pip", "install", "-r", "requirements.txt", "-t", "lib"])
+                .args([
+                    "-m",
+                    "pip",
+                    "install",
+                    "-r",
+                    "requirements.txt",
+                    "-t",
+                    "lib",
+                ])
                 .current_dir(dir)
                 .output();
             match out {
@@ -342,7 +380,10 @@ pub fn try_setup_dependencies(dir: &Path) {
                 );
                 return;
             }
-            log::info!("Running 'npm install' for Flow JS plugin at {}", dir.display());
+            log::info!(
+                "Running 'npm install' for Flow JS plugin at {}",
+                dir.display()
+            );
             let _ = Command::new(npm_exe())
                 .arg("install")
                 .current_dir(dir)
@@ -363,7 +404,10 @@ fn pick_python_executable() -> String {
         let bundled = if cfg!(windows) {
             home.join(".omnilauncher").join("python").join("python.exe")
         } else {
-            home.join(".omnilauncher").join("python").join("bin").join("python3")
+            home.join(".omnilauncher")
+                .join("python")
+                .join("bin")
+                .join("python3")
         };
         if bundled.is_file() {
             return bundled.to_string_lossy().into_owned();
@@ -377,7 +421,11 @@ fn pick_python_executable() -> String {
 }
 
 fn npm_exe() -> &'static str {
-    if cfg!(windows) { "npm.cmd" } else { "npm" }
+    if cfg!(windows) {
+        "npm.cmd"
+    } else {
+        "npm"
+    }
 }
 
 fn which(cmd: &str) -> Option<std::path::PathBuf> {
@@ -467,8 +515,8 @@ mod tests {
         std::fs::write(dir.join("plugin.json"), flow_json).unwrap();
         std::fs::write(dir.join("main.py"), "# stub").unwrap();
 
-        let id = synthesize_plugin_files(&dir).unwrap();
-        assert_eq!(id, "abc123");
+        let name = synthesize_plugin_files(&dir).unwrap();
+        assert_eq!(name, "Hello");
 
         // Original kept as flow.plugin.json
         let kept = std::fs::read_to_string(dir.join(FLOW_MANIFEST_FILENAME)).unwrap();
@@ -482,7 +530,8 @@ mod tests {
         assert_eq!(new_manifest["entry"], SHIM_FILENAME);
         assert_eq!(new_manifest["keyword"], "hi");
         assert_eq!(new_manifest["version"], "2.5.0");
-        assert_eq!(new_manifest["name"], "abc123");
+        assert_eq!(new_manifest["name"], "Hello");
+        assert_eq!(new_manifest["tool_schema"]["function"]["name"], "abc123");
 
         // Shim file present
         assert!(dir.join(SHIM_FILENAME).exists());

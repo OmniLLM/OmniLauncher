@@ -149,7 +149,10 @@ impl AiClient {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .subsec_nanos() as u64;
-                let jitter_ms = seed.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(attempt as u64) % 1_000;
+                let jitter_ms = seed
+                    .wrapping_mul(0x9e3779b97f4a7c15)
+                    .wrapping_add(attempt as u64)
+                    % 1_000;
                 tokio::time::sleep(std::time::Duration::from_millis(backoff_ms + jitter_ms)).await;
             }
 
@@ -167,9 +170,7 @@ impl AiClient {
             }
         }
 
-        Err(last_err.unwrap_or(AiError::Transport(
-            "max retries exhausted".into(),
-        )))
+        Err(last_err.unwrap_or(AiError::Transport("max retries exhausted".into())))
     }
 
     /// Single (non-retrying) API call — used internally by `chat_with_tools`.
@@ -238,16 +239,13 @@ impl AiClient {
             req = req.bearer_auth(&self.api_key);
         }
 
-        let response = req
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    AiError::Timeout
-                } else {
-                    AiError::Transport(e.to_string())
-                }
-            })?;
+        let response = req.send().await.map_err(|e| {
+            if e.is_timeout() {
+                AiError::Timeout
+            } else {
+                AiError::Transport(e.to_string())
+            }
+        })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -255,8 +253,10 @@ impl AiClient {
             return Err(AiError::Api { status, body });
         }
 
-        let json: serde_json::Value =
-            response.json().await.map_err(|e| AiError::Json(e.to_string()))?;
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AiError::Json(e.to_string()))?;
 
         let choice = &json["choices"][0]["message"];
         let content = choice["content"].as_str().map(|s| s.to_string());
@@ -311,16 +311,13 @@ impl AiClient {
             req = req.bearer_auth(&self.api_key);
         }
 
-        let response = req
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    AiError::Timeout
-                } else {
-                    AiError::Transport(e.to_string())
-                }
-            })?;
+        let response = req.send().await.map_err(|e| {
+            if e.is_timeout() {
+                AiError::Timeout
+            } else {
+                AiError::Transport(e.to_string())
+            }
+        })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();

@@ -206,10 +206,7 @@ fn parse_github_subdir_url(source: &str) -> Option<GithubSubdirUrl> {
 
 /// Sparse-checkout `subdir.subpath` out of `subdir.clone_url@subdir.branch`
 /// into a temp stage, then copy that single folder's contents into `dest`.
-async fn sparse_checkout_subdir(
-    subdir: &GithubSubdirUrl,
-    dest: &PathBuf,
-) -> Result<(), String> {
+async fn sparse_checkout_subdir(subdir: &GithubSubdirUrl, dest: &PathBuf) -> Result<(), String> {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -460,13 +457,19 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
         // the final destination.
         log::info!(
             "install_plugin: detected GitHub subdir URL repo='{}' branch='{}' subpath='{}'",
-            subdir.clone_url, subdir.branch, subdir.subpath
+            subdir.clone_url,
+            subdir.branch,
+            subdir.subpath
         );
         sparse_checkout_subdir(&subdir, &dest).await?;
     } else if is_remote {
         // Clone the repo
         let dest_str = dest.to_string_lossy().into_owned();
-        log::info!("install_plugin: git clone --depth=1 {} -> {}", source, dest_str);
+        log::info!(
+            "install_plugin: git clone --depth=1 {} -> {}",
+            source,
+            dest_str
+        );
         let output = tokio::process::Command::new("git")
             .args(["clone", "--depth=1", &source, &dest_str])
             .output()

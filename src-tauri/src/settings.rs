@@ -346,7 +346,6 @@ pub fn save_settings(settings: &AppSettings) -> bool {
     }
 }
 
-
 #[cfg(test)]
 mod settings_tests {
     use super::*;

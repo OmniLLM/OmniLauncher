@@ -98,7 +98,12 @@ impl ExternalPlugin {
             timeout_secs,
             request
         );
-        match timeout(Duration::from_secs(timeout_secs), self.call(&request.to_string())).await {
+        match timeout(
+            Duration::from_secs(timeout_secs),
+            self.call(&request.to_string()),
+        )
+        .await
+        {
             Ok(Some(output)) => {
                 log::debug!(
                     "ExternalPlugin '{}' {} returned {} bytes",
@@ -111,14 +116,16 @@ impl ExternalPlugin {
             Ok(None) => {
                 log::warn!(
                     "External plugin '{}' {} failed",
-                    self.manifest.name, op_name
+                    self.manifest.name,
+                    op_name
                 );
                 None
             }
             Err(_) => {
                 log::warn!(
                     "External plugin '{}' {} timed out ({timeout_secs}s)",
-                    self.manifest.name, op_name
+                    self.manifest.name,
+                    op_name
                 );
                 None
             }
@@ -179,10 +186,7 @@ impl Plugin for ExternalPlugin {
                                     .as_str()
                                     .unwrap_or("shell")
                                     .to_string(),
-                                action_data: item["action_data"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_string(),
+                                action_data: item["action_data"].as_str().unwrap_or("").to_string(),
                             })
                         })
                         .collect()
@@ -366,13 +370,23 @@ fn build_interpreter_command(entry: &Path) -> Command {
         Some("py") => {
             // Prefer bundled Python under ~/.omnilauncher/python/, fall back to system.
             let exe: std::borrow::Cow<str> = {
-                let bundled_rel = if cfg!(windows) { "python.exe" } else { "bin/python3" };
+                let bundled_rel = if cfg!(windows) {
+                    "python.exe"
+                } else {
+                    "bin/python3"
+                };
                 let bundled = dirs::home_dir()
                     .map(|h| h.join(".omnilauncher").join("python").join(bundled_rel))
                     .filter(|p| p.exists());
                 match bundled {
                     Some(p) => p.to_string_lossy().into_owned().into(),
-                    None => if cfg!(windows) { "python.exe".into() } else { "python3".into() },
+                    None => {
+                        if cfg!(windows) {
+                            "python.exe".into()
+                        } else {
+                            "python3".into()
+                        }
+                    }
                 }
             };
             let mut c = Command::new(exe.as_ref());
@@ -398,10 +412,7 @@ fn build_interpreter_command(entry: &Path) -> Command {
 /// On Linux / macOS: always uses `entry`.
 fn platform_entry(manifest: &PluginManifest) -> &str {
     #[cfg(target_os = "windows")]
-    return manifest
-        .entry_windows
-        .as_deref()
-        .unwrap_or(&manifest.entry);
+    return manifest.entry_windows.as_deref().unwrap_or(&manifest.entry);
     #[cfg(not(target_os = "windows"))]
     &manifest.entry
 }
@@ -484,11 +495,13 @@ mod external_template_tests {
                 tool_schema: None,
             },
         );
-        let result = plugin.call_op(
-            serde_json::json!({"op": "query", "query": "test"}),
-            1,
-            "query",
-        ).await;
+        let result = plugin
+            .call_op(
+                serde_json::json!({"op": "query", "query": "test"}),
+                1,
+                "query",
+            )
+            .await;
         assert!(result.is_none());
     }
 }

@@ -255,6 +255,8 @@ export default function App() {
   const [historyIdx, setHistoryIdx] = useState(-1);
   const inputHistoryRef = useRef<string[]>([]);
   const pendingQueueRef = useRef<string[]>([]);
+  const cancelRequestedRef = useRef(false);
+  const aiCleanupRef = useRef<(() => void) | null>(null);
   const [queueDepth, setQueueDepth] = useState(0);
   const [queuedPrompts, setQueuedPrompts] = useState<string[]>([]);
 
@@ -479,6 +481,7 @@ export default function App() {
   const doAiQuery = useCallback(
     async (q: string) => {
       if (!q.trim() || loading) return;
+      cancelRequestedRef.current = false;
 
       const userTurn: ConversationTurn = { role: "user", content: q };
       const pendingAiTurn: ConversationTurn = {
@@ -498,9 +501,12 @@ export default function App() {
       const cleanup = () => {
         unlisteners.forEach((fn) => fn());
         unlisteners.length = 0;
+        aiCleanupRef.current = null;
       };
+      aiCleanupRef.current = cleanup;
 
       const finish = (content: string, tools_used?: string[]) => {
+        const wasCancelled = cancelRequestedRef.current || content === "Error: Cancelled by user";
         cleanup();
         setConversationHistory((prev) => {
           const next = [...prev];
@@ -508,23 +514,25 @@ export default function App() {
           if (last?.role === "assistant" && last.isStreaming) {
             next[next.length - 1] = {
               role: "assistant",
-              content,
-              tools_used,
+              content: wasCancelled ? "Cancelled." : content,
+              tools_used: wasCancelled ? [] : tools_used,
               isStreaming: false,
             };
           }
           return next;
         });
         setLoading(false);
-        // Drain next queued prompt after loading state settles
-        setTimeout(() => {
-          const next = pendingQueueRef.current.shift();
-          if (next) {
-            setQueuedPrompts((prev) => prev.slice(1));
-            setQueueDepth(pendingQueueRef.current.length);
-            doAiQuery(next);
-          }
-        }, 50);
+        if (!wasCancelled) {
+          // Drain next queued prompt after loading state settles
+          setTimeout(() => {
+            const next = pendingQueueRef.current.shift();
+            if (next) {
+              setQueuedPrompts((prev) => prev.slice(1));
+              setQueueDepth(pendingQueueRef.current.length);
+              doAiQuery(next);
+            }
+          }, 50);
+        }
         setTimeout(() => focusInput(), 50);
       };
 
@@ -557,6 +565,10 @@ export default function App() {
           }),
         ]);
         unlisteners.push(unToolCall, unDone, unError);
+        if (cancelRequestedRef.current) {
+          cleanup();
+          return;
+        }
       } catch (e) {
         finish(`Error: ${e}`);
         return;
@@ -576,6 +588,34 @@ export default function App() {
     setQueuedPrompts((prev) => [...prev, value]);
     setQueueDepth(pendingQueueRef.current.length);
   }, []);
+
+  const handleCancelAiRequest = useCallback(() => {
+    cancelRequestedRef.current = true;
+    pendingQueueRef.current = [];
+    setQueuedPrompts([]);
+    setQueueDepth(0);
+    aiCleanupRef.current?.();
+
+    setConversationHistory((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last?.role === "assistant" && last.isStreaming) {
+        next[next.length - 1] = {
+          role: "assistant",
+          content: "Cancelled.",
+          tools_used: [],
+          isStreaming: false,
+        };
+      }
+      return next;
+    });
+    setLoading(false);
+    setTimeout(() => focusInput(), 50);
+
+    invoke("ai_cancel").catch(() => {
+      // The UI is already settled; backend cancellation is best-effort here.
+    });
+  }, [focusInput]);
 
   const handleQueryChange = useCallback(
     (value: string) => {
@@ -866,6 +906,11 @@ export default function App() {
 
       if (e.key === "Escape") {
         if (showCheatSheet) { setShowCheatSheet(false); return; }
+        if (loading && isAiMode) {
+          e.preventDefault();
+          handleCancelAiRequest();
+          return;
+        }
         if (
           query === "" &&
           !showPluginManager &&
@@ -930,7 +975,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [focusInput, query, showPluginManager, showSkillManager, showCheatSheet, isAiMode, conversationHistory]);
+  }, [focusInput, query, showPluginManager, showSkillManager, showCheatSheet, isAiMode, conversationHistory, loading, handleCancelAiRequest]);
 
   // ── Layout geometry ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1360,11 +1405,7 @@ export default function App() {
             isAiMode={isAiMode}
             loading={loading}
             queueDepth={queueDepth}
-            onCancel={() => {
-              invoke("ai_cancel").catch(() => {
-                /* no-op: backend will emit ai-error which finishes the turn */
-              });
-            }}
+            onCancel={handleCancelAiRequest}
             colors={colors}
             onSettingsClick={() => setShowSettings(true)}
             resolvedTheme={resolvedTheme}

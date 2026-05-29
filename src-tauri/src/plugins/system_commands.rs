@@ -70,12 +70,21 @@ impl Plugin for SystemCommandsPlugin {
             "sleep" => sys_sleep_cmd(),
             "shutdown" => sys_shutdown_cmd(),
             "restart" => sys_restart_cmd(),
-            _ => return format!("Unknown command: '{}'. Use: lock, sleep, shutdown, restart", command),
+            _ => {
+                return format!(
+                    "Unknown command: '{}'. Use: lock, sleep, shutdown, restart",
+                    command
+                )
+            }
         };
         let output = if cfg!(target_os = "windows") {
-            std::process::Command::new("cmd").args(["/C", &shell_cmd]).output()
+            std::process::Command::new("cmd")
+                .args(["/C", &shell_cmd])
+                .output()
         } else {
-            std::process::Command::new("sh").args(["-c", &shell_cmd]).output()
+            std::process::Command::new("sh")
+                .args(["-c", &shell_cmd])
+                .output()
         };
         match output {
             Ok(o) => {
@@ -84,7 +93,10 @@ impl Plugin for SystemCommandsPlugin {
                     format!("Command '{}' executed successfully", command)
                 } else {
                     let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-                    format!("Command '{}' exited with code {}: {}", command, code, stderr)
+                    format!(
+                        "Command '{}' exited with code {}: {}",
+                        command, code, stderr
+                    )
                 }
             }
             Err(e) => format!("Error executing command: {}", e),

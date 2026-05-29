@@ -10,10 +10,7 @@ fn aggregate() -> Value {
     };
 
     let total = count_query(&conn, "SELECT COUNT(*) FROM scheduled_jobs");
-    let enabled = count_query(
-        &conn,
-        "SELECT COUNT(*) FROM scheduled_jobs WHERE enabled=1",
-    );
+    let enabled = count_query(&conn, "SELECT COUNT(*) FROM scheduled_jobs WHERE enabled=1");
     let runs = count_query(
         &conn,
         "SELECT COALESCE(SUM(run_count),0) FROM scheduled_jobs",

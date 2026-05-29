@@ -105,9 +105,7 @@ fn next_cron_time(expr: &str, from_secs: i64) -> Option<i64> {
 
     // Start at the next whole minute in local time, at least 60s from now.
     let start = Local.timestamp_opt(from_secs + 60, 0).single()?;
-    let mut t = start
-        .with_second(0)?
-        .with_nanosecond(0)?;
+    let mut t = start.with_second(0)?.with_nanosecond(0)?;
 
     for _ in 0..(366 * 24 * 60) {
         let min = t.minute();
@@ -201,9 +199,7 @@ pub fn list_jobs() -> Vec<Job> {
 pub(crate) fn command_as_string(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<String> {
     use rusqlite::types::ValueRef;
     match row.get_ref(idx)? {
-        ValueRef::Text(b) | ValueRef::Blob(b) => {
-            Ok(String::from_utf8_lossy(b).into_owned())
-        }
+        ValueRef::Text(b) | ValueRef::Blob(b) => Ok(String::from_utf8_lossy(b).into_owned()),
         ValueRef::Null => Ok(String::new()),
         other => Ok(format!("{:?}", other)),
     }
@@ -245,9 +241,9 @@ pub fn add_job(label: &str, schedule: &Schedule, command: &str) -> rusqlite::Res
 /// edited as the right language.
 fn write_script_for_job(id: i64, body: &str) -> std::io::Result<String> {
     let ext = match executor_for(body) {
-        Executor::Python     => "py",
+        Executor::Python => "py",
         Executor::PowerShell => "ps1",
-        Executor::Sh         => "sh",
+        Executor::Sh => "sh",
     };
     let dir = scripts_dir();
     let filename = format!("job_{}.{}", id, ext);
@@ -281,9 +277,9 @@ pub fn migrate_inline_commands_to_files() {
     };
     let mut to_migrate: Vec<(i64, String)> = Vec::new();
     if let Ok(mut stmt) = conn.prepare("SELECT id, command FROM scheduled_jobs") {
-        if let Ok(rows) = stmt.query_map([], |r| {
-            Ok((r.get::<_, i64>(0)?, command_as_string(r, 1)?))
-        }) {
+        if let Ok(rows) =
+            stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, command_as_string(r, 1)?)))
+        {
             for row in rows.flatten() {
                 if looks_like_script_filename(&row.1) {
                     continue;
@@ -354,7 +350,10 @@ pub fn record_run(id: i64, schedule: &Schedule) {
     let conn = match open_db() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[scheduler] record_run open_db failed for job #{}: {}", id, e);
+            eprintln!(
+                "[scheduler] record_run open_db failed for job #{}: {}",
+                id, e
+            );
             return;
         }
     };
@@ -496,9 +495,9 @@ fn python_bin() -> &'static Option<String> {
         // confirm it's actually executable. `py -3` is the Windows launcher.
         let candidates: &[(&str, &[&str])] = &[
             ("python3", &["--version"]),
-            ("python",  &["--version"]),
+            ("python", &["--version"]),
             #[cfg(windows)]
-            ("py -3",   &["--version"]),
+            ("py -3", &["--version"]),
         ];
         for (prefix, probe) in candidates {
             let mut parts = prefix.split_whitespace();
@@ -595,21 +594,23 @@ async fn spawn_command(cmd: &str, tag: i64) -> std::io::Result<std::process::Out
         let body = std::fs::read_to_string(&path).unwrap_or_default();
         let executor = detect_explicit_executor(&body)
             .or_else(|| {
-                path.extension().and_then(|e| e.to_str()).and_then(|e| match e {
-                    "py"  => Some(Executor::Python),
-                    "ps1" => Some(Executor::PowerShell),
-                    "sh"  => Some(Executor::Sh),
-                    _ => None,
-                })
+                path.extension()
+                    .and_then(|e| e.to_str())
+                    .and_then(|e| match e {
+                        "py" => Some(Executor::Python),
+                        "ps1" => Some(Executor::PowerShell),
+                        "sh" => Some(Executor::Sh),
+                        _ => None,
+                    })
             })
             .unwrap_or_else(pick_executor);
         (path, false, executor)
     } else {
         let executor = executor_for(cmd);
         let (ext, file_body) = match executor {
-            Executor::Python     => ("py",  cmd.to_string()),
+            Executor::Python => ("py", cmd.to_string()),
             Executor::PowerShell => ("ps1", cmd.to_string()),
-            Executor::Sh         => ("sh",  format!("#!/bin/sh\n{}\n", cmd)),
+            Executor::Sh => ("sh", format!("#!/bin/sh\n{}\n", cmd)),
         };
         let p = if tag > 0 {
             dir.join(format!("job_{}.{}", tag, ext))
@@ -669,11 +670,8 @@ async fn validate_command(cmd: &str, timeout_secs: u64) -> Result<String, String
 
     let exec = async move { spawn_command(&cmd_owned, 0).await };
 
-    let output = match tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        exec,
-    )
-    .await
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), exec)
+        .await
     {
         Ok(res) => res.map_err(|e| format!("failed to spawn: {}", e))?,
         Err(_) => {
@@ -744,7 +742,13 @@ fn send_notification(title: &str, body: &str) {
         }
         let encoded = STANDARD.encode(&bytes);
         let _ = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", &encoded])
+            .args([
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-EncodedCommand",
+                &encoded,
+            ])
             .env("OL_NOTIFY_TITLE", format!("OmniLauncher: {}", title))
             .env("OL_NOTIFY_BODY", body)
             .stdin(std::process::Stdio::null())
@@ -960,13 +964,19 @@ impl Plugin for SchedulerPlugin {
                 if jobs.is_empty() {
                     return "No scheduled jobs".to_string();
                 }
-                jobs.iter().map(|j| {
-                    let sched_display = Schedule::from_stored(&j.schedule)
-                        .map(|s| s.display())
-                        .unwrap_or_else(|| j.schedule.clone());
-                    let status = if j.enabled { "enabled" } else { "disabled" };
-                    format!("#{} [{}] {} — {} | cmd: {} | runs: {}", j.id, status, j.label, sched_display, j.command, j.run_count)
-                }).collect::<Vec<_>>().join("\n")
+                jobs.iter()
+                    .map(|j| {
+                        let sched_display = Schedule::from_stored(&j.schedule)
+                            .map(|s| s.display())
+                            .unwrap_or_else(|| j.schedule.clone());
+                        let status = if j.enabled { "enabled" } else { "disabled" };
+                        format!(
+                            "#{} [{}] {} — {} | cmd: {} | runs: {}",
+                            j.id, status, j.label, sched_display, j.command, j.run_count
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
             "add" => {
                 let label = match args["label"].as_str() {
@@ -975,7 +985,10 @@ impl Plugin for SchedulerPlugin {
                 };
                 let sched_str = match args["schedule"].as_str() {
                     Some(s) if !s.is_empty() => s,
-                    _ => return "Error: 'schedule' is required for add (e.g. '5m' or '*/5 * * * *')".to_string(),
+                    _ => {
+                        return "Error: 'schedule' is required for add (e.g. '5m' or '*/5 * * * *')"
+                            .to_string()
+                    }
                 };
                 let cmd = match args["command"].as_str() {
                     Some(c) if !c.is_empty() => c,
@@ -1012,7 +1025,10 @@ impl Plugin for SchedulerPlugin {
                     match add_job(label, &schedule, cmd) {
                         Ok(id) => format!(
                             "Job #{} added (validation skipped ⚠): {} — {} | cmd: {}",
-                            id, label, schedule.display(), cmd
+                            id,
+                            label,
+                            schedule.display(),
+                            cmd
                         ),
                         Err(e) => format!("Error adding job: {}", e),
                     }
@@ -1053,16 +1069,27 @@ impl Plugin for SchedulerPlugin {
                     Some(i) => i,
                     None => return "Error: 'id' is required for enable".to_string(),
                 };
-                if toggle_job(id, true) { format!("Job #{} enabled", id) } else { format!("Job #{} not found", id) }
+                if toggle_job(id, true) {
+                    format!("Job #{} enabled", id)
+                } else {
+                    format!("Job #{} not found", id)
+                }
             }
             "disable" => {
                 let id = match args["id"].as_i64() {
                     Some(i) => i,
                     None => return "Error: 'id' is required for disable".to_string(),
                 };
-                if toggle_job(id, false) { format!("Job #{} disabled", id) } else { format!("Job #{} not found", id) }
+                if toggle_job(id, false) {
+                    format!("Job #{} disabled", id)
+                } else {
+                    format!("Job #{} not found", id)
+                }
             }
-            _ => format!("Unknown action: '{}'. Use: list, add, delete, enable, disable", action),
+            _ => format!(
+                "Unknown action: '{}'. Use: list, add, delete, enable, disable",
+                action
+            ),
         }
     }
 }
@@ -1118,7 +1145,9 @@ fn hint_results() -> Vec<QueryResult> {
         QueryResult {
             id: "sched:hint:add".to_string(),
             title: "sched add \"Label\" every 5m <command>".to_string(),
-            subtitle: Some("Add a recurring job (every 5m/1h/30s · at 09:30 · or 5-field cron)".to_string()),
+            subtitle: Some(
+                "Add a recurring job (every 5m/1h/30s · at 09:30 · or 5-field cron)".to_string(),
+            ),
             icon: Some("➕".to_string()),
             score: 75,
             action_type: "none".to_string(),

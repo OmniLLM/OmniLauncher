@@ -1,8 +1,6 @@
 //! Dashboard index page — landing page listing all available dashboards.
 
-use super::common::{
-    self, count_query, now_human, open_db, render_page, today,
-};
+use super::common::{self, count_query, now_human, open_db, render_page, today};
 use serde_json::{json, Value};
 
 fn summary() -> Value {
@@ -47,10 +45,7 @@ fn summary() -> Value {
         .unwrap_or(0);
 
     let jobs_total = count_query(&conn, "SELECT COUNT(*) FROM scheduled_jobs");
-    let jobs_enabled = count_query(
-        &conn,
-        "SELECT COUNT(*) FROM scheduled_jobs WHERE enabled=1",
-    );
+    let jobs_enabled = count_query(&conn, "SELECT COUNT(*) FROM scheduled_jobs WHERE enabled=1");
 
     json!({
         "generated_at": now_human(),

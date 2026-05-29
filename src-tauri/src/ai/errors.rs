@@ -175,7 +175,10 @@ mod ai_error_tests {
 
     #[test]
     fn test_ai_error_display_api() {
-        let e = AiError::Api { status: 429, body: "rate limited".into() };
+        let e = AiError::Api {
+            status: 429,
+            body: "rate limited".into(),
+        };
         assert!(e.to_string().contains("429"));
         assert!(e.to_string().contains("rate limited"));
     }
@@ -188,13 +191,19 @@ mod ai_error_tests {
 
     #[test]
     fn test_ai_error_classify_transient() {
-        let e = AiError::Api { status: 429, body: "too many".into() };
+        let e = AiError::Api {
+            status: 429,
+            body: "too many".into(),
+        };
         assert_eq!(classify_ai_error(&e), ErrorClass::Transient);
     }
 
     #[test]
     fn test_ai_error_classify_permanent() {
-        let e = AiError::Api { status: 401, body: "unauthorized".into() };
+        let e = AiError::Api {
+            status: 401,
+            body: "unauthorized".into(),
+        };
         assert_eq!(classify_ai_error(&e), ErrorClass::Permanent);
     }
 }

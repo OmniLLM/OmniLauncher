@@ -75,7 +75,10 @@ async fn test_every_registered_plugin_has_valid_metadata_and_query_smoke() {
     for plugin in &pm.plugins {
         let name = plugin.name();
         assert!(!name.trim().is_empty(), "plugin has an empty name");
-        assert!(names.insert(name.to_string()), "duplicate plugin name: {name}");
+        assert!(
+            names.insert(name.to_string()),
+            "duplicate plugin name: {name}"
+        );
         assert!(
             !plugin.description().trim().is_empty(),
             "plugin {name} has an empty description"
@@ -614,7 +617,9 @@ async fn test_network_bare_ip_query_does_not_fall_through_to_google() {
     assert!(!r.is_empty());
     assert_eq!(r[0].id, "net:ping:8.8.8.8");
     assert_eq!(r[0].action_type, "shell");
-    assert!(r.iter().all(|result| !result.id.starts_with("google_fallback:")));
+    assert!(r
+        .iter()
+        .all(|result| !result.id.starts_with("google_fallback:")));
 }
 
 // ============================================================
@@ -1016,7 +1021,11 @@ async fn test_unit_converter_bad_units() {
             serde_json::json!({"value": 1.0, "from_unit": "foobar", "to_unit": "baz"}),
         )
         .await;
-    assert!(r.to_lowercase().contains("cannot") || r.to_lowercase().contains("convert"), "Got: {}", r);
+    assert!(
+        r.to_lowercase().contains("cannot") || r.to_lowercase().contains("convert"),
+        "Got: {}",
+        r
+    );
 }
 
 #[tokio::test]
@@ -1026,7 +1035,8 @@ async fn test_unit_converter_query() {
     assert!(!r.is_empty());
     assert!(
         r[0].title.contains("1000") || r[0].subtitle.as_deref().unwrap_or("").contains("1000"),
-        "Got: {:?}", r[0]
+        "Got: {:?}",
+        r[0]
     );
 }
 
@@ -1043,7 +1053,11 @@ async fn test_cron_explain_every_5_min() {
             serde_json::json!({"expression": "*/5 * * * *"}),
         )
         .await;
-    assert!(r.to_lowercase().contains("minute") || r.contains("5"), "Got: {}", r);
+    assert!(
+        r.to_lowercase().contains("minute") || r.contains("5"),
+        "Got: {}",
+        r
+    );
 }
 
 #[tokio::test]
@@ -1074,7 +1088,9 @@ async fn test_emoji_query_fire() {
     let pm = create_plugin_manager();
     let r = pm.query_all("emoji fire").await;
     assert!(!r.is_empty());
-    assert!(r.iter().any(|x| x.title.contains("\u{1F525}") || x.id.contains("fire")));
+    assert!(r
+        .iter()
+        .any(|x| x.title.contains("\u{1F525}") || x.id.contains("fire")));
 }
 
 #[tokio::test]
@@ -1151,7 +1167,10 @@ async fn test_snippets_lifecycle() {
         add
     );
     let get = pm
-        .execute_tool("snippets", serde_json::json!({"action": "get", "name": "_test_snip"}))
+        .execute_tool(
+            "snippets",
+            serde_json::json!({"action": "get", "name": "_test_snip"}),
+        )
         .await;
     assert!(get.contains("hello snippet"), "get: {}", get);
     let list = pm
@@ -1159,7 +1178,10 @@ async fn test_snippets_lifecycle() {
         .await;
     assert!(list.contains("_test_snip"), "list: {}", list);
     let del = pm
-        .execute_tool("snippets", serde_json::json!({"action": "delete", "name": "_test_snip"}))
+        .execute_tool(
+            "snippets",
+            serde_json::json!({"action": "delete", "name": "_test_snip"}),
+        )
         .await;
     assert!(!del.to_lowercase().contains("error"), "delete: {}", del);
 }
@@ -1168,7 +1190,10 @@ async fn test_snippets_lifecycle() {
 async fn test_snippets_get_nonexistent() {
     let pm = create_plugin_manager();
     let r = pm
-        .execute_tool("snippets", serde_json::json!({"action": "get", "name": "zzz_no_snip"}))
+        .execute_tool(
+            "snippets",
+            serde_json::json!({"action": "get", "name": "zzz_no_snip"}),
+        )
         .await;
     assert!(
         r.to_lowercase().contains("not found") || r.contains("zzz_no_snip"),
@@ -1280,7 +1305,10 @@ async fn test_scheduler_add_and_delete() {
         .and_then(|s| s.parse().ok());
     if let Some(id) = id {
         let del = pm
-            .execute_tool("scheduler", serde_json::json!({"action": "delete", "id": id}))
+            .execute_tool(
+                "scheduler",
+                serde_json::json!({"action": "delete", "id": id}),
+            )
             .await;
         assert!(!del.to_lowercase().contains("error"), "delete: {}", del);
     }
@@ -1290,7 +1318,10 @@ async fn test_scheduler_add_and_delete() {
 async fn test_scheduler_add_missing_required_fields() {
     let pm = create_plugin_manager();
     let r = pm
-        .execute_tool("scheduler", serde_json::json!({"action": "add", "label": "x"}))
+        .execute_tool(
+            "scheduler",
+            serde_json::json!({"action": "add", "label": "x"}),
+        )
         .await;
     assert!(
         r.to_lowercase().contains("error") || r.to_lowercase().contains("required"),
@@ -1310,7 +1341,10 @@ async fn test_file_search_finds_existing() {
     let _ = std::fs::create_dir_all(&d);
     std::fs::write(d.join("unique_omnitest.txt"), "x").unwrap();
     let r = pm
-        .execute_tool("file_search", serde_json::json!({"query": "unique_omnitest"}))
+        .execute_tool(
+            "file_search",
+            serde_json::json!({"query": "unique_omnitest"}),
+        )
         .await;
     assert!(r.contains("unique_omnitest"), "Got: {}", r);
     let _ = std::fs::remove_dir_all(&d);
@@ -1413,7 +1447,10 @@ async fn test_url_opener_empty_url() {
 async fn test_url_opener_tool_returns_something() {
     let pm = create_plugin_manager();
     let r = pm
-        .execute_tool("open_url", serde_json::json!({"url": "https://example.com"}))
+        .execute_tool(
+            "open_url",
+            serde_json::json!({"url": "https://example.com"}),
+        )
         .await;
     assert!(!r.is_empty(), "Got: {}", r);
 }
@@ -1426,7 +1463,10 @@ async fn test_url_opener_tool_returns_something() {
 async fn test_script_runner_missing_script() {
     let pm = create_plugin_manager();
     let r = pm
-        .execute_tool("run_user_script", serde_json::json!({"script_name": "zzz_no_script"}))
+        .execute_tool(
+            "run_user_script",
+            serde_json::json!({"script_name": "zzz_no_script"}),
+        )
         .await;
     assert!(
         r.to_lowercase().contains("not found")
@@ -1445,7 +1485,10 @@ async fn test_script_runner_missing_script() {
 async fn test_translate_query_prefix() {
     let pm = create_plugin_manager();
     let r = pm.query_all("tl hello").await;
-    assert!(!r.is_empty(), "Expected translate suggestions for 'tl hello'");
+    assert!(
+        !r.is_empty(),
+        "Expected translate suggestions for 'tl hello'"
+    );
 }
 
 // ============================================================
@@ -1550,7 +1593,10 @@ async fn test_calc_sqrt() {
 async fn test_web_search_bing() {
     let pm = create_plugin_manager();
     let r = pm
-        .execute_tool("web_search", serde_json::json!({"query": "rust lang", "engine": "bing"}))
+        .execute_tool(
+            "web_search",
+            serde_json::json!({"query": "rust lang", "engine": "bing"}),
+        )
         .await;
     assert!(r.contains("bing.com"), "Got: {}", r);
 }

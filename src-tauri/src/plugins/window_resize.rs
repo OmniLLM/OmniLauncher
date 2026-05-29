@@ -300,7 +300,9 @@ impl Plugin for WindowResizePlugin {
             Some(l) => {
                 let cmd = build_resize_command(l.rect);
                 let output = if cfg!(target_os = "windows") {
-                    std::process::Command::new("cmd").args(["/C", &cmd]).output()
+                    std::process::Command::new("cmd")
+                        .args(["/C", &cmd])
+                        .output()
                 } else {
                     std::process::Command::new("sh").args(["-c", &cmd]).output()
                 };
@@ -308,14 +310,23 @@ impl Plugin for WindowResizePlugin {
                     Ok(o) if o.status.success() => format!("Window resized to '{}'", l.label),
                     Ok(o) => {
                         let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-                        format!("Resize '{}' completed (code {}): {}", l.label, o.status.code().unwrap_or(-1), stderr)
+                        format!(
+                            "Resize '{}' completed (code {}): {}",
+                            l.label,
+                            o.status.code().unwrap_or(-1),
+                            stderr
+                        )
                     }
                     Err(e) => format!("Error executing resize: {}", e),
                 }
             }
             None => {
                 let available: Vec<_> = LAYOUTS.iter().map(|l| l.keyword).collect();
-                format!("Unknown layout: '{}'. Available: {}", layout, available.join(", "))
+                format!(
+                    "Unknown layout: '{}'. Available: {}",
+                    layout,
+                    available.join(", ")
+                )
             }
         }
     }

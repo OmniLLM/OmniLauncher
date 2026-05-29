@@ -97,7 +97,10 @@ impl PluginManager {
         let idx = self.plugins.len();
         log::debug!(
             "PluginManager.register: name='{}' keyword={:?} tool_name={:?} idx={}",
-            name, keyword, tool_name, idx
+            name,
+            keyword,
+            tool_name,
+            idx
         );
         self.plugins.push(p);
         self.name_index.insert(name, idx);
@@ -114,17 +117,15 @@ impl PluginManager {
         let keyword = p.keyword().map(str::to_string);
 
         if self.has_name(&name) {
-            log::info!(
-                "Plugin '{}' overrides existing plugin with same name",
-                name
-            );
+            log::info!("Plugin '{}' overrides existing plugin with same name", name);
             self.unregister_by_name(&name);
         }
         if let Some(ref kw) = keyword {
             if self.has_keyword(kw) {
                 log::info!(
                     "Plugin '{}' overrides existing plugin with keyword '{}'",
-                    name, kw
+                    name,
+                    kw
                 );
                 self.unregister_by_keyword(kw);
             }
@@ -156,9 +157,7 @@ impl PluginManager {
 
     /// Returns true if any registered plugin has this exact keyword.
     pub fn has_keyword(&self, kw: &str) -> bool {
-        self.plugins
-            .iter()
-            .any(|p| p.keyword() == Some(kw))
+        self.plugins.iter().any(|p| p.keyword() == Some(kw))
     }
 
     /// Remove all plugins whose name matches. Returns the count removed.
@@ -172,8 +171,7 @@ impl PluginManager {
     /// Remove all plugins whose keyword matches. Returns the count removed.
     pub fn unregister_by_keyword(&mut self, kw: &str) -> usize {
         let before = self.plugins.len();
-        self.plugins
-            .retain(|p| p.keyword() != Some(kw));
+        self.plugins.retain(|p| p.keyword() != Some(kw));
         self.rebuild_index();
         before - self.plugins.len()
     }
@@ -225,12 +223,16 @@ impl PluginManager {
         schemas
     }
 
+    pub fn tool_display_name(&self, name: &str) -> String {
+        self.tool_index
+            .get(name)
+            .or_else(|| self.name_index.get(name))
+            .map(|idx| self.plugins[*idx].name().to_string())
+            .unwrap_or_else(|| name.to_string())
+    }
+
     pub async fn execute_tool(&self, name: &str, args: serde_json::Value) -> String {
-        log::debug!(
-            "PluginManager.execute_tool: name='{}' args={}",
-            name,
-            args
-        );
+        log::debug!("PluginManager.execute_tool: name='{}' args={}", name, args);
         // AI calls tools by their schema function name; fall back to plugin name
         // for backward compatibility with callers that pass plugin.name() directly.
         let idx = self
@@ -308,6 +310,7 @@ pub mod external;
 pub mod file_read;
 pub mod file_search;
 pub mod file_write;
+pub mod flow;
 pub mod git;
 pub mod github;
 pub mod glob;
@@ -318,9 +321,8 @@ pub mod ls;
 pub mod network;
 pub mod plugin_manager_cmd;
 pub mod pomodoro;
-pub mod raycast;
-pub mod flow;
 pub mod process_manager;
+pub mod raycast;
 pub mod scheduler;
 pub mod screenshot;
 pub mod script_runner;
@@ -344,14 +346,25 @@ pub mod windows_settings;
 mod plugin_manager_tests {
     use super::*;
 
-    struct FakePlugin { name: &'static str, kw: Option<&'static str> }
+    struct FakePlugin {
+        name: &'static str,
+        kw: Option<&'static str>,
+    }
 
     #[async_trait::async_trait]
     impl Plugin for FakePlugin {
-        fn name(&self) -> &str { self.name }
-        fn description(&self) -> &str { "fake" }
-        fn keyword(&self) -> Option<&str> { self.kw }
-        async fn query(&self, _q: &Query) -> Vec<QueryResult> { vec![] }
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "fake"
+        }
+        fn keyword(&self) -> Option<&str> {
+            self.kw
+        }
+        async fn query(&self, _q: &Query) -> Vec<QueryResult> {
+            vec![]
+        }
     }
 
     /// Plugin whose display name and tool-schema function name intentionally diverge,
@@ -364,10 +377,18 @@ mod plugin_manager_tests {
 
     #[async_trait::async_trait]
     impl Plugin for ToolPlugin {
-        fn name(&self) -> &str { self.plugin_name }
-        fn description(&self) -> &str { "tool fake" }
-        fn keyword(&self) -> Option<&str> { None }
-        async fn query(&self, _q: &Query) -> Vec<QueryResult> { vec![] }
+        fn name(&self) -> &str {
+            self.plugin_name
+        }
+        fn description(&self) -> &str {
+            "tool fake"
+        }
+        fn keyword(&self) -> Option<&str> {
+            None
+        }
+        async fn query(&self, _q: &Query) -> Vec<QueryResult> {
+            vec![]
+        }
         fn tool_schema(&self) -> Option<serde_json::Value> {
             Some(serde_json::json!({
                 "type": "function",
@@ -386,7 +407,10 @@ mod plugin_manager_tests {
     #[tokio::test]
     async fn test_execute_tool_finds_by_name() {
         let mut pm = PluginManager::new();
-        pm.register(Box::new(FakePlugin { name: "my_tool", kw: None }));
+        pm.register(Box::new(FakePlugin {
+            name: "my_tool",
+            kw: None,
+        }));
         let result = pm.execute_tool("my_tool", serde_json::json!({})).await;
         assert_eq!(result, "");
     }
@@ -401,8 +425,14 @@ mod plugin_manager_tests {
     #[test]
     fn test_register_override_replaces_by_name() {
         let mut pm = PluginManager::new();
-        pm.register(Box::new(FakePlugin { name: "tool_a", kw: None }));
-        pm.register_override(Box::new(FakePlugin { name: "tool_a", kw: None }));
+        pm.register(Box::new(FakePlugin {
+            name: "tool_a",
+            kw: None,
+        }));
+        pm.register_override(Box::new(FakePlugin {
+            name: "tool_a",
+            kw: None,
+        }));
         // Should still be exactly 1 plugin
         assert_eq!(pm.plugins.len(), 1);
     }
@@ -417,10 +447,21 @@ mod plugin_manager_tests {
             plugin_name: "PowerShell Runner",
             tool_name: "powershell",
         }));
-        let result = pm
-            .execute_tool("powershell", serde_json::json!({}))
-            .await;
+        let result = pm.execute_tool("powershell", serde_json::json!({})).await;
         assert_eq!(result, "ran:powershell");
+    }
+
+    #[test]
+    fn test_tool_display_name_resolves_schema_function_name() {
+        let mut pm = PluginManager::new();
+        pm.register(Box::new(ToolPlugin {
+            plugin_name: "Browser History",
+            tool_name: "F6B8C1BC8441496798D2CE2BADB0E95E",
+        }));
+        assert_eq!(
+            pm.tool_display_name("F6B8C1BC8441496798D2CE2BADB0E95E"),
+            "Browser History"
+        );
     }
 
     #[tokio::test]

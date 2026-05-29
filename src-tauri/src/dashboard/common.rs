@@ -18,9 +18,8 @@ pub fn count_query(conn: &Connection, sql: &str) -> i64 {
 pub fn collect_kv(conn: &Connection, sql: &str) -> Vec<(String, i64)> {
     let mut out = Vec::new();
     if let Ok(mut stmt) = conn.prepare(sql) {
-        if let Ok(rows) = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-        }) {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        {
             for row in rows.flatten() {
                 out.push(row);
             }

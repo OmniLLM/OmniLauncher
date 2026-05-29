@@ -4,13 +4,17 @@
 //! to `~/.omnilauncher/python/`. No external tools (uv, pip, brew, etc.)
 //! are required — only an internet connection.
 
-use std::path::{Path, PathBuf};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// Return the path of the bundled Python executable if it exists.
 pub fn bundled_python_exe() -> Option<PathBuf> {
     let p = bundled_python_dir().join(python_bin_rel());
-    if p.exists() { Some(p) } else { None }
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
 }
 
 /// `~/.omnilauncher/python`
@@ -23,7 +27,11 @@ fn bundled_python_dir() -> PathBuf {
 
 /// Relative path of the python3 binary inside the install dir.
 fn python_bin_rel() -> &'static str {
-    if cfg!(windows) { "python.exe" } else { "bin/python3" }
+    if cfg!(windows) {
+        "python.exe"
+    } else {
+        "bin/python3"
+    }
 }
 
 /// Download & extract python-build-standalone into `~/.omnilauncher/python/`.
@@ -38,8 +46,7 @@ pub async fn install_bundled_python() -> Result<PathBuf, String> {
     let url = resolve_download_url().await?;
     let archive = download_to_temp(&url).await?;
 
-    std::fs::create_dir_all(&dest)
-        .map_err(|e| format!("mkdir ~/.omnilauncher/python: {e}"))?;
+    std::fs::create_dir_all(&dest).map_err(|e| format!("mkdir ~/.omnilauncher/python: {e}"))?;
 
     if url.ends_with(".zip") {
         extract_zip(&archive, &dest)?;
@@ -66,7 +73,10 @@ pub async fn install_bundled_python() -> Result<PathBuf, String> {
     if exe.exists() {
         Ok(exe)
     } else {
-        Err(format!("extraction finished but {} not found", exe.display()))
+        Err(format!(
+            "extraction finished but {} not found",
+            exe.display()
+        ))
     }
 }
 
@@ -125,7 +135,11 @@ async fn download_to_temp(url: &str) -> Result<PathBuf, String> {
         return Err(format!("download HTTP {}: {url}", resp.status()));
     }
 
-    let ext = if url.ends_with(".zip") { "zip" } else { "tar.gz" };
+    let ext = if url.ends_with(".zip") {
+        "zip"
+    } else {
+        "tar.gz"
+    };
     let tmp = std::env::temp_dir().join(format!("omnilauncher_python.{ext}"));
     let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
     let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
