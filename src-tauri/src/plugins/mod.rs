@@ -183,11 +183,32 @@ impl PluginManager {
         };
         // Run all eligible plugin queries concurrently so a slow plugin (e.g.
         // an external script doing a network call) does not block the others.
+        //
+        // Each plugin gets a hard 1200ms budget — anything slower is dropped
+        // from THIS query (it can still appear on a later keystroke when its
+        // cache is warm). Without this cap one slow disk read or HTTP call
+        // would stall the entire result list and feel "frozen" in launcher
+        // mode.
+        const PLUGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200);
+        let q_ref = &q;
         let futures = self
             .plugins
             .iter()
             .filter(|p| p.keyword().is_none_or(|kw| keyword_matches(raw, kw)))
-            .map(|p| p.query(&q));
+            .map(|p| async move {
+                match tokio::time::timeout(PLUGIN_TIMEOUT, p.query(q_ref)).await {
+                    Ok(v) => v,
+                    Err(_) => {
+                        log::warn!(
+                            "plugin '{}' exceeded {}ms budget for query {:?} — dropped",
+                            p.name(),
+                            PLUGIN_TIMEOUT.as_millis(),
+                            raw
+                        );
+                        Vec::new()
+                    }
+                }
+            });
         let mut results: Vec<QueryResult> = futures_util::future::join_all(futures)
             .await
             .into_iter()

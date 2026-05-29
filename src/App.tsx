@@ -231,6 +231,10 @@ const HELP_RESULTS: QueryResult[] = SLASH_COMMANDS.map((command) => ({
 export default function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<QueryResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  // Monotonic request id — stale plugin responses (slower than a newer
+  // keystroke's request) get dropped instead of clobbering fresh results.
+  const searchSeqRef = useRef(0);
   const [loading, setLoading] = useState(false);
   const [aiModeEnabled, setAiModeEnabled] = useState(false);
   const [showPluginManager, setShowPluginManager] = useState(false);
@@ -374,36 +378,48 @@ export default function App() {
   const doSearch = useCallback(async (q: string) => {
     if (isHelpQuery(q)) {
       setResults(HELP_RESULTS);
+      setSearching(false);
       return;
     }
 
     if (isConversationResetCommand(q)) {
       setResults([]);
+      setSearching(false);
       return;
     }
 
     if (!q.trim() || isAiPrefix(q) || isHelpHintQuery(q)) {
       setResults([]);
+      setSearching(false);
       return;
     }
 
     // Plugin Manager shortcut
     if (isPluginManagerQuery(q)) {
       setResults([pluginManagerResult()]);
+      setSearching(false);
       return;
     }
 
     // Slash prefix without a space → show autocomplete suggestions, no backend call
     if (isSlashPrefix(q)) {
       setResults(slashSuggestions(q));
+      setSearching(false);
       return;
     }
 
+    // Tag this request — only the latest one is allowed to update results.
+    const mySeq = ++searchSeqRef.current;
+    setSearching(true);
     try {
       const res = await invoke<QueryResult[]>("search", { query: q });
+      if (mySeq !== searchSeqRef.current) return; // stale response — drop
       setResults(res);
     } catch {
+      if (mySeq !== searchSeqRef.current) return;
       setResults([]);
+    } finally {
+      if (mySeq === searchSeqRef.current) setSearching(false);
     }
   }, []);
 
@@ -657,6 +673,8 @@ export default function App() {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       if (isSlashPrefix(value)) {
         // Show slash suggestions instantly in both launcher and AI mode
+        searchSeqRef.current++; // invalidate any in-flight backend search
+        setSearching(false);
         setResults(slashSuggestions(value));
       } else if (!aiModeEnabled) {
         // Don't clear results immediately — let the debounced search replace
@@ -667,6 +685,8 @@ export default function App() {
         }, 100);
       } else {
         // In AI mode, clear slash suggestions when user types past the prefix
+        searchSeqRef.current++;
+        setSearching(false);
         setResults([]);
       }
     },
@@ -1387,6 +1407,66 @@ export default function App() {
             )}
             {results.length > 0 && (
               <ResultList results={results} query={query} onExecute={handleExecute} colors={colors} />
+            )}
+            {/* Loading skeleton — only when the user has typed something and
+                we're waiting on the backend (no stale results to show). */}
+            {results.length === 0 && searching && query.trim() !== "" && (
+              <div
+                aria-live="polite"
+                style={{
+                  padding: "12px 16px",
+                  fontSize: 13,
+                  color: colors.sub,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    background: colors.accent,
+                    animation: "omni-dot-pulse 1.2s ease-in-out infinite",
+                  }}
+                />
+                Searching…
+              </div>
+            )}
+            {/* Empty state — query typed, search finished, nothing matched. */}
+            {results.length === 0 && !searching && query.trim() !== "" &&
+              !isHelpQuery(query) && !isHelpHintQuery(query) &&
+              !isAiPrefix(query) && !isConversationResetCommand(query) && (
+              <div
+                style={{
+                  padding: "16px",
+                  textAlign: "center",
+                  fontSize: 13,
+                  color: colors.sub,
+                  lineHeight: 1.55,
+                }}
+              >
+                <div style={{ fontSize: 22, marginBottom: 4 }}>🔍</div>
+                No matches for <strong style={{ color: colors.text }}>{query}</strong>
+                <div style={{ marginTop: 6, fontSize: 12 }}>
+                  Press <kbd style={{
+                    fontFamily: "monospace",
+                    background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    padding: "1px 6px",
+                    color: "var(--accent)",
+                  }}>Ctrl+K</kbd> to ask AI, or <kbd style={{
+                    fontFamily: "monospace",
+                    background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    padding: "1px 6px",
+                    color: "var(--accent)",
+                  }}>?</kbd> for help
+                </div>
+              </div>
             )}
           </>
         )}
