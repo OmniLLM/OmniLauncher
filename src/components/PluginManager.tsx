@@ -383,9 +383,9 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
 
   const statusColor =
     status.type === "success"
-      ? "#a6e3a1"
+      ? "var(--success)"
       : status.type === "error"
-        ? "#f38ba8"
+        ? "var(--danger)"
         : colors.sub;
 
   const selectStyle: React.CSSProperties = {
@@ -496,7 +496,7 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
             border: "none",
             borderRadius: "8px",
             padding: "7px 14px",
-            color: "#FFFFFF",
+            color: "var(--user-bubble-text)",
             fontSize: "13px",
             fontWeight: 600,
             cursor: source.trim() ? "pointer" : "default",
@@ -584,14 +584,8 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                   }}
                 >
                   <span
-                    style={{
-                      fontSize: "11px",
-                      color: dep.installed ? "#a6e3a1" : "#f9e2af",
-                      border: `1px solid ${dep.installed ? "#a6e3a155" : "#f9e2af66"}`,
-                      borderRadius: "999px",
-                      padding: "1px 7px",
-                      flexShrink: 0,
-                    }}
+                    className={`omni-pill ${dep.installed ? "omni-pill--success" : "omni-pill--warning"}`}
+                    style={{ flexShrink: 0 }}
                   >
                     {dep.installed ? "READY" : "MISSING"}
                   </span>
@@ -622,7 +616,7 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                         border: `1px solid ${dep.installable ? colors.accent : colors.surface2}`,
                         borderRadius: "7px",
                         padding: "5px 9px",
-                        color: dep.installable ? "#FFFFFF" : colors.sub,
+                        color: dep.installable ? "var(--user-bubble-text)" : colors.sub,
                         fontSize: "11px",
                         fontWeight: 700,
                         cursor: status.type === "loading" || busy ? "default" : "pointer",
@@ -841,8 +835,8 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                       transition: "color 150ms, border-color 150ms",
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.color = "#f38ba8";
-                      e.currentTarget.style.borderColor = "#f38ba8";
+                      e.currentTarget.style.color = "var(--danger)";
+                      e.currentTarget.style.borderColor = "var(--danger)";
                     }}
                     onMouseLeave={(e) => {
                       e.currentTarget.style.color = colors.sub;

@@ -100,9 +100,9 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
 
   const statusColor =
     status.type === "success"
-      ? "#a6e3a1"
+      ? "var(--success)"
       : status.type === "error"
-        ? "#f38ba8"
+        ? "var(--danger)"
         : colors.sub;
 
   return (
@@ -201,7 +201,7 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
             border: "none",
             borderRadius: "8px",
             padding: "7px 16px",
-            color: "#FFFFFF",
+            color: "var(--user-bubble-text)",
             fontSize: "13px",
             fontWeight: 600,
             cursor: source.trim() ? "pointer" : "default",
@@ -256,7 +256,7 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
                   background: colors.surface,
                   borderRadius: "10px",
                   border: `1px solid ${colors.surface2}`,
-                  boxShadow: `0 1px 4px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04)`,
+                  boxShadow: `0 1px 4px color-mix(in srgb, var(--accent) 8%, transparent), 0 1px 0 var(--border) inset`,
                   overflow: "hidden",
                   transition: "box-shadow 150ms",
                 }}
@@ -438,8 +438,8 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
                       transition: "color 150ms, border-color 150ms",
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.color = "#f38ba8";
-                      e.currentTarget.style.borderColor = "#f38ba888";
+                      e.currentTarget.style.color = "var(--danger)";
+                      e.currentTarget.style.borderColor = "var(--danger)";
                     }}
                     onMouseLeave={(e) => {
                       e.currentTarget.style.color = colors.sub;
