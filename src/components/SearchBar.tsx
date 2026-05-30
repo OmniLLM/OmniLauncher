@@ -104,6 +104,111 @@ const PRIMARY_HINT_SEARCH = HINT_SEARCH.filter(({ key }) =>
   PRIMARY_HINT_SEARCH_KEYS.has(key),
 );
 
+// ─── Layout sizing tokens ─────────────────────────────────────────────────────
+//
+// SearchBar renders in three visual modes:
+//   • ai       — AI thread is open, input lives in the bottom dock
+//   • stacked  — launcher splash on a blank screen (centered, large)
+//   • inline   — launcher with results below it (compact bar at top)
+//
+// All "magic" pixel values are collected here so designers/tweakers only
+// touch one table instead of hunting through nested ternaries in JSX.
+type LayoutMode = "ai" | "stacked" | "inline";
+
+interface ModeSizes {
+  wrapPadding: string;
+  wrapHeight: string | undefined;
+  wrapMinHeight: string | undefined;
+  wrapWidth: string;
+  wrapMargin: string | undefined;
+  wrapRadius: string;
+  wrapShadow: string;
+  inputFontSize: string;
+  inputFontWeight: number;
+  iconFontSize: string;
+  iconOpacity: number;
+  taglinePadding: string;
+  taglineFontSize: string;
+  taglineLetterSpacing: string;
+  taglineGap: string;
+  taglineOpacity: number;
+  hintRowPadding: string;
+  hintRowWidth: string;
+  hintRowMargin: string | undefined;
+}
+
+const AI_SHADOW =
+  "0 8px 28px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255,255,255,0.04)";
+const STACKED_SHADOW =
+  "0 18px 44px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255,255,255,0.03)";
+const COMPACT_WIDTH = "min(94%, 820px)";
+
+const SIZES: Record<LayoutMode, ModeSizes> = {
+  ai: {
+    wrapPadding: "8px 12px 8px 16px",
+    wrapHeight: "auto",
+    wrapMinHeight: "52px",
+    wrapWidth: "100%",
+    wrapMargin: undefined,
+    wrapRadius: "18px",
+    wrapShadow: AI_SHADOW,
+    inputFontSize: "15px",
+    inputFontWeight: 400,
+    iconFontSize: "17px",
+    iconOpacity: 0.9,
+    taglinePadding: "12px 16px 0",
+    taglineFontSize: "13px",
+    taglineLetterSpacing: "0.02em",
+    taglineGap: "6px",
+    taglineOpacity: 1,
+    hintRowPadding: "4px 16px 8px",
+    hintRowWidth: "100%",
+    hintRowMargin: undefined,
+  },
+  stacked: {
+    wrapPadding: "0 18px",
+    wrapHeight: "54px",
+    wrapMinHeight: undefined,
+    wrapWidth: COMPACT_WIDTH,
+    wrapMargin: "0 auto",
+    wrapRadius: "16px",
+    wrapShadow: STACKED_SHADOW,
+    inputFontSize: "15.5px",
+    inputFontWeight: 500,
+    iconFontSize: "18px",
+    iconOpacity: 0.82,
+    taglinePadding: "0 2px 12px",
+    taglineFontSize: "16px",
+    taglineLetterSpacing: "0.04em",
+    taglineGap: "8px",
+    taglineOpacity: 0.9,
+    hintRowPadding: "8px 2px 0",
+    hintRowWidth: COMPACT_WIDTH,
+    hintRowMargin: "0 auto",
+  },
+  inline: {
+    wrapPadding: "0 14px",
+    wrapHeight: "56px",
+    wrapMinHeight: undefined,
+    wrapWidth: "100%",
+    wrapMargin: undefined,
+    wrapRadius: "14px",
+    wrapShadow: "none",
+    inputFontSize: "16px",
+    inputFontWeight: 400,
+    iconFontSize: "17px",
+    iconOpacity: 0.5,
+    taglinePadding: "12px 16px 0",
+    taglineFontSize: "13px",
+    taglineLetterSpacing: "0.02em",
+    taglineGap: "6px",
+    taglineOpacity: 1,
+    hintRowPadding: "4px 16px 8px",
+    hintRowWidth: "100%",
+    hintRowMargin: undefined,
+  },
+};
+
 export default function SearchBar({
   value,
   onChange,
@@ -158,6 +263,8 @@ export default function SearchBar({
   }, [showAllHints, showHintBar, onHintBarExpandedChange]);
 
   const isAI = isAiPrefix(value);
+  const mode: LayoutMode = isAiMode ? "ai" : compact ? "stacked" : "inline";
+  const s = SIZES[mode];
   const placeholder = isAiMode
     ? "Ask AI anything…  (Shift+Enter for newline)"
     : "Type to launch, search, calculate…";
@@ -197,7 +304,7 @@ export default function SearchBar({
       {!isAiMode && (
         <div
           style={{
-            padding: compact ? "0 2px 12px" : "12px 16px 0",
+            padding: s.taglinePadding,
             animation: "omni-tagline-fadein 240ms ease both",
             textAlign: compact ? "center" : "left",
           }}
@@ -205,14 +312,14 @@ export default function SearchBar({
           <div
             style={{
               color: colors.text,
-              fontSize: compact ? "16px" : "13px",
+              fontSize: s.taglineFontSize,
               fontWeight: 800,
-              letterSpacing: compact ? "0.04em" : "0.02em",
+              letterSpacing: s.taglineLetterSpacing,
               lineHeight: 1.2,
-              opacity: compact ? 0.9 : 1,
+              opacity: s.taglineOpacity,
               display: "inline-flex",
               alignItems: "center",
-              gap: compact ? "8px" : "6px",
+              gap: s.taglineGap,
             }}
           >
             {compact && (
@@ -220,7 +327,7 @@ export default function SearchBar({
                 aria-hidden
                 style={{
                   color: colors.accent,
-                  fontSize: compact ? "15px" : "12px",
+                  fontSize: "15px",
                   lineHeight: 1,
                 }}
               >
@@ -238,23 +345,19 @@ export default function SearchBar({
         style={{
           display: "flex",
           alignItems: isAiMode ? "flex-end" : "center",
-          padding: isAiMode ? "8px 12px 8px 16px" : compact ? "0 18px" : "0 14px",
-          height: isAiMode ? "auto" : compact ? "54px" : "56px",
-          minHeight: isAiMode ? "52px" : undefined,
-          width: compact ? "min(94%, 820px)" : "100%",
-          margin: compact ? "0 auto" : undefined,
+          padding: s.wrapPadding,
+          height: s.wrapHeight,
+          minHeight: s.wrapMinHeight,
+          width: s.wrapWidth,
+          margin: s.wrapMargin,
           gap: "10px",
           boxSizing: "border-box",
           border: `1px solid ${colors.surface2}`,
           background: isAiMode ? `${colors.surface}80` : colors.bg,
           backdropFilter: isAiMode ? "blur(10px)" : undefined,
           WebkitBackdropFilter: isAiMode ? "blur(10px)" : undefined,
-          borderRadius: isAiMode ? "18px" : compact ? "16px" : "14px",
-          boxShadow: isAiMode
-            ? "0 8px 28px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255,255,255,0.04)"
-            : compact
-              ? "0 18px 44px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255,255,255,0.03)"
-              : "none",
+          borderRadius: s.wrapRadius,
+          boxShadow: s.wrapShadow,
         }}
       >
         {/* Leading icon / spinner (clickable when loading to cancel the request) */}
@@ -291,8 +394,8 @@ export default function SearchBar({
           <span
             aria-hidden
             style={{
-              fontSize: compact ? "18px" : "17px",
-              opacity: isAiMode ? 0.9 : compact ? 0.82 : 0.5,
+              fontSize: s.iconFontSize,
+              opacity: s.iconOpacity,
               color: isAiMode ? colors.accent : compact ? colors.text : undefined,
               flexShrink: 0,
               lineHeight: 1,
@@ -420,11 +523,11 @@ export default function SearchBar({
               background: "transparent",
               border: "none",
               outline: "none",
-              fontSize: compact ? "15.5px" : "16px",
+              fontSize: s.inputFontSize,
               color: colors.text,
               caretColor: colors.accent,
               fontFamily: "inherit",
-              fontWeight: compact ? 500 : 400,
+              fontWeight: s.inputFontWeight,
               letterSpacing: 0,
             }}
           />
@@ -486,9 +589,9 @@ export default function SearchBar({
       {showHintBar && (
         <div
           style={{
-            padding: compact ? "8px 2px 0" : "4px 16px 8px",
-            width: compact ? "min(94%, 820px)" : "100%",
-            margin: compact ? "0 auto" : undefined,
+            padding: s.hintRowPadding,
+            width: s.hintRowWidth,
+            margin: s.hintRowMargin,
             animation: "omni-hint-fadein 240ms ease both",
           }}
         >
