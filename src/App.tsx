@@ -1378,7 +1378,6 @@ export default function App() {
         {showPluginManager && !isAiMode && (
           <Suspense fallback={null}>
             <PluginManager
-              colors={colors}
               onClose={() => setShowPluginManager(false)}
             />
           </Suspense>

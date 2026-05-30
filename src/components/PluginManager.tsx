@@ -108,21 +108,12 @@ interface RuntimeProgressEvent {
 }
 
 interface PluginManagerProps {
-  colors: {
-    bg: string;
-    surface: string;
-    surface2: string;
-    text: string;
-    accent: string;
-    accentDim: string;
-    sub: string;
-  };
   onClose: () => void;
 }
 
 const DEFAULT_DIR = "~/.omnilauncher/plugins (default)";
 
-export default function PluginManager({ colors, onClose }: PluginManagerProps) {
+export default function PluginManager({ onClose }: PluginManagerProps) {
   const [repos, setRepos] = useState<PluginRepo[]>([]);
   const [expandedCollections, setExpandedCollections] = useState<Record<string, boolean>>({});
   const [source, setSource] = useState("");
@@ -199,7 +190,6 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
   useEffect(() => {
     refresh();
     refreshRuntimeDeps();
-    // Load extra plugin_dirs from settings
     invoke<AppSettings>("get_settings")
       .then((s) => setExtraDirs(s.plugin_dirs ?? []))
       .catch(() => {});
@@ -381,60 +371,19 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
     }));
   };
 
-  const statusColor =
+  const installDisabled = status.type === "loading" || !source.trim();
+  const statusClass =
     status.type === "success"
-      ? "var(--success)"
+      ? "plugin-panel__status plugin-panel__status--success"
       : status.type === "error"
-        ? "var(--danger)"
-        : colors.sub;
-
-  const selectStyle: React.CSSProperties = {
-    background: colors.surface,
-    border: `1px solid ${colors.surface2}`,
-    borderRadius: "8px",
-    padding: "7px 10px",
-    color: extraDirs.length === 0 ? colors.sub : colors.text,
-    fontSize: "12px",
-    outline: "none",
-    cursor: "pointer",
-    flexShrink: 0,
-    maxWidth: "180px",
-  };
+        ? "plugin-panel__status plugin-panel__status--error"
+        : "plugin-panel__status";
 
   return (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        flexDirection: "column",
-        padding: "14px 16px 10px",
-        gap: "12px",
-        overflowY: "auto",
-        scrollbarWidth: "thin",
-        scrollbarColor: `${colors.surface2} transparent`,
-      }}
-    >
+    <div className="plugin-panel">
       {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <span
-          style={{
-            fontSize: "13px",
-            fontWeight: 700,
-            color: colors.accent,
-            letterSpacing: "0.04em",
-            display: "flex",
-            alignItems: "center",
-            gap: "6px",
-          }}
-        >
-          🔌 Plugin Manager
-        </span>
+      <div className="plugin-panel__header">
+        <span className="plugin-panel__title">🔌 Plugin Manager</span>
         <button
           className="omni-titlebar__close"
           onClick={onClose}
@@ -446,7 +395,7 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
       </div>
 
       {/* Install row */}
-      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+      <div className="plugin-panel__install-row">
         <input
           type="text"
           className="omni-input"
@@ -454,14 +403,15 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
           onChange={(e) => setSource(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleInstall()}
           placeholder="Git URL or local path…"
-          style={{ flex: 1, minWidth: 180, width: "auto" }}
         />
-        {/* Install-to selector — only shown when there are extra dirs */}
         {extraDirs.length > 0 && (
           <select
             value={targetDir}
             onChange={(e) => setTargetDir(e.target.value)}
-            style={selectStyle}
+            className={
+              "plugin-panel__target-select" +
+              (targetDir === "" ? " plugin-panel__target-select--placeholder" : "")
+            }
             title="Install into…"
           >
             <option value="">{DEFAULT_DIR}</option>
@@ -476,56 +426,21 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
           type="button"
           className="omni-btn omni-btn--primary"
           onClick={handleInstall}
-          disabled={status.type === "loading" || !source.trim()}
-          aria-disabled={status.type === "loading" || !source.trim()}
+          disabled={installDisabled}
+          aria-disabled={installDisabled}
         >
           {status.type === "loading" ? "Installing…" : "Install"}
         </button>
       </div>
 
       {/* Status message */}
-      {status.type !== "idle" && (
-        <div
-          style={{
-            fontSize: "12px",
-            color: statusColor,
-            minHeight: "18px",
-          }}
-        >
-          {status.message}
-        </div>
-      )}
+      {status.type !== "idle" && <div className={statusClass}>{status.message}</div>}
 
+      {/* Runtimes */}
       {runtimeDeps.length > 0 && (
-        <div
-          style={{
-            display: "grid",
-            gap: "6px",
-            background: colors.surface,
-            border: `1px solid ${colors.surface2}`,
-            borderRadius: "8px",
-            padding: "9px 10px",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "8px",
-            }}
-          >
-            <span
-              style={{
-                fontSize: "11px",
-                color: colors.sub,
-                fontWeight: 700,
-                letterSpacing: "0.04em",
-                textTransform: "uppercase",
-              }}
-            >
-              Runtimes
-            </span>
+        <div className="plugin-runtimes">
+          <div className="plugin-runtimes__head">
+            <span className="plugin-runtimes__title">Runtimes</span>
             <button
               type="button"
               className="omni-btn omni-btn--ghost omni-btn--xs"
@@ -536,38 +451,24 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
               Refresh
             </button>
           </div>
-          <div style={{ display: "grid", gap: "5px" }}>
+          <div className="plugin-runtimes__list">
             {runtimeDeps.map((dep) => {
               const busy = runtimeInstalling === dep.id;
               const progress = runtimeProgress[dep.id];
               return (
-                <div
-                  key={dep.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    minWidth: 0,
-                  }}
-                >
+                <div key={dep.id} className="plugin-runtimes__row">
                   <span
-                    className={`omni-pill ${dep.installed ? "omni-pill--success" : "omni-pill--warning"}`}
-                    style={{ flexShrink: 0 }}
+                    className={
+                      "omni-pill plugin-runtimes__pill " +
+                      (dep.installed ? "omni-pill--success" : "omni-pill--warning")
+                    }
                   >
                     {dep.installed ? "READY" : "MISSING"}
                   </span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: "12px", color: colors.text, fontWeight: 600 }}>
-                      {dep.label}
-                    </div>
+                  <div className="plugin-runtimes__main">
+                    <div className="plugin-runtimes__label">{dep.label}</div>
                     <div
-                      style={{
-                        fontSize: "11px",
-                        color: colors.sub,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
+                      className="plugin-runtimes__detail"
                       title={dep.install_command || dep.detail}
                     >
                       {progress || (dep.installed ? dep.detail : dep.install_command || dep.detail)}
@@ -576,12 +477,18 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                   {!dep.installed && (
                     <button
                       type="button"
-                      className={`omni-btn omni-btn--xs ${dep.installable ? "omni-btn--primary" : ""}`}
+                      className={
+                        "omni-btn omni-btn--xs plugin-runtimes__action" +
+                        (dep.installable ? " omni-btn--primary" : "")
+                      }
                       onClick={() => handleInstallRuntime(dep)}
                       disabled={status.type === "loading" || busy}
                       aria-disabled={status.type === "loading" || busy}
-                      style={{ flexShrink: 0, fontWeight: 700 }}
-                      title={dep.installable ? `Install ${dep.label}` : dep.install_command || dep.detail}
+                      title={
+                        dep.installable
+                          ? `Install ${dep.label}`
+                          : dep.install_command || dep.detail
+                      }
                     >
                       {busy ? "Installing…" : dep.installable ? "Install" : "Details"}
                     </button>
@@ -593,26 +500,13 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
         </div>
       )}
 
-      {/* Repo list */}
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "6px",
-        }}
-      >
+      {/* Collection list */}
+      <div className="plugin-panel__list">
         {collections.length === 0 ? (
-          <div
-            style={{
-              fontSize: "13px",
-              color: colors.sub,
-              textAlign: "center",
-              padding: "18px 0",
-            }}
-          >
+          <div className="plugin-panel__empty">
             No external plugin repos installed yet.
             <br />
-            <span style={{ fontSize: "12px", opacity: 0.7 }}>
+            <span className="plugin-panel__empty-hint">
               Paste a Git URL or local path above to install one.
             </span>
           </div>
@@ -621,122 +515,48 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
             const expanded = expandedCollections[collection.key] ?? false;
             const pluginCount = collection.plugins.length;
             const repoCount = collection.repos.length;
+            const updateDisabled =
+              status.type === "loading" || (!collection.hasGitRepo && !collection.collectionSource);
             return (
-              <div
-                key={collection.key}
-                style={{
-                  background: colors.surface,
-                  borderRadius: "10px",
-                  border: `1px solid ${colors.surface2}`,
-                  overflow: "hidden",
-                }}
-              >
+              <div key={collection.key} className="collection-card">
                 <div
+                  className="collection-card__head"
                   onClick={() => toggleCollection(collection.key)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                    padding: "10px 12px",
-                    cursor: "pointer",
-                  }}
                 >
                   <button
                     type="button"
-                    className="omni-btn omni-btn--ghost omni-btn--xs"
+                    className={
+                      "omni-btn omni-btn--ghost omni-btn--xs collection-card__expand" +
+                      (expanded ? " is-active" : "")
+                    }
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleCollection(collection.key);
                     }}
                     aria-label={expanded ? "Collapse collection" : "Expand collection"}
-                    style={{
-                      width: 26,
-                      height: 26,
-                      padding: 0,
-                      flexShrink: 0,
-                    }}
-                    title={expanded ? "Collapse collection plugins" : "Expand collection plugins"}
+                    aria-expanded={expanded}
+                    title={
+                      expanded ? "Collapse collection plugins" : "Expand collection plugins"
+                    }
                   >
                     {expanded ? "▾" : "▸"}
                   </button>
 
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: "13px",
-                        fontWeight: 700,
-                        color: colors.text,
-                        display: "flex",
-                        flexWrap: "wrap",
-                        alignItems: "center",
-                        gap: "6px",
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: "10px",
-                          fontWeight: 700,
-                          letterSpacing: "0.04em",
-                          color: colors.accent,
-                          border: `1px solid ${colors.accent}55`,
-                          borderRadius: "999px",
-                          padding: "1px 6px",
-                        }}
-                      >
-                        COLLECTION
-                      </span>
+                  <div className="collection-card__main">
+                    <div className="collection-card__title-row">
+                      <span className="collection-card__kind">COLLECTION</span>
                       <span>{collection.name}</span>
-                      <span
-                        style={{
-                          fontSize: "11px",
-                          color: colors.sub,
-                          fontWeight: 500,
-                          border: `1px solid ${colors.surface2}`,
-                          borderRadius: "999px",
-                          padding: "1px 7px",
-                        }}
-                      >
+                      <span className="collection-card__count">
                         {pluginCount} plugin{pluginCount === 1 ? "" : "s"}
                       </span>
                       {repoCount > 1 && (
-                        <span
-                          style={{
-                            fontSize: "11px",
-                            color: colors.sub,
-                            fontWeight: 500,
-                            border: `1px solid ${colors.surface2}`,
-                            borderRadius: "999px",
-                            padding: "1px 7px",
-                          }}
-                        >
-                          {repoCount} repos
-                        </span>
+                        <span className="collection-card__count">{repoCount} repos</span>
                       )}
                       {collection.hasGitRepo && (
-                        <span
-                          style={{
-                            fontSize: "11px",
-                            background: `${colors.accent}22`,
-                            border: `1px solid ${colors.accent}44`,
-                            borderRadius: "999px",
-                            padding: "1px 7px",
-                            color: colors.accent,
-                          }}
-                        >
-                          git
-                        </span>
+                        <span className="collection-card__git-badge">git</span>
                       )}
                     </div>
-                    <div
-                      style={{
-                        fontSize: "12px",
-                        color: colors.sub,
-                        marginTop: "2px",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
+                    <div className="collection-card__subtitle">
                       {normalizeGitRemote(collection.repos[0]?.git_remote)
                         ? collection.repos[0]!.git_remote
                         : collection.repos.length === 1
@@ -752,8 +572,8 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                       e.stopPropagation();
                       handleUpdateCollection(collection);
                     }}
-                    disabled={status.type === "loading" || (!collection.hasGitRepo && !collection.collectionSource)}
-                    aria-disabled={status.type === "loading" || (!collection.hasGitRepo && !collection.collectionSource)}
+                    disabled={updateDisabled}
+                    aria-disabled={updateDisabled}
                     title={
                       collection.hasGitRepo || collection.collectionSource
                         ? "Update this collection and all of its plugins"
@@ -771,128 +591,56 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                       handleRemoveCollection(collection);
                     }}
                     title="Remove collection"
-                    style={{ flexShrink: 0 }}
                   >
                     Remove
                   </button>
                 </div>
 
                 {expanded && (
-                  <div
-                    style={{
-                      display: "grid",
-                      gap: "6px",
-                      padding: "0 12px 12px 48px",
-                      borderLeft: `1px solid ${colors.surface2}`,
-                      marginLeft: "24px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: "11px",
-                        color: colors.sub,
-                        fontWeight: 600,
-                        letterSpacing: "0.03em",
-                        textTransform: "uppercase",
-                        padding: "2px 0",
-                      }}
-                    >
+                  <div className="collection-card__body">
+                    <div className="collection-card__body-title">
                       Plugins in this collection
                     </div>
-                    {collection.plugins.map((plugin) => (
-                      <div
-                        key={`${plugin.repo_dir_name}:${plugin.name}`}
-                        style={{
-                          background: colors.bg,
-                          border: `1px solid ${colors.surface2}`,
-                          borderRadius: "8px",
-                          padding: "8px 10px",
-                        }}
-                      >
+                    {collection.plugins.map((plugin) => {
+                      const updatePluginDisabled =
+                        status.type === "loading" || !plugin.repo_is_git_repo;
+                      return (
                         <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "10px",
-                          }}
+                          key={`${plugin.repo_dir_name}:${plugin.name}`}
+                          className="plugin-row"
                         >
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div
-                              style={{
-                                fontSize: "12px",
-                                fontWeight: 600,
-                                color: colors.text,
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                flexWrap: "wrap",
-                              }}
-                            >
-                              <span
-                                style={{
-                                  fontSize: "10px",
-                                  fontWeight: 700,
-                                  letterSpacing: "0.04em",
-                                  color: colors.sub,
-                                  border: `1px solid ${colors.surface2}`,
-                                  borderRadius: "999px",
-                                  padding: "1px 6px",
-                                }}
-                              >
-                                PLUGIN
-                              </span>
-                              <span>{plugin.icon ?? "🔌"}</span>
-                              <span>{plugin.name}</span>
-                              <span style={{ color: colors.sub, fontWeight: 400 }}>
-                                v{plugin.version}
-                              </span>
-                              {plugin.keyword && (
-                                <span
-                                  style={{
-                                    fontSize: "10px",
-                                    background: `${colors.accent}22`,
-                                    border: `1px solid ${colors.accent}44`,
-                                    borderRadius: "999px",
-                                    padding: "1px 6px",
-                                    color: colors.accent,
-                                  }}
-                                >
-                                  {plugin.keyword}
-                                </span>
-                              )}
+                          <div className="plugin-row__inner">
+                            <div className="plugin-row__main">
+                              <div className="plugin-row__title-row">
+                                <span className="plugin-row__kind">PLUGIN</span>
+                                <span>{plugin.icon ?? "🔌"}</span>
+                                <span>{plugin.name}</span>
+                                <span className="plugin-row__version">v{plugin.version}</span>
+                                {plugin.keyword && (
+                                  <span className="plugin-row__keyword">{plugin.keyword}</span>
+                                )}
+                              </div>
+                              <div className="plugin-row__desc">{plugin.description}</div>
                             </div>
-                            <div
-                              style={{
-                                fontSize: "12px",
-                                color: colors.sub,
-                                marginTop: "2px",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {plugin.description}
-                            </div>
-                          </div>
 
-                          <button
-                            type="button"
-                            className="omni-btn omni-btn--xs"
-                            onClick={() => handleUpdateRepo(plugin.repo_dir_name)}
-                            disabled={status.type === "loading" || !plugin.repo_is_git_repo}
-                            aria-disabled={status.type === "loading" || !plugin.repo_is_git_repo}
-                            style={{ flexShrink: 0, fontWeight: 600 }}
-                            title={
-                              plugin.repo_is_git_repo
-                                ? "Update this plugin"
-                                : "This plugin repo is not a git repository"
-                            }
-                          >
-                            Update
-                          </button>
+                            <button
+                              type="button"
+                              className="omni-btn omni-btn--xs plugin-row__action"
+                              onClick={() => handleUpdateRepo(plugin.repo_dir_name)}
+                              disabled={updatePluginDisabled}
+                              aria-disabled={updatePluginDisabled}
+                              title={
+                                plugin.repo_is_git_repo
+                                  ? "Update this plugin"
+                                  : "This plugin repo is not a git repository"
+                              }
+                            >
+                              Update
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
