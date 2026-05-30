@@ -153,21 +153,10 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
           </span>
         </span>
         <button
+          className="omni-titlebar__close"
           onClick={onClose}
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            color: colors.sub,
-            fontSize: "18px",
-            lineHeight: 1,
-            padding: "2px 6px",
-            borderRadius: "4px",
-            transition: "color 120ms",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = colors.text)}
-          onMouseLeave={(e) => (e.currentTarget.style.color = colors.sub)}
           title="Close"
+          aria-label="Close"
         >
           ×
         </button>
@@ -177,39 +166,21 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
         <input
           type="text"
+          className="omni-input"
           value={source}
           onChange={(e) => setSource(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleInstall()}
           placeholder="URL or local path to SKILL.md…"
-          style={{
-            flex: 1,
-            minWidth: "180px",
-            background: colors.surface,
-            border: `1px solid ${colors.surface2}`,
-            borderRadius: "8px",
-            padding: "7px 12px",
-            color: colors.text,
-            fontSize: "13px",
-            outline: "none",
-          }}
+          style={{ flex: 1, minWidth: 180, width: "auto" }}
         />
         <button
+          type="button"
+          className="omni-btn omni-btn--primary"
           onClick={handleInstall}
           disabled={status.type === "loading" || !source.trim()}
-          style={{
-            background: colors.accent,
-            border: "none",
-            borderRadius: "8px",
-            padding: "7px 16px",
-            color: "var(--user-bubble-text)",
-            fontSize: "13px",
-            fontWeight: 600,
-            cursor: source.trim() ? "pointer" : "default",
-            opacity: source.trim() ? 1 : 0.45,
-            transition: "opacity 150ms",
-          }}
+          aria-disabled={status.type === "loading" || !source.trim()}
         >
-          Install
+          {status.type === "loading" ? "Installing…" : "Install"}
         </button>
       </div>
 
@@ -275,25 +246,19 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
                   {/* Expand toggle — pill shaped */}
                   <button
                     type="button"
+                    className={`omni-btn omni-btn--ghost omni-btn--xs${expanded ? " is-active" : ""}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleSkill(skill.name);
                     }}
                     aria-label={expanded ? "Collapse skill details" : "Expand skill details"}
+                    aria-expanded={expanded}
                     style={{
-                      width: "24px",
-                      height: "24px",
-                      borderRadius: "999px",
-                      border: `1px solid ${expanded ? colors.accent + "66" : colors.surface2}`,
-                      background: expanded ? `${colors.accent}18` : colors.bg,
-                      color: expanded ? colors.accent : colors.sub,
-                      cursor: "pointer",
+                      width: 24,
+                      height: 24,
+                      padding: 0,
+                      borderRadius: 999,
                       flexShrink: 0,
-                      fontSize: "11px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      transition: "background 150ms, border-color 150ms, color 150ms",
                     }}
                     title={expanded ? "Collapse details" : "Expand details"}
                   >
@@ -389,31 +354,15 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
 
                   {/* Update button */}
                   <button
+                    type="button"
+                    className="omni-btn omni-btn--sm"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleUpdate(skill.name);
                     }}
                     disabled={status.type === "loading"}
-                    style={{
-                      background: "none",
-                      border: `1px solid ${colors.surface2}`,
-                      borderRadius: "8px",
-                      padding: "5px 12px",
-                      color: colors.text,
-                      fontSize: "12px",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      flexShrink: 0,
-                      transition: "border-color 150ms, color 150ms",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = colors.accent + "88";
-                      e.currentTarget.style.color = colors.accent;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = colors.surface2;
-                      e.currentTarget.style.color = colors.text;
-                    }}
+                    aria-disabled={status.type === "loading"}
+                    style={{ flexShrink: 0 }}
                     title="Update this skill"
                   >
                     Update
@@ -421,30 +370,14 @@ export default function SkillManager({ colors, onClose }: SkillManagerProps) {
 
                   {/* Remove button */}
                   <button
+                    type="button"
+                    className="omni-btn omni-btn--danger omni-btn--xs"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDelete(skill.name);
                     }}
                     title="Remove skill"
-                    style={{
-                      background: "none",
-                      border: `1px solid ${colors.surface2}`,
-                      borderRadius: "6px",
-                      padding: "4px 10px",
-                      color: colors.sub,
-                      fontSize: "12px",
-                      cursor: "pointer",
-                      flexShrink: 0,
-                      transition: "color 150ms, border-color 150ms",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = "var(--danger)";
-                      e.currentTarget.style.borderColor = "var(--danger)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = colors.sub;
-                      e.currentTarget.style.borderColor = colors.surface2;
-                    }}
+                    style={{ flexShrink: 0 }}
                   >
                     Remove
                   </button>

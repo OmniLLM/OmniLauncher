@@ -436,17 +436,10 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
           🔌 Plugin Manager
         </span>
         <button
+          className="omni-titlebar__close"
           onClick={onClose}
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            color: colors.sub,
-            fontSize: "16px",
-            lineHeight: 1,
-            padding: "2px 4px",
-          }}
           title="Close"
+          aria-label="Close"
         >
           ×
         </button>
@@ -456,21 +449,12 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
         <input
           type="text"
+          className="omni-input"
           value={source}
           onChange={(e) => setSource(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleInstall()}
           placeholder="Git URL or local path…"
-          style={{
-            flex: 1,
-            minWidth: "180px",
-            background: colors.surface,
-            border: `1px solid ${colors.surface2}`,
-            borderRadius: "8px",
-            padding: "7px 12px",
-            color: colors.text,
-            fontSize: "13px",
-            outline: "none",
-          }}
+          style={{ flex: 1, minWidth: 180, width: "auto" }}
         />
         {/* Install-to selector — only shown when there are extra dirs */}
         {extraDirs.length > 0 && (
@@ -489,22 +473,13 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
           </select>
         )}
         <button
+          type="button"
+          className="omni-btn omni-btn--primary"
           onClick={handleInstall}
           disabled={status.type === "loading" || !source.trim()}
-          style={{
-            background: colors.accent,
-            border: "none",
-            borderRadius: "8px",
-            padding: "7px 14px",
-            color: "var(--user-bubble-text)",
-            fontSize: "13px",
-            fontWeight: 600,
-            cursor: source.trim() ? "pointer" : "default",
-            opacity: source.trim() ? 1 : 0.5,
-            transition: "opacity 150ms",
-          }}
+          aria-disabled={status.type === "loading" || !source.trim()}
         >
-          Install
+          {status.type === "loading" ? "Installing…" : "Install"}
         </button>
       </div>
 
@@ -553,17 +528,9 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
             </span>
             <button
               type="button"
+              className="omni-btn omni-btn--ghost omni-btn--xs"
               onClick={refreshRuntimeDeps}
               disabled={status.type === "loading"}
-              style={{
-                background: "none",
-                border: `1px solid ${colors.surface2}`,
-                borderRadius: "6px",
-                padding: "3px 8px",
-                color: colors.sub,
-                fontSize: "11px",
-                cursor: status.type === "loading" ? "default" : "pointer",
-              }}
               title="Refresh runtime checks"
             >
               Refresh
@@ -609,23 +576,14 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                   {!dep.installed && (
                     <button
                       type="button"
+                      className={`omni-btn omni-btn--xs ${dep.installable ? "omni-btn--primary" : ""}`}
                       onClick={() => handleInstallRuntime(dep)}
                       disabled={status.type === "loading" || busy}
-                      style={{
-                        background: dep.installable ? colors.accent : "none",
-                        border: `1px solid ${dep.installable ? colors.accent : colors.surface2}`,
-                        borderRadius: "7px",
-                        padding: "5px 9px",
-                        color: dep.installable ? "var(--user-bubble-text)" : colors.sub,
-                        fontSize: "11px",
-                        fontWeight: 700,
-                        cursor: status.type === "loading" || busy ? "default" : "pointer",
-                        opacity: status.type === "loading" || busy ? 0.65 : 1,
-                        flexShrink: 0,
-                      }}
+                      aria-disabled={status.type === "loading" || busy}
+                      style={{ flexShrink: 0, fontWeight: 700 }}
                       title={dep.installable ? `Install ${dep.label}` : dep.install_command || dep.detail}
                     >
-                      {busy ? "Installing" : dep.installable ? "Install" : "Details"}
+                      {busy ? "Installing…" : dep.installable ? "Install" : "Details"}
                     </button>
                   )}
                 </div>
@@ -685,19 +643,16 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                 >
                   <button
                     type="button"
+                    className="omni-btn omni-btn--ghost omni-btn--xs"
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleCollection(collection.key);
                     }}
                     aria-label={expanded ? "Collapse collection" : "Expand collection"}
                     style={{
-                      width: "26px",
-                      height: "26px",
-                      borderRadius: "6px",
-                      border: `1px solid ${colors.surface2}`,
-                      background: colors.bg,
-                      color: colors.text,
-                      cursor: "pointer",
+                      width: 26,
+                      height: 26,
+                      padding: 0,
                       flexShrink: 0,
                     }}
                     title={expanded ? "Collapse collection plugins" : "Expand collection plugins"}
@@ -791,23 +746,14 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                   </div>
 
                   <button
+                    type="button"
+                    className="omni-btn omni-btn--sm"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleUpdateCollection(collection);
                     }}
                     disabled={status.type === "loading" || (!collection.hasGitRepo && !collection.collectionSource)}
-                    style={{
-                      background: "none",
-                      border: `1px solid ${colors.surface2}`,
-                      borderRadius: "8px",
-                      padding: "6px 12px",
-                      color: collection.hasGitRepo || collection.collectionSource ? colors.text : colors.sub,
-                      fontSize: "12px",
-                      fontWeight: 600,
-                      cursor: collection.hasGitRepo || collection.collectionSource ? "pointer" : "default",
-                      opacity: collection.hasGitRepo || collection.collectionSource ? 1 : 0.5,
-                      transition: "opacity 150ms, border-color 150ms, color 150ms",
-                    }}
+                    aria-disabled={status.type === "loading" || (!collection.hasGitRepo && !collection.collectionSource)}
                     title={
                       collection.hasGitRepo || collection.collectionSource
                         ? "Update this collection and all of its plugins"
@@ -818,30 +764,14 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                   </button>
 
                   <button
+                    type="button"
+                    className="omni-btn omni-btn--danger omni-btn--xs"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleRemoveCollection(collection);
                     }}
                     title="Remove collection"
-                    style={{
-                      background: "none",
-                      border: `1px solid ${colors.surface2}`,
-                      borderRadius: "6px",
-                      padding: "4px 10px",
-                      color: colors.sub,
-                      fontSize: "12px",
-                      cursor: "pointer",
-                      flexShrink: 0,
-                      transition: "color 150ms, border-color 150ms",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = "var(--danger)";
-                      e.currentTarget.style.borderColor = "var(--danger)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = colors.sub;
-                      e.currentTarget.style.borderColor = colors.surface2;
-                    }}
+                    style={{ flexShrink: 0 }}
                   >
                     Remove
                   </button>
@@ -946,21 +876,12 @@ export default function PluginManager({ colors, onClose }: PluginManagerProps) {
                           </div>
 
                           <button
+                            type="button"
+                            className="omni-btn omni-btn--xs"
                             onClick={() => handleUpdateRepo(plugin.repo_dir_name)}
                             disabled={status.type === "loading" || !plugin.repo_is_git_repo}
-                            style={{
-                              background: "none",
-                              border: `1px solid ${colors.surface2}`,
-                              borderRadius: "8px",
-                              padding: "5px 10px",
-                              color: plugin.repo_is_git_repo ? colors.text : colors.sub,
-                              fontSize: "11px",
-                              fontWeight: 600,
-                              cursor: plugin.repo_is_git_repo ? "pointer" : "default",
-                              opacity: plugin.repo_is_git_repo ? 1 : 0.5,
-                              transition: "opacity 150ms, border-color 150ms, color 150ms",
-                              flexShrink: 0,
-                            }}
+                            aria-disabled={status.type === "loading" || !plugin.repo_is_git_repo}
+                            style={{ flexShrink: 0, fontWeight: 600 }}
                             title={
                               plugin.repo_is_git_repo
                                 ? "Update this plugin"

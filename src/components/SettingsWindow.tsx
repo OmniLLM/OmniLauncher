@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 
 interface AppSettings {
@@ -46,26 +45,6 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-const baseInputStyle: React.CSSProperties = {
-  width: "100%",
-  background: "var(--surface)",
-  border: "1px solid var(--border)",
-  borderRadius: 8,
-  color: "var(--text)",
-  padding: "8px 10px",
-  fontSize: 13,
-  outline: "none",
-  boxSizing: "border-box",
-  transition: "border-color 0.15s, box-shadow 0.15s",
-  fontFamily: "inherit",
-};
-
-const focusedInputStyle: React.CSSProperties = {
-  ...baseInputStyle,
-  borderColor: "var(--accent)",
-  boxShadow: "0 0 0 2px var(--accent-dim)",
-};
-
 interface Props {
   onClose?: () => void;
 }
@@ -75,8 +54,6 @@ export default function SettingsWindow({ onClose }: Props = {}) {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("ai");
-  const [saveHover, setSaveHover] = useState(false);
-  const [focusedField, setFocusedField] = useState<string | null>(null);
 
   const currentBgUrl = settings?.background_url ?? "";
   const isCustomBg =
@@ -130,12 +107,14 @@ export default function SettingsWindow({ onClose }: Props = {}) {
     } finally {
       setModelsLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.ai_base_url, settings?.ai_api_key]);
 
   useEffect(() => {
     if (settings?.ai_base_url) {
       fetchModels();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.ai_base_url, settings?.ai_api_key]);
 
   useEffect(() => {
@@ -149,7 +128,7 @@ export default function SettingsWindow({ onClose }: Props = {}) {
   }, []);
 
   const filteredModels = models.filter((m) =>
-    m.toLowerCase().includes(modelFilter.toLowerCase())
+    m.toLowerCase().includes(modelFilter.toLowerCase()),
   );
 
   const handleModelSelect = (model: string) => {
@@ -170,14 +149,6 @@ export default function SettingsWindow({ onClose }: Props = {}) {
     }
   };
 
-  const inputStyle = (field: string): React.CSSProperties =>
-    focusedField === field ? focusedInputStyle : baseInputStyle;
-
-  const fProps = (field: string) => ({
-    onFocus: () => setFocusedField(field),
-    onBlur: () => setFocusedField(null),
-  });
-
   if (loading || !settings) {
     return (
       <div
@@ -189,29 +160,13 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           background: "transparent",
           color: "var(--sub)",
           fontFamily: "inherit",
+          fontSize: 13,
         }}
       >
         Loading settings…
       </div>
     );
   }
-
-  const sectionHeaderStyle: React.CSSProperties = {
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: "0.08em",
-    color: "var(--accent)",
-    textTransform: "uppercase",
-    marginBottom: 10,
-  };
-
-  const cardStyle: React.CSSProperties = {
-    background: "var(--bg-elevated)",
-    border: "1px solid var(--border)",
-    borderRadius: 8,
-    padding: "4px 0",
-    marginBottom: 20,
-  };
 
   const rowStyle = (last = false): React.CSSProperties => ({
     display: "grid",
@@ -239,32 +194,16 @@ export default function SettingsWindow({ onClose }: Props = {}) {
         overflow: "hidden",
       }}
     >
-      {/* Title bar — full width */}
-      <div
-        data-tauri-drag-region
-        style={{
-          height: 44,
-          display: "flex",
-          alignItems: "center",
-          padding: "0 20px",
-          borderBottom: "1px solid var(--border)",
-          flexShrink: 0,
-          justifyContent: "space-between",
-        }}
-      >
-        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>
-          ⚙&nbsp;&nbsp;Preferences
+      <div data-tauri-drag-region className="omni-titlebar">
+        <span className="omni-titlebar__title">
+          <span aria-hidden="true">⚙</span>
+          <span>Preferences</span>
         </span>
         <button
+          className="omni-titlebar__close"
           onClick={() => onClose?.()}
-          style={{
-            background: "none",
-            border: "none",
-            color: "var(--sub)",
-            fontSize: 16,
-            cursor: "pointer",
-            lineHeight: 1,
-          }}
+          title="Close"
+          aria-label="Close"
         >
           ✕
         </button>
@@ -290,35 +229,12 @@ export default function SettingsWindow({ onClose }: Props = {}) {
             return (
               <button
                 key={tab.id}
+                type="button"
+                className={`settings-tab${isActive ? " settings-tab--active" : ""}`}
                 onClick={() => setActiveTab(tab.id)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "10px 14px",
-                  borderRadius: 6,
-                  fontSize: 13,
-                  cursor: "pointer",
-                  border: "none",
-                  background: isActive ? "var(--accent-dim)" : "transparent",
-                  color: isActive ? "var(--text)" : "var(--sub)",
-                  borderLeft: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                  borderTop: "none",
-                  borderRight: "none",
-                  borderBottom: "none",
-                  transition: "all 0.15s",
-                  textAlign: "left",
-                  width: "100%",
-                  fontFamily: "inherit",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "var(--accent-hover)";
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "transparent";
-                }}
+                aria-pressed={isActive}
               >
-                <span>{tab.icon}</span>
+                <span aria-hidden="true">{tab.icon}</span>
                 <span>{tab.label}</span>
               </button>
             );
@@ -327,107 +243,72 @@ export default function SettingsWindow({ onClose }: Props = {}) {
 
         {/* Right content pane */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {/* Scrollable area */}
           <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
 
             {activeTab === "ai" && (
               <div>
-                <div style={sectionHeaderStyle}>AI Provider</div>
-                <div style={cardStyle}>
+                <div className="settings-section-header">AI Provider</div>
+                <div className="settings-card">
                   <div style={rowStyle()}>
                     <span style={rowLabelStyle}>Provider URL</span>
                     <input
-                      style={inputStyle("ai_base_url")}
+                      className="omni-input"
                       value={settings.ai_base_url}
                       onChange={(e) => setSettings((s) => s && { ...s, ai_base_url: e.target.value })}
-                      {...fProps("ai_base_url")}
                     />
                   </div>
                   <div style={rowStyle()}>
                     <span style={rowLabelStyle}>API Key</span>
                     <input
-                      style={inputStyle("ai_api_key")}
+                      className="omni-input"
                       type="password"
                       value={settings.ai_api_key}
                       onChange={(e) => setSettings((s) => s && { ...s, ai_api_key: e.target.value })}
                       placeholder="(optional)"
-                      {...fProps("ai_api_key")}
                     />
                   </div>
                   <div ref={dropdownRef} style={{ ...rowStyle(true), position: "relative" }}>
                     <span style={rowLabelStyle}>
                       Model
-                      {modelsLoading && <span style={{ color: "var(--accent)" }}> (loading…)</span>}
-                      {modelsError && <span style={{ color: "var(--error)" }}> ⚠</span>}
+                      {modelsLoading && (
+                        <span style={{ color: "var(--accent)" }}> (loading…)</span>
+                      )}
+                      {modelsError && (
+                        <span style={{ color: "var(--error)" }} title={modelsError}> ⚠</span>
+                      )}
                     </span>
                     <div style={{ position: "relative", width: "100%" }}>
                       <input
                         ref={modelInputRef}
-                        style={inputStyle("ai_model")}
+                        className="omni-input"
                         value={modelFilter}
                         onChange={(e) => {
                           setModelFilter(e.target.value);
                           setSettings((s) => s && { ...s, ai_model: e.target.value });
                           setShowModelDropdown(true);
                         }}
-                        onFocus={() => { setFocusedField("ai_model"); setShowModelDropdown(true); }}
-                        onBlur={() => setFocusedField(null)}
+                        onFocus={() => setShowModelDropdown(true)}
                         placeholder="Type to filter models…"
                       />
                       {showModelDropdown && filteredModels.length > 0 && (
-                        <div
-                          style={{
-                            position: "absolute",
-                            zIndex: 100,
-                            left: 0,
-                            right: 0,
-                            top: "calc(100% + 2px)",
-                            background: "var(--surface)",
-                            border: "1px solid var(--border)",
-                            borderRadius: 8,
-                            maxHeight: 180,
-                            overflowY: "auto",
-                          }}
-                        >
-                          {filteredModels.map((m) => (
-                            <div
-                              key={m}
-                              onClick={() => handleModelSelect(m)}
-                              style={{
-                                padding: "7px 10px",
-                                fontSize: 13,
-                                cursor: "pointer",
-                                color: m === settings.ai_model ? "var(--accent)" : "var(--text)",
-                                background: m === settings.ai_model ? "var(--accent-dim)" : "transparent",
-                              }}
-                              onMouseEnter={(e) => ((e.target as HTMLDivElement).style.background = "var(--accent-hover)")}
-                              onMouseLeave={(e) =>
-                                ((e.target as HTMLDivElement).style.background =
-                                  m === settings.ai_model ? "var(--accent-dim)" : "transparent")
-                              }
-                            >
-                              {m}
-                            </div>
-                          ))}
+                        <div className="settings-popover">
+                          {filteredModels.map((m) => {
+                            const isSel = m === settings.ai_model;
+                            return (
+                              <div
+                                key={m}
+                                onClick={() => handleModelSelect(m)}
+                                className={`settings-popover__item${isSel ? " settings-popover__item--active" : ""}`}
+                              >
+                                {m}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                       {showModelDropdown && !modelsLoading && filteredModels.length === 0 && models.length > 0 && (
-                        <div
-                          style={{
-                            position: "absolute",
-                            zIndex: 100,
-                            left: 0,
-                            right: 0,
-                            top: "calc(100% + 2px)",
-                            background: "var(--surface)",
-                            border: "1px solid var(--border)",
-                            borderRadius: 8,
-                            padding: "8px 10px",
-                            fontSize: 13,
-                            color: "var(--sub)",
-                          }}
-                        >
-                          No matches
+                        <div className="settings-popover">
+                          <div className="settings-popover__empty">No matches</div>
                         </div>
                       )}
                     </div>
@@ -438,15 +319,15 @@ export default function SettingsWindow({ onClose }: Props = {}) {
 
             {activeTab === "appearance" && (
               <div>
-                <div style={sectionHeaderStyle}>Appearance</div>
-                <div style={cardStyle}>
+                <div className="settings-section-header">Appearance</div>
+                <div className="settings-card">
                   <div style={rowStyle()}>
                     <span style={rowLabelStyle}>Theme</span>
                     <select
-                      style={{ ...inputStyle("theme"), cursor: "pointer" }}
+                      className="omni-select"
+                      style={{ cursor: "pointer" }}
                       value={settings.theme}
                       onChange={(e) => setSettings((s) => s && { ...s, theme: e.target.value })}
-                      {...fProps("theme")}
                     >
                       <option value="system">System (Follow OS)</option>
                       <option value="dark">Dark (Battle Blue)</option>
@@ -456,7 +337,8 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                   <div style={rowStyle(!isCustomBg && bgSelectValue !== "__custom__")}>
                     <span style={rowLabelStyle}>Background</span>
                     <select
-                      style={{ ...inputStyle("bg_select"), cursor: "pointer" }}
+                      className="omni-select"
+                      style={{ cursor: "pointer" }}
                       value={bgSelectValue}
                       onChange={(e) => {
                         const val = e.target.value;
@@ -464,7 +346,6 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                           setSettings((s) => s && { ...s, background_url: val });
                         }
                       }}
-                      {...fProps("bg_select")}
                     >
                       {BG_PRESETS.map((p) => (
                         <option key={p.label} value={p.value}>
@@ -477,11 +358,10 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                     <div style={rowStyle(true)}>
                       <span style={rowLabelStyle}>Image URL</span>
                       <input
-                        style={inputStyle("bg_url")}
+                        className="omni-input"
                         value={currentBgUrl}
                         onChange={(e) => setSettings((s) => s && { ...s, background_url: e.target.value })}
                         placeholder="https://example.com/image.jpg"
-                        {...fProps("bg_url")}
                       />
                     </div>
                   )}
@@ -491,13 +371,13 @@ export default function SettingsWindow({ onClose }: Props = {}) {
 
             {activeTab === "general" && (
               <div>
-                <div style={sectionHeaderStyle}>General</div>
-                <div style={cardStyle}>
+                <div className="settings-section-header">General</div>
+                <div className="settings-card">
                   <div style={rowStyle()}>
                     <span style={rowLabelStyle}>Hotkey</span>
                     <div
+                      className="omni-input"
                       style={{
-                        ...baseInputStyle,
                         color: "var(--sub)",
                         cursor: "default",
                         userSelect: "none",
@@ -509,7 +389,7 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                   <div style={rowStyle(true)}>
                     <span style={rowLabelStyle}>Max Results</span>
                     <input
-                      style={inputStyle("max_results")}
+                      className="omni-input"
                       type="number"
                       min={1}
                       max={50}
@@ -517,7 +397,6 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       onChange={(e) =>
                         setSettings((s) => s && { ...s, max_results: parseInt(e.target.value) || 10 })
                       }
-                      {...fProps("max_results")}
                     />
                   </div>
                 </div>
@@ -525,28 +404,27 @@ export default function SettingsWindow({ onClose }: Props = {}) {
             )}
           </div>
 
-          {/* Save button — fixed at bottom of right pane */}
-          <div style={{ padding: "12px 28px", flexShrink: 0, borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          {/* Save bar */}
+          <div
+            style={{
+              padding: "12px 28px",
+              flexShrink: 0,
+              borderTop: "1px solid var(--border)",
+              display: "flex",
+              justifyContent: "flex-end",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            {saved && (
+              <span className="omni-status omni-status--success">✓ Saved</span>
+            )}
             <button
+              type="button"
+              className="omni-btn omni-btn--primary"
               onClick={handleSave}
-              onMouseEnter={() => setSaveHover(true)}
-              onMouseLeave={() => setSaveHover(false)}
-              style={{
-                height: 32,
-                padding: "0 18px",
-                background: saved
-                  ? "var(--accent-dim)"
-                  : "var(--accent)",
-                color: saved ? "var(--accent)" : "var(--user-bubble-text)",
-                border: saved ? "1px solid var(--accent)" : "1px solid transparent",
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-                transition: "all 0.15s",
-                fontFamily: "inherit",
-                opacity: saveHover && !saved ? 0.9 : 1,
-              }}
+              disabled={saved}
+              aria-disabled={saved}
             >
               {saved ? "✓ Saved" : "Save Settings"}
             </button>
