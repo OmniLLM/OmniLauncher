@@ -30,12 +30,31 @@ impl AppLauncherPlugin {
     #[cfg(target_os = "linux")]
     fn load_apps() -> Vec<AppEntry> {
         let mut apps = vec![];
-        let dirs = vec![
-            PathBuf::from("/usr/share/applications"),
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".local/share/applications"),
-        ];
+        let mut dirs: Vec<PathBuf> = vec![PathBuf::from("/usr/share/applications")];
+        // $XDG_DATA_HOME/applications (defaults to ~/.local/share/applications)
+        if let Ok(xdg_home) = std::env::var("XDG_DATA_HOME") {
+            if !xdg_home.is_empty() {
+                dirs.push(PathBuf::from(xdg_home).join("applications"));
+            }
+        }
+        if let Some(home) = dirs::home_dir() {
+            dirs.push(home.join(".local/share/applications"));
+            dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
+        }
+        // $XDG_DATA_DIRS (colon-separated)
+        if let Ok(xdg_dirs) = std::env::var("XDG_DATA_DIRS") {
+            for d in xdg_dirs.split(':') {
+                if d.is_empty() {
+                    continue;
+                }
+                dirs.push(PathBuf::from(d).join("applications"));
+            }
+        }
+        dirs.push(PathBuf::from("/var/lib/flatpak/exports/share/applications"));
+        dirs.push(PathBuf::from("/var/lib/snapd/desktop/applications"));
+        // Dedup while preserving order.
+        let mut seen = std::collections::HashSet::new();
+        dirs.retain(|d| seen.insert(d.clone()));
         for dir in dirs {
             if !dir.exists() {
                 continue;
@@ -57,7 +76,15 @@ impl AppLauncherPlugin {
     #[cfg(target_os = "macos")]
     fn load_apps() -> Vec<AppEntry> {
         let mut apps = vec![];
-        let app_dirs = vec![PathBuf::from("/Applications")];
+        let mut app_dirs = vec![
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Applications"),
+            PathBuf::from("/System/Applications/Utilities"),
+            PathBuf::from("/Applications/Utilities"),
+        ];
+        if let Some(home) = dirs::home_dir() {
+            app_dirs.push(home.join("Applications"));
+        }
         for dir in app_dirs {
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for entry in entries.filter_map(|e| e.ok()) {

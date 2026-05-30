@@ -252,7 +252,12 @@ fn flush_dns_cmd() -> String {
 fn connections_cmd() -> String {
     "netstat -an | findstr ESTABLISHED".to_string()
 }
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn connections_cmd() -> String {
+    // BSD `netstat` for established + listening sockets.
+    "netstat -an -p tcp".to_string()
+}
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn connections_cmd() -> String {
     "ss -tunapl".to_string()
 }
@@ -261,7 +266,12 @@ fn connections_cmd() -> String {
 fn ports_cmd() -> String {
     "netstat -an | findstr LISTENING".to_string()
 }
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn ports_cmd() -> String {
+    // macOS has no `ss`; `lsof` is the standard replacement.
+    "lsof -nP -iTCP -sTCP:LISTEN".to_string()
+}
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn ports_cmd() -> String {
     "ss -tlnp".to_string()
 }

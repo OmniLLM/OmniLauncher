@@ -771,6 +771,8 @@ impl Router {
             "/ports" => {
                 let cmd = if cfg!(target_os = "windows") {
                     "netstat -an | findstr LISTENING"
+                } else if cfg!(target_os = "macos") {
+                    "lsof -nP -iTCP -sTCP:LISTEN"
                 } else {
                     "ss -tlnp"
                 };
@@ -787,6 +789,9 @@ impl Router {
             "/ps" => {
                 let cmd = if cfg!(target_os = "windows") {
                     "powershell -NoProfile -Command \"Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name, CPU, @{N='MemMB';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize\""
+                } else if cfg!(target_os = "macos") {
+                    // BSD ps: no --sort; -r sorts by CPU descending.
+                    "ps -Ao pid,pcpu,pmem,comm -r | head -16"
                 } else {
                     "ps aux --sort=-pcpu | head -16"
                 };

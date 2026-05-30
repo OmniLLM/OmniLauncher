@@ -54,7 +54,21 @@ impl BrowserBookmarksPlugin {
                     .join("Bookmarks")
             })
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        {
+            dirs::home_dir().map(|d| {
+                d.join("Library")
+                    .join("Application Support")
+                    .join("Microsoft Edge")
+                    .join("Default")
+                    .join("Bookmarks")
+            })
+        }
+        #[cfg(target_os = "linux")]
+        {
+            dirs::config_dir().map(|d| d.join("microsoft-edge").join("Default").join("Bookmarks"))
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
             None
         }

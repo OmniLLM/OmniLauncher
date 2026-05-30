@@ -57,22 +57,35 @@ fn resolve_agent_bin(agent_name: &str) -> String {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        // opencode is not in PATH by default on Linux/macOS
-        if agent_name == "opencode" {
-            let known = "/data/tools/opencode/packages/opencode/bin/opencode";
-            if std::path::Path::new(known).exists() {
-                return known.to_string();
+        // Common install locations on Linux / macOS (checked in priority order).
+        let mut candidates: Vec<String> = Vec::new();
+        if let Ok(home) = std::env::var("HOME") {
+            candidates.push(format!("{}/.npm-global/bin/{}", home, agent_name));
+            candidates.push(format!("{}/.local/bin/{}", home, agent_name));
+            candidates.push(format!("{}/.bun/bin/{}", home, agent_name));
+        }
+        candidates.push(format!("/opt/homebrew/bin/{}", agent_name)); // macOS Apple-silicon brew
+        candidates.push(format!("/usr/local/bin/{}", agent_name)); // macOS Intel brew / generic
+        candidates.push(format!("/usr/bin/{}", agent_name));
+        for c in &candidates {
+            if std::path::Path::new(c).exists() {
+                return c.clone();
             }
         }
-        // npm-global bin (Linux / macOS)
-        if let Ok(home) = std::env::var("HOME") {
-            let candidate = format!("{}/.npm-global/bin/{}", home, agent_name);
-            if std::path::Path::new(&candidate).exists() {
-                return candidate;
+        // Then walk $PATH explicitly so we never silently swallow a missing binary.
+        if let Ok(path) = std::env::var("PATH") {
+            for dir in path.split(':') {
+                if dir.is_empty() {
+                    continue;
+                }
+                let candidate = format!("{}/{}", dir.trim_end_matches('/'), agent_name);
+                if std::path::Path::new(&candidate).exists() {
+                    return candidate;
+                }
             }
         }
     }
-    // Fallback: rely on PATH
+    // Fallback: rely on PATH (Command::new will surface ENOENT if missing).
     agent_name.to_string()
 }
 

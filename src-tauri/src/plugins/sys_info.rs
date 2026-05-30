@@ -113,9 +113,14 @@ fn disk_cmd() -> (&'static str, Vec<&'static str>) {
 fn processes_cmd() -> (&'static str, Vec<&'static str>) {
     ("powershell", vec!["-NoProfile", "-Command", "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name, CPU, @{N='MemMB';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table"])
 }
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn processes_cmd() -> (&'static str, Vec<&'static str>) {
-    ("ps", vec!["aux", "--sort=-pcpu", "|", "head", "-15"])
+    // BSD `ps` has no `--sort`; `-r` sorts by CPU descending.
+    ("ps", vec!["-Ao", "pid,pcpu,pmem,comm", "-r"])
+}
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn processes_cmd() -> (&'static str, Vec<&'static str>) {
+    ("sh", vec!["-c", "ps aux --sort=-pcpu | head -15"])
 }
 
 #[cfg(target_os = "windows")]

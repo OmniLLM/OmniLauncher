@@ -35,10 +35,33 @@ impl Plugin for TimerPlugin {
             let display = raw.to_string();
             // Build a more readable label
             let display_str = format_duration(seconds);
-            let shell_cmd = format!(
-                "powershell -Command \"Start-Sleep -Seconds {}; [System.Media.SystemSounds]::Beep.Play(); Write-Host 'Timer done!'\"",
-                seconds
-            );
+            // BUGFIX: the timer used to *unconditionally* emit a
+            // `powershell -Command Start-Sleep …` action string, even on
+            // Linux and macOS where `powershell` isn't on PATH. The
+            // result: clicking a timer on every non-Windows install
+            // silently failed with "command not found" and the timer
+            // never fired. Emit the right shell for the host OS.
+            let shell_cmd = if cfg!(target_os = "windows") {
+                format!(
+                    "powershell -Command \"Start-Sleep -Seconds {}; [System.Media.SystemSounds]::Beep.Play(); Write-Host 'Timer done!'\"",
+                    seconds
+                )
+            } else if cfg!(target_os = "macos") {
+                // `afplay` ships with macOS; fall back to a terminal bell
+                // if it's missing so the timer still announces itself.
+                format!(
+                    "sh -c 'sleep {}; (afplay /System/Library/Sounds/Glass.aiff 2>/dev/null || printf \"\\\\a\"); echo Timer done!'",
+                    seconds
+                )
+            } else {
+                // Linux / *BSD: `paplay` (PulseAudio) is typical; degrade
+                // gracefully to the terminal bell if no sound server is
+                // available. Either way the timer *fires*.
+                format!(
+                    "sh -c 'sleep {}; (paplay /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null || printf \"\\\\a\"); echo Timer done!'",
+                    seconds
+                )
+            };
 
             return vec![QueryResult {
                 id: format!("timer:{}", seconds),

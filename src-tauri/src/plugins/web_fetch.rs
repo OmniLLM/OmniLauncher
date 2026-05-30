@@ -81,7 +81,10 @@ impl Plugin for WebFetchPlugin {
                     Ok(text) => {
                         let result = if raw { text } else { strip_html(&text) };
                         if result.len() > 8000 {
-                            format!("{}\n... (truncated)", &result[..8000])
+                            format!(
+                                "{}\n... (truncated)",
+                                truncate_at_char_boundary(&result, 8000)
+                            )
                         } else {
                             result
                         }
@@ -113,4 +116,52 @@ fn strip_html(html: &str) -> String {
     // Collapse whitespace
     text = RE_WS.replace_all(&text, " ").to_string();
     text.trim().to_string()
+}
+
+/// Truncate a UTF-8 string to at most `max_bytes` bytes without splitting a
+/// multi-byte character. Returns the largest valid prefix `<= max_bytes`.
+fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut idx = max_bytes;
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    &s[..idx]
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_at_char_boundary;
+
+    #[test]
+    fn ascii_short_string_unchanged() {
+        assert_eq!(truncate_at_char_boundary("hello", 100), "hello");
+    }
+
+    #[test]
+    fn ascii_truncated_exactly() {
+        assert_eq!(truncate_at_char_boundary("abcdef", 3), "abc");
+    }
+
+    #[test]
+    fn cjk_boundary_does_not_panic() {
+        // Each Chinese character is 3 bytes in UTF-8 -> 9000 bytes.
+        let s: String = "中".repeat(3000);
+        let out = truncate_at_char_boundary(&s, 8000);
+        assert!(out.len() <= 8000);
+        assert!(out.len() >= 7998); // last whole char boundary <= 8000
+                                    // Round-trips as valid UTF-8 with only whole CJK chars.
+        assert_eq!(out.chars().count(), out.len() / 3);
+    }
+
+    #[test]
+    fn emoji_boundary_does_not_panic() {
+        // 4-byte emoji * 2500 = 10000 bytes
+        let s: String = "🚀".repeat(2500);
+        let out = truncate_at_char_boundary(&s, 8000);
+        assert!(out.len() <= 8000);
+        assert_eq!(out.len() % 4, 0);
+    }
 }

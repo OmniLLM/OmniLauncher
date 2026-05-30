@@ -140,6 +140,109 @@ pub struct AppState {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Parse a hotkey spec like `"Ctrl+Shift+O"`, `"Alt+Space"`, `"Cmd+K"`, `"F12"`
+/// into a `Shortcut`. Tokens are separated by `+` and case-insensitive.
+/// Modifier tokens: `ctrl`/`control`, `shift`, `alt`/`option`,
+/// `cmd`/`command`/`super`/`meta`. The final token is the key.
+///
+/// Returns `None` if the spec is empty, malformed, or names an unknown key —
+/// callers are expected to fall back to a hard-coded default and surface the
+/// failure to the user.
+fn parse_shortcut(spec: &str) -> Option<Shortcut> {
+    let parts: Vec<&str> = spec
+        .split('+')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let (key_token, mod_tokens) = parts.split_last().unwrap();
+    let mut mods = Modifiers::empty();
+    for m in mod_tokens {
+        match m.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods |= Modifiers::CONTROL,
+            "shift" => mods |= Modifiers::SHIFT,
+            "alt" | "option" => mods |= Modifiers::ALT,
+            "cmd" | "command" | "super" | "meta" | "win" => mods |= Modifiers::SUPER,
+            _ => return None,
+        }
+    }
+    let key = parse_key_code(key_token)?;
+    let mods_opt = if mods.is_empty() { None } else { Some(mods) };
+    Some(Shortcut::new(mods_opt, key))
+}
+
+fn parse_key_code(token: &str) -> Option<Code> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    // Single-character keys: letters and digits.
+    if t.len() == 1 {
+        let c = t.chars().next().unwrap().to_ascii_uppercase();
+        return match c {
+            'A' => Some(Code::KeyA),
+            'B' => Some(Code::KeyB),
+            'C' => Some(Code::KeyC),
+            'D' => Some(Code::KeyD),
+            'E' => Some(Code::KeyE),
+            'F' => Some(Code::KeyF),
+            'G' => Some(Code::KeyG),
+            'H' => Some(Code::KeyH),
+            'I' => Some(Code::KeyI),
+            'J' => Some(Code::KeyJ),
+            'K' => Some(Code::KeyK),
+            'L' => Some(Code::KeyL),
+            'M' => Some(Code::KeyM),
+            'N' => Some(Code::KeyN),
+            'O' => Some(Code::KeyO),
+            'P' => Some(Code::KeyP),
+            'Q' => Some(Code::KeyQ),
+            'R' => Some(Code::KeyR),
+            'S' => Some(Code::KeyS),
+            'T' => Some(Code::KeyT),
+            'U' => Some(Code::KeyU),
+            'V' => Some(Code::KeyV),
+            'W' => Some(Code::KeyW),
+            'X' => Some(Code::KeyX),
+            'Y' => Some(Code::KeyY),
+            'Z' => Some(Code::KeyZ),
+            '0' => Some(Code::Digit0),
+            '1' => Some(Code::Digit1),
+            '2' => Some(Code::Digit2),
+            '3' => Some(Code::Digit3),
+            '4' => Some(Code::Digit4),
+            '5' => Some(Code::Digit5),
+            '6' => Some(Code::Digit6),
+            '7' => Some(Code::Digit7),
+            '8' => Some(Code::Digit8),
+            '9' => Some(Code::Digit9),
+            _ => None,
+        };
+    }
+    match t.to_ascii_lowercase().as_str() {
+        "space" => Some(Code::Space),
+        "enter" | "return" => Some(Code::Enter),
+        "escape" | "esc" => Some(Code::Escape),
+        "tab" => Some(Code::Tab),
+        "backspace" => Some(Code::Backspace),
+        "f1" => Some(Code::F1),
+        "f2" => Some(Code::F2),
+        "f3" => Some(Code::F3),
+        "f4" => Some(Code::F4),
+        "f5" => Some(Code::F5),
+        "f6" => Some(Code::F6),
+        "f7" => Some(Code::F7),
+        "f8" => Some(Code::F8),
+        "f9" => Some(Code::F9),
+        "f10" => Some(Code::F10),
+        "f11" => Some(Code::F11),
+        "f12" => Some(Code::F12),
+        _ => None,
+    }
+}
+
 pub fn run() {
     log::info!("Starting OmniLauncher runtime");
     let settings = load_settings();
@@ -260,7 +363,17 @@ pub fn run() {
         live_server_port,
     };
 
-    let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyO);
+    // Parse the configured hotkey from settings (default "Alt+Space"). On parse
+    // failure we log + fall back to Ctrl+Shift+O so the launcher is always
+    // reachable.
+    let settings_for_hotkey = omnilauncher_lib::settings::load_settings();
+    let shortcut = parse_shortcut(&settings_for_hotkey.hotkey).unwrap_or_else(|| {
+        log::warn!(
+            "settings.hotkey '{}' did not parse — falling back to Ctrl+Shift+O",
+            settings_for_hotkey.hotkey
+        );
+        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyO)
+    });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -327,7 +440,13 @@ pub fn run() {
                         } else {
                             let _ = tray_window.show();
                             let _ = tray_window.set_focus();
-                            let _ = tray_window.emit("omnilauncher://shown", ());
+                            // FIX: emit a String payload so the frontend
+                            // listener (which deserializes selection as a
+                            // string) handles tray clicks identically to the
+                            // hotkey path. Previously this sent `()`, which
+                            // caused a runtime deserialize error in the
+                            // webview's `omnilauncher://shown` listener.
+                            let _ = tray_window.emit("omnilauncher://shown", String::new());
                         }
                     }
                 })
@@ -335,36 +454,59 @@ pub fn run() {
 
             let global_shortcut = app.global_shortcut();
 
-            global_shortcut
-                .on_shortcut(shortcut, move |_app, _shortcut, event| {
+            // FIX: surface registration failures to the frontend so the user
+            // sees a banner instead of a silently-dead hotkey. We still allow
+            // the app to start (the tray click is a working fallback).
+            let shortcut_window = window.clone();
+            let register_result =
+                global_shortcut.on_shortcut(shortcut, move |_app, _shortcut, event| {
                     if let tauri_plugin_global_shortcut::ShortcutState::Pressed = event.state() {
                         log::trace!("Global shortcut pressed; toggling main window visibility");
-                        if window.is_visible().unwrap_or(false) {
-                            let _ = window.hide();
-                        } else {
-                            // Only capture the foreground selection when the
-                            // user has opted in via settings, AND the
-                            // foreground window isn't already one of ours
-                            // (avoids text inside our dashboard bleeding into
-                            // the launcher input on the next hotkey).
-                            let cfg = omnilauncher_lib::settings::load_settings();
-                            let selection =
-                                if cfg.capture_selection_on_open && !foreground_is_ours() {
-                                    omnilauncher_lib::plugins::selection::read_x11_selection()
-                                        .unwrap_or_default()
-                                } else {
-                                    String::new()
-                                };
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            let _ = window.emit("omnilauncher://shown", selection);
+                        if shortcut_window.is_visible().unwrap_or(false) {
+                            let _ = shortcut_window.hide();
+                            return;
                         }
+                        // FIX: previously this called `foreground_is_ours()`
+                        // (synchronous PowerShell on Windows) and a blocking
+                        // X11 selection read directly on the global-hotkey
+                        // dispatcher thread, freezing the GUI for ~200-500ms
+                        // on every press. Move the capture work off-thread
+                        // and show the window immediately so the launcher
+                        // appears instantly; the selection is delivered as a
+                        // follow-up event when ready.
+                        let _ = shortcut_window.show();
+                        let _ = shortcut_window.set_focus();
+                        let _ = shortcut_window.emit("omnilauncher://shown", String::new());
+
+                        let win_for_selection = shortcut_window.clone();
+                        std::thread::spawn(move || {
+                            let cfg = omnilauncher_lib::settings::load_settings();
+                            if !cfg.capture_selection_on_open {
+                                return;
+                            }
+                            if foreground_is_ours() {
+                                return;
+                            }
+                            let selection =
+                                omnilauncher_lib::plugins::selection::read_x11_selection()
+                                    .unwrap_or_default();
+                            if !selection.is_empty() {
+                                let _ =
+                                    win_for_selection.emit("omnilauncher://selection", selection);
+                            }
+                        });
                     }
-                })
-                .unwrap_or_else(|err| {
-                    log::warn!("Failed to register global shortcut: {err}");
-                    eprintln!("Failed to register global shortcut: {err}");
                 });
+
+            if let Err(err) = register_result {
+                log::warn!("Failed to register global shortcut: {err}");
+                eprintln!("Failed to register global shortcut: {err}");
+                // Emit on the main window so the UI can surface a toast.
+                let _ = window.emit(
+                    "omnilauncher://hotkey-error",
+                    format!("Failed to register Ctrl+Shift+O: {err}"),
+                );
+            }
 
             Ok(())
         })
@@ -778,52 +920,51 @@ async fn slash_preview(
             if arg.is_empty() {
                 return Ok(vec![]);
             }
-            // Show matching processes as previews
-            let output = if cfg!(target_os = "windows") {
-                std::process::Command::new("powershell")
-                    .args(["-NoProfile", "-Command",
-                        &format!("Get-Process | Where-Object {{ $_.Name -like '*{}*' }} | Select-Object -First 10 Id, Name, @{{N='MemMB';E={{[math]::Round($_.WorkingSet64/1MB,1)}}}} | ForEach-Object {{ \"$($_.Id)|$($_.Name)|$($_.MemMB)\" }}", arg)])
-                    .output()
-            } else {
-                std::process::Command::new("sh")
-                    .args([
-                        "-c",
-                        &format!("ps aux | grep -i '{}' | grep -v grep | head -10", arg),
-                    ])
-                    .output()
-            };
-            match output {
-                Ok(out) => {
-                    let text = String::from_utf8_lossy(&out.stdout);
-                    let results: Vec<QueryResult> = text
-                        .lines()
-                        .filter(|l| !l.is_empty())
-                        .enumerate()
-                        .filter_map(|(i, line)| {
-                            let parts: Vec<&str> = line.split('|').collect();
-                            if parts.len() >= 2 {
-                                Some(QueryResult {
-                                    id: format!("kill-{}", i),
-                                    title: format!("{} (PID: {})", parts[1], parts[0]),
-                                    subtitle: parts.get(2).map(|m| format!("{} MB", m)),
-                                    icon: Some("💀".to_string()),
-                                    score: 100 - i as i32,
-                                    action_type: "shell".to_string(),
-                                    action_data: if cfg!(target_os = "windows") {
-                                        format!("taskkill /F /PID {}", parts[0])
-                                    } else {
-                                        format!("kill -9 {}", parts[0])
-                                    },
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    Ok(results)
-                }
-                Err(_) => Ok(vec![]),
-            }
+            // SECURITY: Previously this branch interpolated `arg` directly into
+            // `sh -c '... grep -i {arg} ...'` and a PowerShell pipeline, which
+            // is a shell-injection sink (e.g. `/kill x'; rm -rf ~; '`).
+            // Use the in-process `sysinfo` crate instead — no shell, no
+            // string interpolation, no possible injection.
+            use sysinfo::System;
+            let needle = arg.to_lowercase();
+            let mut system = System::new_all();
+            system.refresh_all();
+            let mut matches: Vec<(u32, String, u64)> = system
+                .processes()
+                .iter()
+                .filter_map(|(pid, proc)| {
+                    let name = proc.name().to_string();
+                    if name.to_lowercase().contains(&needle) {
+                        Some((pid.as_u32(), name, proc.memory()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            // Largest memory first — same intent as the original ranking.
+            matches.sort_by_key(|m| std::cmp::Reverse(m.2));
+            matches.truncate(10);
+
+            let results: Vec<QueryResult> = matches
+                .into_iter()
+                .enumerate()
+                .map(|(i, (pid, name, mem_kb))| {
+                    let mem_mb = mem_kb as f64 / 1024.0;
+                    QueryResult {
+                        id: format!("kill-{}", i),
+                        title: format!("{} (PID: {})", name, pid),
+                        subtitle: Some(format!("{:.1} MB", mem_mb)),
+                        icon: Some("💀".to_string()),
+                        score: 100 - i as i32,
+                        // `kill_pid` is handled in `execute_result` and never
+                        // touches a shell — PID is parsed as u32, so no
+                        // injection is possible even if action_data is tampered.
+                        action_type: "kill_pid".to_string(),
+                        action_data: pid.to_string(),
+                    }
+                })
+                .collect();
+            Ok(results)
         }
         "/clip" | "/cb" => {
             let results = pm.query_all(&format!("cb {}", arg)).await;
@@ -966,13 +1107,25 @@ async fn execute_result(
             }
             #[cfg(target_os = "windows")]
             {
-                spawn_external_command("cmd", &["/C", "start", "", &action_data], "open url")
+                // SECURITY: avoid `cmd /C start "" <url>` — `start` is a cmd.exe
+                // builtin and treats `&`, `|`, `^`, `%` etc. in the URL as
+                // shell metacharacters. `rundll32 url.dll,FileProtocolHandler`
+                // hands the URL directly to the registered protocol handler
+                // without a shell parser in the loop.
+                spawn_external_command(
+                    "rundll32",
+                    &["url.dll,FileProtocolHandler", &action_data],
+                    "open url",
+                )
             }
         }
         "shell" | "open_app" => {
             #[cfg(target_os = "windows")]
             {
-                spawn_external_command("cmd", &["/C", "start", "", &result.action_data], "open app")
+                // SECURITY: see above re. `cmd /C start`. For app launches we
+                // route through explorer.exe, which resolves the target via
+                // ShellExecute semantics without a cmd parser.
+                spawn_external_command("explorer", &[&result.action_data], "open app")
             }
             #[cfg(target_os = "macos")]
             {
@@ -1000,6 +1153,39 @@ async fn execute_result(
         "copy" => {
             // Just a copy action — frontend handles clipboard
             true
+        }
+        "kill_pid" => {
+            // SECURITY: PID-typed kill path. action_data MUST parse to u32;
+            // we never shell out, so no string can be smuggled into a command.
+            match result.action_data.trim().parse::<u32>() {
+                Ok(pid) => {
+                    log::info!("kill_pid requested for pid={pid}");
+                    use sysinfo::{Pid, Signal, System};
+                    let mut sys = System::new();
+                    sys.refresh_process(Pid::from_u32(pid));
+                    match sys.process(Pid::from_u32(pid)) {
+                        Some(proc) => {
+                            // kill_with(SIGKILL) on unix, terminate on win.
+                            let ok = proc.kill_with(Signal::Kill).unwrap_or_else(|| proc.kill());
+                            if !ok {
+                                log::warn!("kill_pid failed to terminate pid={pid}");
+                            }
+                            ok
+                        }
+                        None => {
+                            log::warn!("kill_pid: pid={pid} not found");
+                            false
+                        }
+                    }
+                }
+                Err(err) => {
+                    log::warn!(
+                        "kill_pid rejected non-numeric action_data {:?}: {err}",
+                        result.action_data
+                    );
+                    false
+                }
+            }
         }
         "todo_add" => {
             let pm = state.plugin_manager.lock().await;
@@ -1703,6 +1889,31 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_shortcut_accepts_default_alt_space() {
+        // The default shipped in settings.rs MUST parse without falling back.
+        assert!(parse_shortcut("Alt+Space").is_some());
+    }
+
+    #[test]
+    fn parse_shortcut_handles_modifiers_and_keys() {
+        assert!(parse_shortcut("Ctrl+Shift+O").is_some());
+        assert!(parse_shortcut("cmd+k").is_some());
+        assert!(parse_shortcut("F12").is_some());
+        assert!(parse_shortcut("Ctrl+5").is_some());
+    }
+
+    #[test]
+    fn parse_shortcut_rejects_garbage_so_caller_falls_back() {
+        // Empty / lone-modifier / unknown-modifier / unknown-key all return
+        // None so the caller can warn-and-default instead of crashing or
+        // registering a useless binding.
+        assert!(parse_shortcut("").is_none());
+        assert!(parse_shortcut("Ctrl").is_none()); // only a modifier
+        assert!(parse_shortcut("Hyper+J").is_none()); // unknown modifier
+        assert!(parse_shortcut("Ctrl+NotARealKey").is_none());
+    }
 
     #[test]
     fn spawn_external_command_reports_missing_command_failure() {
