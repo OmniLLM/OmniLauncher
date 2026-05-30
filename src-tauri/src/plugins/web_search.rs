@@ -192,6 +192,20 @@ impl Plugin for WebSearchPlugin {
         None // handles multiple prefixes manually
     }
 
+    fn cheap_prefix_match(&self, raw: &str) -> bool {
+        // Either a known engine prefix, OR the bare-query Google fallback
+        // (anything non-empty that isn't claimed by another plugin).
+        if raw.is_empty() {
+            return false;
+        }
+        for &(prefix, _, _, _, _) in SEARCH_ENGINES {
+            if raw.starts_with(prefix) {
+                return true;
+            }
+        }
+        !is_other_plugin_prefix(raw)
+    }
+
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = &q.raw;
         let mut results = vec![];

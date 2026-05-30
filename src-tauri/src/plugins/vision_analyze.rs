@@ -33,6 +33,16 @@ impl Plugin for VisionAnalyzePlugin {
         None
     }
 
+    fn cheap_prefix_match(&self, raw: &str) -> bool {
+        let lower = raw.trim().to_lowercase();
+        lower.starts_with("vision ")
+            || lower.starts_with("vq ")
+            || lower == "vq"
+            || lower == "vision"
+            || lower == "视觉"
+            || lower == "截图分析"
+    }
+
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = q.raw.trim();
         let lower = raw.to_lowercase();

@@ -138,6 +138,14 @@ impl Plugin for AgentDelegatePlugin {
         None
     }
 
+    fn cheap_prefix_match(&self, raw: &str) -> bool {
+        let r = raw.trim_start();
+        r.starts_with("@claude ")
+            || r.starts_with("@codex ")
+            || r.starts_with("@omnicode ")
+            || r.starts_with("@opencode ")
+    }
+
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = q.raw.trim();
 

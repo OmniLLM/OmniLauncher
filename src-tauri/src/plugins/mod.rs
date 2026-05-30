@@ -23,6 +23,17 @@ pub trait Plugin: Send + Sync {
     fn description(&self) -> &str;
     fn keyword(&self) -> Option<&str>;
     async fn query(&self, q: &Query) -> Vec<QueryResult>;
+    /// Cheap, synchronous pre-filter used by `query_all` (launcher UI path) to
+    /// avoid creating per-keystroke futures for plugins that obviously won't
+    /// match. Default returns `true` (preserves legacy behavior).
+    ///
+    /// IMPORTANT: this is ONLY consulted by `query_all`. AI dispatch through
+    /// `execute_tool` / `all_tool_schemas` is unaffected — the plugin is still
+    /// fully registered, its tool schema is always exposed, and its
+    /// `execute_tool` can always be called.
+    fn cheap_prefix_match(&self, _raw: &str) -> bool {
+        true
+    }
     fn tool_schema(&self) -> Option<serde_json::Value> {
         None
     }
@@ -194,7 +205,14 @@ impl PluginManager {
         let futures = self
             .plugins
             .iter()
-            .filter(|p| p.keyword().is_none_or(|kw| keyword_matches(raw, kw)))
+            .filter(|p| match p.keyword() {
+                Some(kw) => keyword_matches(raw, kw),
+                // For keyword-less plugins, consult the cheap prefix filter so
+                // we don't spawn a future for every plugin on every keystroke.
+                // Default impl returns true → behavior unchanged for plugins
+                // that don't override it.
+                None => p.cheap_prefix_match(raw),
+            })
             .map(|p| async move {
                 match tokio::time::timeout(PLUGIN_TIMEOUT, p.query(q_ref)).await {
                     Ok(v) => v,

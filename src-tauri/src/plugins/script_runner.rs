@@ -16,6 +16,8 @@ use crate::path_config;
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
 pub struct ScriptRunnerPlugin;
@@ -25,6 +27,29 @@ struct ScriptMeta {
     icon: String,
     desc: String,
     path: PathBuf,
+}
+
+impl Clone for ScriptMeta {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            icon: self.icon.clone(),
+            desc: self.desc.clone(),
+            path: self.path.clone(),
+        }
+    }
+}
+
+const SCRIPTS_TTL: Duration = Duration::from_secs(60);
+
+struct ScriptsCache {
+    items: Vec<ScriptMeta>,
+    built_at: Instant,
+}
+
+fn scripts_cache() -> &'static Mutex<Option<ScriptsCache>> {
+    static CELL: OnceLock<Mutex<Option<ScriptsCache>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(None))
 }
 
 fn scripts_dir() -> PathBuf {
@@ -144,13 +169,28 @@ fn parse_meta(path: &PathBuf) -> Option<ScriptMeta> {
 }
 
 fn load_scripts() -> Vec<ScriptMeta> {
+    // 60s in-memory cache. Disk IO only happens on first call or after TTL.
+    if let Ok(guard) = scripts_cache().lock() {
+        if let Some(c) = &*guard {
+            if c.built_at.elapsed() < SCRIPTS_TTL {
+                return c.items.clone();
+            }
+        }
+    }
+
     let dir = scripts_dir();
     if !dir.exists() {
         let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut guard) = scripts_cache().lock() {
+            *guard = Some(ScriptsCache {
+                items: vec![],
+                built_at: Instant::now(),
+            });
+        }
         return vec![];
     }
 
-    WalkDir::new(&dir)
+    let items: Vec<ScriptMeta> = WalkDir::new(&dir)
         .max_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -169,7 +209,15 @@ fn load_scripts() -> Vec<ScriptMeta> {
                     .unwrap_or(false)
         })
         .filter_map(|e| parse_meta(&e.path().to_path_buf()))
-        .collect()
+        .collect();
+
+    if let Ok(mut guard) = scripts_cache().lock() {
+        *guard = Some(ScriptsCache {
+            items: items.clone(),
+            built_at: Instant::now(),
+        });
+    }
+    items
 }
 
 #[async_trait]
@@ -186,19 +234,23 @@ impl Plugin for ScriptRunnerPlugin {
         None // participates in global search
     }
 
+    fn cheap_prefix_match(&self, raw: &str) -> bool {
+        let r = raw.trim().to_lowercase();
+        r == "sc" || r == "scripts" || r.starts_with("sc ")
+    }
+
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = q.raw.trim().to_lowercase();
 
-        // Only activate on "sc " prefix or if query matches script names
+        // Strict triggers only. Previously a bare `raw.len() >= 2` branch
+        // caused script_runner to hit disk on every keystroke regardless of
+        // user intent — removed.
         let filter = if let Some(f) = raw.strip_prefix("sc ") {
             f.trim().to_string()
         } else if raw == "sc" || raw == "scripts" {
             String::new()
-        } else if raw.len() < 2 {
-            return vec![];
         } else {
-            // global search: only show if there's a matching script
-            raw.clone()
+            return vec![];
         };
 
         let scripts = load_scripts();

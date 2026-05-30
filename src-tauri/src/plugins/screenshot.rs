@@ -248,6 +248,15 @@ impl Plugin for ScreenshotPlugin {
         None
     }
 
+    fn cheap_prefix_match(&self, raw: &str) -> bool {
+        let r = raw.trim().to_lowercase();
+        r == "ss"
+            || r == "screenshot"
+            || r == "截图"
+            || r.starts_with("ss ")
+            || r.starts_with("screenshot ")
+    }
+
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = q.raw.trim().to_lowercase();
 

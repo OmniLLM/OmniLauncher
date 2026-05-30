@@ -18,6 +18,10 @@ impl Plugin for NetworkPlugin {
         None
     }
 
+    fn cheap_prefix_match(&self, raw: &str) -> bool {
+        network_term(raw.trim_start()).is_some()
+    }
+
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = q.raw.trim_start();
         let Some(term) = network_term(raw) else {

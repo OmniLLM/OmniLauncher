@@ -38,6 +38,11 @@ impl Plugin for UrlOpenerPlugin {
         None
     }
 
+    fn cheap_prefix_match(&self, raw: &str) -> bool {
+        let r = raw.trim();
+        r.starts_with("http://") || r.starts_with("https://") || r.starts_with("localhost:")
+    }
+
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         let raw = q.raw.trim();
         if raw.starts_with("http://")

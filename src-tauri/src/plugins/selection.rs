@@ -306,6 +306,10 @@ impl Plugin for SelectionPlugin {
         None
     }
 
+    fn cheap_prefix_match(&self, raw: &str) -> bool {
+        raw.starts_with("sel ") || raw.starts_with("selection ") || raw.starts_with(SEL_PREFIX)
+    }
+
     async fn query(&self, q: &Query) -> Vec<QueryResult> {
         match get_selection_from_query(&q.raw) {
             Some(text) => build_actions(&text),

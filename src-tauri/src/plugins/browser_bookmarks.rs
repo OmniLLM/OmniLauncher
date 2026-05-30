@@ -2,8 +2,27 @@ use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 pub struct BrowserBookmarksPlugin;
+
+const BOOKMARKS_TTL: Duration = Duration::from_secs(60);
+
+/// Cached snapshot of the parsed bookmarks set.
+struct BookmarksCache {
+    entries: Vec<(String, String)>,
+    /// (path, last-known mtime) for each source file we've previously parsed.
+    /// If none of these changed AND the cache is still within TTL, we can skip
+    /// JSON parsing entirely.
+    source_mtimes: Vec<(PathBuf, Option<SystemTime>)>,
+    built_at: Instant,
+}
+
+fn bookmarks_cache() -> &'static Mutex<Option<BookmarksCache>> {
+    static CELL: OnceLock<Mutex<Option<BookmarksCache>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(None))
+}
 
 #[derive(Debug, Deserialize)]
 struct BookmarkEntry {
@@ -110,16 +129,51 @@ impl BrowserBookmarksPlugin {
     }
 
     fn load_all_bookmarks() -> Vec<(String, String)> {
-        let mut all = vec![];
-        if let Some(path) = Self::get_chrome_bookmarks_path() {
-            if path.exists() {
-                all.extend(Self::load_bookmarks_from_file(&path));
+        // Gather candidate source paths up front.
+        let mut sources: Vec<PathBuf> = vec![];
+        if let Some(p) = Self::get_chrome_bookmarks_path() {
+            if p.exists() {
+                sources.push(p);
             }
         }
-        if let Some(path) = Self::get_edge_bookmarks_path() {
-            if path.exists() {
-                all.extend(Self::load_bookmarks_from_file(&path));
+        if let Some(p) = Self::get_edge_bookmarks_path() {
+            if p.exists() {
+                sources.push(p);
             }
+        }
+
+        let current_mtimes: Vec<(PathBuf, Option<SystemTime>)> = sources
+            .iter()
+            .map(|p| (p.clone(), std::fs::metadata(p).and_then(|m| m.modified()).ok()))
+            .collect();
+
+        // Fast path: cache still warm AND no source file has changed mtime —
+        // skip JSON parsing entirely.
+        {
+            let guard = bookmarks_cache().lock().ok();
+            if let Some(guard) = guard {
+                if let Some(c) = &*guard {
+                    if c.built_at.elapsed() < BOOKMARKS_TTL
+                        && c.source_mtimes == current_mtimes
+                    {
+                        return c.entries.clone();
+                    }
+                }
+            }
+        }
+
+        // Slow path: re-parse everything.
+        let mut all = vec![];
+        for path in &sources {
+            all.extend(Self::load_bookmarks_from_file(path));
+        }
+
+        if let Ok(mut guard) = bookmarks_cache().lock() {
+            *guard = Some(BookmarksCache {
+                entries: all.clone(),
+                source_mtimes: current_mtimes,
+                built_at: Instant::now(),
+            });
         }
         all
     }
@@ -137,6 +191,11 @@ impl Plugin for BrowserBookmarksPlugin {
 
     fn keyword(&self) -> Option<&str> {
         None
+    }
+
+    fn cheap_prefix_match(&self, raw: &str) -> bool {
+        let r = raw.trim_start();
+        r.starts_with("bm ") || r.starts_with("b ")
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {

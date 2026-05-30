@@ -156,6 +156,11 @@ interface SlashCommand {
   examples: string[];
 }
 
+/// Debounce window between keystroke and backend `query_all`. 150ms balances
+/// "feels instant" against "don't fire a query mid-burst" — every shaved ms
+/// here shows up directly as launcher latency.
+const SEARCH_DEBOUNCE_MS = 150;
+
 const SLASH_COMMANDS: SlashCommand[] = [
   {
     cmd: "/plugins",
@@ -656,7 +661,7 @@ export default function App() {
         // every keystroke (flash/flicker UX issue).
         debounceRef.current = setTimeout(() => {
           doSearch(value);
-        }, 100);
+        }, SEARCH_DEBOUNCE_MS);
       } else {
         // In AI mode, clear slash suggestions when user types past the prefix
         searchSeqRef.current++;
