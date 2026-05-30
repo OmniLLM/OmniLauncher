@@ -1388,7 +1388,6 @@ export default function App() {
         {showSkillManager && (
           <Suspense fallback={null}>
             <SkillManager
-              colors={colors}
               onClose={() => setShowSkillManager(false)}
             />
           </Suspense>

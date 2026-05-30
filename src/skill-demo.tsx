@@ -59,5 +59,5 @@ const root = document.getElementById("root")!;
 root.style.cssText = `background:${DARK_COLORS.bg};height:100vh;display:flex;flex-direction:column;font-family:'Segoe UI',system-ui,sans-serif;`;
 
 createRoot(root).render(
-  <SkillManager colors={DARK_COLORS} onClose={() => alert("Close clicked")} />
+  <SkillManager onClose={() => alert("Close clicked")} />
 );
