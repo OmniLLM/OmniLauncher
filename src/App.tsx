@@ -143,33 +143,8 @@ function isHelpHintQuery(input: string): boolean {
   return input.trim().toLowerCase() === "help";
 }
 
-const DARK_COLORS = {
-  bg: "#202124",
-  surface: "#303134",
-  surface2: "#3c3f43",
-  text: "#e8eaed",
-  accent: "#8ab4f8",
-  accentDim: "#aecbfa",
-  sub: "#9aa0a6",
-  userBubble: "#1a73e8",
-  userBubbleText: "#ffffff",
-  aiBubble: "#303134",
-  aiText: "#e8eaed",
-};
-
-const LIGHT_COLORS = {
-  bg: "#EFF1F5",
-  surface: "#CCD0DA",
-  surface2: "#BCC0CC",
-  text: "#4C4F69",
-  accent: "#8839EF",
-  accentDim: "#6E28CF",
-  sub: "#9CA0B0",
-  userBubble: "#8839EF",
-  userBubbleText: "#EFF1F5",
-  aiBubble: "#CCD0DA",
-  aiText: "#4C4F69",
-};
+// Theme colors are defined in styles.css via [data-theme="dark"] / [data-theme="light"]
+// CSS variables. Components read them with var(--bg), var(--accent), etc.
 
 // ─── Slash commands ───────────────────────────────────────────────────────────
 
@@ -276,7 +251,6 @@ export default function App() {
 
   const resolvedTheme: ResolvedTheme =
     theme === "system" ? systemTheme : theme;
-  const colors = resolvedTheme === "dark" ? DARK_COLORS : LIGHT_COLORS;
 
   const handleThemeToggle = useCallback(async () => {
     const next: ThemeMode = resolvedTheme === "dark" ? "light" : "dark";
@@ -1083,12 +1057,12 @@ export default function App() {
               ? backgroundUrl
                 ? `
                   linear-gradient(180deg, rgba(6, 12, 24, 0.74) 0%, rgba(8, 14, 28, 0.86) 100%),
-                  radial-gradient(circle at 18% -6%, ${colors.accent}1F 0, transparent 40%),
+                  radial-gradient(circle at 18% -6%, color-mix(in srgb, var(--accent) 12%, transparent) 0, transparent 40%),
                   url("${backgroundUrl}") center top / cover no-repeat
                 `
                 : `linear-gradient(160deg, #0b1220 0%, #0e1930 52%, #0a1426 100%)`
-              : colors.bg,
-          color: colors.text,
+              : "var(--bg)",
+          color: "var(--text)",
           fontFamily: shellFont,
           borderRadius: "0",
           overflow: "hidden",
@@ -1100,7 +1074,7 @@ export default function App() {
           boxSizing: "border-box",
           transition:
             "height 220ms cubic-bezier(0.4,0,0.2,1), max-height 220ms cubic-bezier(0.4,0,0.2,1)",
-          outline: isAiMode ? `1.5px solid ${colors.accent}33` : "none",
+          outline: isAiMode ? `1.5px solid color-mix(in srgb, var(--accent) 20%, transparent)` : "none",
         }}
       >
         {showSettings && (
@@ -1123,7 +1097,7 @@ export default function App() {
             <span
               style={{
                 fontSize: "13px",
-                color: colors.accent,
+                color: "var(--accent)",
                 fontWeight: 600,
                 letterSpacing: "0.03em",
               }}
@@ -1135,11 +1109,11 @@ export default function App() {
                 onClick={() => setShowSessionPicker((v) => !v)}
                 title="Switch sessions"
                 style={{
-                  background: showSessionPicker ? colors.surface2 : colors.surface,
+                  background: showSessionPicker ? "var(--surface-2)" : "var(--surface)",
                   border: "none",
                   borderRadius: "7px",
                   padding: "4px 11px",
-                  color: colors.text,
+                  color: "var(--text)",
                   cursor: "pointer",
                   fontSize: "12px",
                   display: "flex",
@@ -1148,12 +1122,12 @@ export default function App() {
                   maxWidth: "240px",
                 }}
                 onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = colors.surface2)
+                  (e.currentTarget.style.background = "var(--surface-2)")
                 }
                 onMouseLeave={(e) =>
                   (e.currentTarget.style.background = showSessionPicker
-                    ? colors.surface2
-                    : colors.surface)
+                    ? "var(--surface-2)"
+                    : "var(--surface)")
                 }
               >
                 <span style={{ fontSize: "10px" }}>💬</span>
@@ -1179,11 +1153,11 @@ export default function App() {
               <button
                 onClick={handleNewConversation}
                 style={{
-                  background: colors.surface,
+                  background: "var(--surface)",
                   border: "none",
                   borderRadius: "7px",
                   padding: "4px 11px",
-                  color: colors.text,
+                  color: "var(--text)",
                   cursor: "pointer",
                   fontSize: "12px",
                   display: "flex",
@@ -1191,10 +1165,10 @@ export default function App() {
                   gap: "5px",
                 }}
                 onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = colors.surface2)
+                  (e.currentTarget.style.background = "var(--surface-2)")
                 }
                 onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = colors.surface)
+                  (e.currentTarget.style.background = "var(--surface)")
                 }
               >
                 <span style={{ fontSize: "10px" }}>✦</span> New conversation
@@ -1209,8 +1183,8 @@ export default function App() {
                     width: "320px",
                     maxHeight: "360px",
                     overflowY: "auto",
-                    background: colors.surface,
-                    border: `1px solid ${colors.surface2}`,
+                    background: "var(--surface)",
+                    border: `1px solid var(--surface-2)`,
                     borderRadius: "10px",
                     boxShadow: "0 12px 32px rgba(0,0,0,0.35)",
                     zIndex: 50,
@@ -1223,7 +1197,7 @@ export default function App() {
                       style={{
                         padding: "10px 12px",
                         fontSize: "12px",
-                        color: colors.sub,
+                        color: "var(--sub)",
                       }}
                     >
                       No sessions yet.
@@ -1242,14 +1216,14 @@ export default function App() {
                           padding: "7px 9px",
                           borderRadius: "7px",
                           cursor: "pointer",
-                          background: active ? colors.surface2 : "transparent",
+                          background: active ? "var(--surface-2)" : "transparent",
                         }}
                         onMouseEnter={(e) =>
-                          (e.currentTarget.style.background = colors.surface2)
+                          (e.currentTarget.style.background = "var(--surface-2)")
                         }
                         onMouseLeave={(e) =>
                           (e.currentTarget.style.background = active
-                            ? colors.surface2
+                            ? "var(--surface-2)"
                             : "transparent")
                         }
                       >
@@ -1257,7 +1231,7 @@ export default function App() {
                           <div
                             style={{
                               fontSize: "12.5px",
-                              color: colors.text,
+                              color: "var(--text)",
                               fontWeight: active ? 600 : 500,
                               overflow: "hidden",
                               textOverflow: "ellipsis",
@@ -1269,7 +1243,7 @@ export default function App() {
                           <div
                             style={{
                               fontSize: "10.5px",
-                              color: colors.sub,
+                              color: "var(--sub)",
                               marginTop: "2px",
                               display: "flex",
                               gap: "8px",
@@ -1290,7 +1264,7 @@ export default function App() {
                           style={{
                             background: "transparent",
                             border: "none",
-                            color: colors.sub,
+                            color: "var(--sub)",
                             cursor: "pointer",
                             fontSize: "13px",
                             padding: "2px 6px",
@@ -1302,7 +1276,7 @@ export default function App() {
                           }}
                           onMouseLeave={(e) => {
                             e.currentTarget.style.background = "transparent";
-                            e.currentTarget.style.color = colors.sub;
+                            e.currentTarget.style.color = "var(--sub)";
                           }}
                         >
                           ×
@@ -1328,7 +1302,7 @@ export default function App() {
               flexDirection: "column",
               gap: "10px",
               scrollbarWidth: "thin",
-              scrollbarColor: `${colors.surface2} transparent`,
+              scrollbarColor: `var(--surface-2) transparent`,
             }}
           >
             {conversationHistory.length === 0 && queuedPrompts.length === 0 && (
@@ -1339,7 +1313,7 @@ export default function App() {
                   flexDirection: "column",
                   alignItems: "center",
                   justifyContent: "center",
-                  color: colors.sub,
+                  color: "var(--sub)",
                   gap: "8px",
                   paddingBottom: "24px",
                   minHeight: "360px",
@@ -1361,14 +1335,13 @@ export default function App() {
             )}
 
             {conversationHistory.map((turn, i) => (
-              <ChatBubble key={i} turn={turn} colors={colors} />
+              <ChatBubble key={i} turn={turn} />
             ))}
 
             {queuedPrompts.map((prompt, i) => (
               <QueuedPromptBubble
                 key={`queued-${i}-${prompt}`}
                 prompt={prompt}
-                colors={colors}
               />
             ))}
           </div>
@@ -1399,12 +1372,11 @@ export default function App() {
               <FavoritesList
                 favoriteIds={favorites}
                 onExecute={handleExecute}
-                colors={colors}
                 onFavoritesChange={setFavorites}
               />
             )}
             {results.length > 0 && (
-              <ResultList results={results} query={query} onExecute={handleExecute} colors={colors} />
+              <ResultList results={results} query={query} onExecute={handleExecute} />
             )}
             {/* Loading skeleton — only when the user has typed something and
                 we're waiting on the backend (no stale results to show). */}
@@ -1414,7 +1386,7 @@ export default function App() {
                 style={{
                   padding: "12px 16px",
                   fontSize: 13,
-                  color: colors.sub,
+                  color: "var(--sub)",
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
@@ -1425,7 +1397,7 @@ export default function App() {
                     width: 10,
                     height: 10,
                     borderRadius: "50%",
-                    background: colors.accent,
+                    background: "var(--accent)",
                     animation: "omni-dot-pulse 1.2s ease-in-out infinite",
                   }}
                 />
@@ -1441,12 +1413,12 @@ export default function App() {
                   padding: "16px",
                   textAlign: "center",
                   fontSize: 13,
-                  color: colors.sub,
+                  color: "var(--sub)",
                   lineHeight: 1.55,
                 }}
               >
                 <div style={{ fontSize: 22, marginBottom: 4 }}>🔍</div>
-                No matches for <strong style={{ color: colors.text }}>{query}</strong>
+                No matches for <strong style={{ color: "var(--text)" }}>{query}</strong>
                 <div style={{ marginTop: 6, fontSize: 12 }}>
                   Press <kbd style={{
                     fontFamily: "monospace",
@@ -1475,7 +1447,6 @@ export default function App() {
             results={results}
             query={query}
             onExecute={handleExecute}
-            colors={colors}
           />
         )}
 
@@ -1495,7 +1466,6 @@ export default function App() {
             loading={loading}
             queueDepth={queueDepth}
             onCancel={handleCancelAiRequest}
-            colors={colors}
             onSettingsClick={() => setShowSettings(true)}
             resolvedTheme={resolvedTheme}
             onThemeToggle={handleThemeToggle}
@@ -1604,13 +1574,7 @@ function toolIcon(tool: string): string {
   return "🔧";
 }
 
-function QueuedPromptBubble({
-  prompt,
-  colors,
-}: {
-  prompt: string;
-  colors: typeof DARK_COLORS;
-}) {
+function QueuedPromptBubble({ prompt }: { prompt: string }) {
   return (
     <div
       className="omni-bubble-enter"
@@ -1625,7 +1589,7 @@ function QueuedPromptBubble({
       <span
         style={{
           fontSize: "11px",
-          color: colors.sub,
+          color: "var(--sub)",
           paddingRight: "6px",
           letterSpacing: 0,
         }}
@@ -1637,12 +1601,12 @@ function QueuedPromptBubble({
           maxWidth: "78%",
           padding: "9px 14px",
           borderRadius: "16px 16px 4px 16px",
-          background: `${colors.userBubble}80`,
-          color: colors.userBubbleText,
+          background: `color-mix(in srgb, var(--user-bubble) 50%, transparent)`,
+          color: "var(--user-bubble-text)",
           fontSize: "14px",
           lineHeight: "1.65",
           wordBreak: "break-word",
-          border: `1px dashed ${colors.accent}66`,
+          border: `1px dashed color-mix(in srgb, var(--accent) 40%, transparent)`,
         }}
       >
         {prompt}
@@ -1653,10 +1617,8 @@ function QueuedPromptBubble({
 
 const ChatBubble = memo(function ChatBubble({
   turn,
-  colors,
 }: {
   turn: ConversationTurn;
-  colors: typeof DARK_COLORS;
 }) {
   const isUser = turn.role === "user";
   // Memoize the expensive markdown render so streaming a sibling bubble doesn't re-render this one.
@@ -1713,20 +1675,20 @@ const ChatBubble = memo(function ChatBubble({
           maxWidth: "78%",
           padding: isUser ? "9px 14px" : "10px 14px",
           borderRadius: isUser ? "16px 16px 4px 16px" : "4px 16px 16px 16px",
-          background: isUser ? colors.userBubble : colors.aiBubble,
-          color: isUser ? colors.userBubbleText : colors.aiText,
+          background: isUser ? "var(--user-bubble)" : "var(--ai-bubble)",
+          color: isUser ? "var(--user-bubble-text)" : "var(--ai-text)",
           fontSize: "14px",
           lineHeight: "1.65",
           wordBreak: "break-word",
           // Assistant bubble gets a subtle accent left border
-          borderLeft: !isUser ? `3px solid ${colors.accent}55` : "none",
+          borderLeft: !isUser ? `3px solid color-mix(in srgb, var(--accent) 33%, transparent)` : "none",
           boxShadow: isUser
-            ? `0 2px 8px ${colors.userBubble}44`
+            ? `0 2px 8px color-mix(in srgb, var(--user-bubble) 27%, transparent)`
             : "0 1px 4px rgba(0,0,0,0.15)",
         }}
       >
         {turn.isStreaming ? (
-          <LoadingDots color={colors.sub} />
+          <LoadingDots color="var(--sub)" />
         ) : isUser ? (
           <span>{turn.content}</span>
         ) : (

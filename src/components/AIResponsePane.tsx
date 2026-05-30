@@ -18,7 +18,6 @@ interface AiResponse {
 
 interface Props {
   response: AiResponse | null;
-  colors: Record<string, string>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

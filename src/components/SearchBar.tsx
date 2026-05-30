@@ -11,7 +11,6 @@ interface Props {
   queueDepth?: number;
   /** Called when the user clicks the spinner / Stop button while loading. */
   onCancel?: () => void;
-  colors: Record<string, string>;
   onSettingsClick: () => void;
   /** Show the one-line hint bar at the bottom of an empty launcher input */
   showHintBar?: boolean;
@@ -217,7 +216,6 @@ export default function SearchBar({
   loading,
   queueDepth = 0,
   onCancel,
-  colors,
   onSettingsClick,
   showHintBar = false,
   compact = false,
@@ -297,7 +295,7 @@ export default function SearchBar({
         flexShrink: 0,
         padding: isAiMode ? "14px 16px 18px" : 0,
         background: isAiMode
-          ? `linear-gradient(to top, ${colors.bg} 70%, ${colors.bg}00)`
+          ? `linear-gradient(to top, var(--bg) 70%, transparent)`
           : "transparent",
       }}
     >
@@ -311,7 +309,7 @@ export default function SearchBar({
         >
           <div
             style={{
-              color: colors.text,
+              color: "var(--text)",
               fontSize: s.taglineFontSize,
               fontWeight: 800,
               letterSpacing: s.taglineLetterSpacing,
@@ -326,7 +324,7 @@ export default function SearchBar({
               <span
                 aria-hidden
                 style={{
-                  color: colors.accent,
+                  color: "var(--accent)",
                   fontSize: "15px",
                   lineHeight: 1,
                 }}
@@ -352,8 +350,8 @@ export default function SearchBar({
           margin: s.wrapMargin,
           gap: "10px",
           boxSizing: "border-box",
-          border: `1px solid ${colors.surface2}`,
-          background: isAiMode ? `${colors.surface}80` : colors.bg,
+          border: "1px solid var(--surface-2)",
+          background: isAiMode ? "color-mix(in srgb, var(--surface) 50%, transparent)" : "var(--bg)",
           backdropFilter: isAiMode ? "blur(10px)" : undefined,
           WebkitBackdropFilter: isAiMode ? "blur(10px)" : undefined,
           borderRadius: s.wrapRadius,
@@ -372,18 +370,18 @@ export default function SearchBar({
               background: "transparent",
               border: "none",
               padding: 0,
-              color: colors.accent,
+              color: "var(--accent)",
               alignSelf: isAiMode ? "center" : undefined,
               marginBottom: isAiMode ? "4px" : 0,
             }}
           >
             <span className="omni-stop-glyph__spinner">
-              <LoadingSpinner color={colors.accent} />
+              <LoadingSpinner color={"var(--accent)"} />
             </span>
             <span
               className="omni-stop-glyph__square"
               style={{
-                background: colors.accent,
+                background: "var(--accent)",
                 width: "10px",
                 height: "10px",
                 borderRadius: "2px",
@@ -396,7 +394,7 @@ export default function SearchBar({
             style={{
               fontSize: s.iconFontSize,
               opacity: s.iconOpacity,
-              color: isAiMode ? colors.accent : compact ? colors.text : undefined,
+              color: isAiMode ? "var(--accent)" : compact ? "var(--text)" : undefined,
               flexShrink: 0,
               lineHeight: 1,
               display: "flex",
@@ -476,8 +474,8 @@ export default function SearchBar({
               border: "none",
               outline: "none",
               fontSize: "15px",
-              color: colors.text,
-              caretColor: colors.accent,
+              color: "var(--text)",
+              caretColor: "var(--accent)",
               fontFamily: "inherit",
               fontWeight: 400,
               letterSpacing: 0,
@@ -524,8 +522,8 @@ export default function SearchBar({
               border: "none",
               outline: "none",
               fontSize: s.inputFontSize,
-              color: colors.text,
-              caretColor: colors.accent,
+              color: "var(--text)",
+              caretColor: "var(--accent)",
               fontFamily: "inherit",
               fontWeight: s.inputFontWeight,
               letterSpacing: 0,
@@ -550,9 +548,9 @@ export default function SearchBar({
               minHeight: "30px",
               padding: "5px 10px",
               borderRadius: "8px",
-              border: `1px solid ${colors.accent}55`,
-              background: `${colors.accent}20`,
-              color: colors.accent,
+              border: "1px solid color-mix(in srgb, var(--accent) 33%, transparent)",
+              background: "color-mix(in srgb, var(--accent) 13%, transparent)",
+              color: "var(--accent)",
               fontSize: "12px",
               fontWeight: 700,
               letterSpacing: 0,
@@ -609,7 +607,7 @@ export default function SearchBar({
               scrollbarWidth: compact && !wrapHints ? "thin" : undefined,
               scrollbarColor:
                 compact && !wrapHints
-                  ? `${colors.surface2} transparent`
+                  ? "var(--surface-2) transparent"
                   : undefined,
               marginBottom: "4px",
             }}
@@ -636,7 +634,7 @@ export default function SearchBar({
               scrollbarWidth: compact && !wrapHints ? "thin" : undefined,
               scrollbarColor:
                 compact && !wrapHints
-                  ? `${colors.surface2} transparent`
+                  ? "var(--surface-2) transparent"
                   : undefined,
             }}
           >

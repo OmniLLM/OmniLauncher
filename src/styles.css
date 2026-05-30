@@ -20,6 +20,8 @@
     0 4px 16px rgba(0, 0, 0, 0.4);
   --user-bubble: #1a73e8;
   --user-bubble-text: #ffffff;
+  --ai-bubble: #303134;
+  --ai-text: #e8eaed;
   --success: #34a853;
   --error: #ea4335;
   --warning: #fbbc04;
@@ -43,6 +45,8 @@
   --shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(0, 0, 0, 0.06);
   --user-bubble: #8839ef;
   --user-bubble-text: #eff1f5;
+  --ai-bubble: #ccd0da;
+  --ai-text: #4c4f69;
   --success: #40a02b;
   --error: #d20f39;
   --warning: #df8e1d;
@@ -2197,4 +2201,71 @@ mark {
 .plugin-row__action {
   flex-shrink: 0;
   font-weight: 600;
+}
+
+/* ============================================================
+   Favorites list
+   ============================================================ */
+.omni-favorites {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.omni-favorites__header {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--sub);
+  text-transform: uppercase;
+  padding: 6px 16px 4px;
+  opacity: 0.7;
+}
+.omni-favorites__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+.omni-favorites__row:hover {
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+}
+.omni-favorites__icon {
+  font-size: 18px;
+  width: 22px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.omni-favorites__main {
+  flex: 1;
+  min-width: 0;
+}
+.omni-favorites__title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.omni-favorites__sub {
+  font-size: 12px;
+  color: var(--sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.omni-favorites__star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #f5c842;
+  font-size: 13px;
+  padding: 0 2px;
+  opacity: 0.8;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.omni-favorites__star:hover {
+  opacity: 1;
+  transform: scale(1.15);
 }

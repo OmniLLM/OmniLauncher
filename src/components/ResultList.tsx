@@ -15,7 +15,6 @@ interface Props {
   results: QueryResult[];
   query: string;
   onExecute: (r: QueryResult) => void;
-  colors: Record<string, string>;
 }
 
 const ACTION_BADGE: Record<string, string> = {
@@ -77,7 +76,6 @@ export default function ResultList({
   results,
   query,
   onExecute,
-  colors: _colors,
 }: Props) {
   const [selected, setSelected] = useState(0);
   const [hovered, setHovered] = useState(-1);
