@@ -1614,3 +1614,111 @@ async fn test_web_search_github() {
         .await;
     assert!(r.contains("github.com"), "Got: {}", r);
 }
+
+// ============================================================
+// H1 — query_all stays fast for keyword-less plugins
+// ============================================================
+
+#[tokio::test]
+async fn test_query_all_fast_for_empty_and_nonmatching_queries() {
+    let pm = create_plugin_manager();
+
+    // Empty query: every keyword-less plugin is consulted. Must be quick.
+    let start = std::time::Instant::now();
+    let _ = pm.query_all("").await;
+    let empty_elapsed = start.elapsed();
+    assert!(
+        empty_elapsed < std::time::Duration::from_millis(200),
+        "query_all(\"\") took {empty_elapsed:?}, expected < 200ms"
+    );
+
+    // A random non-matching string: nothing should do heavy work.
+    let start = std::time::Instant::now();
+    let _ = pm.query_all("xyz_no_match_random_string").await;
+    let nomatch_elapsed = start.elapsed();
+    assert!(
+        nomatch_elapsed < std::time::Duration::from_millis(200),
+        "query_all(\"xyz_no_match_random_string\") took {nomatch_elapsed:?}, expected < 200ms"
+    );
+}
+
+// ============================================================
+// H4 — ExternalPlugin end-to-end
+// ============================================================
+
+#[cfg(unix)]
+mod external_plugin_e2e {
+    use omnilauncher_lib::plugins::external::load_external_plugins_from;
+    use omnilauncher_lib::plugins::{Plugin, Query};
+
+    fn write_plugin(base: &std::path::Path, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let plugin_dir = base.join("e2e-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{"name":"e2e-plugin","description":"e2e","version":"1.0.0","keyword":"e2e","entry":"run.sh"}"#,
+        )
+        .unwrap();
+        let run = plugin_dir.join("run.sh");
+        std::fs::write(&run, script).unwrap();
+        let mut perms = std::fs::metadata(&run).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&run, perms).unwrap();
+    }
+
+    fn mk_query(raw: &str) -> Query {
+        Query {
+            raw: raw.to_string(),
+            terms: raw.split_whitespace().map(String::from).collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn external_plugin_query_and_execute_roundtrip() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Echoes a query result for op=query and {"output":"ok"} for op=execute.
+        let script = r#"#!/usr/bin/env bash
+read -r request
+op=$(printf '%s' "$request" | python3 -c "import sys,json;print(json.load(sys.stdin)['op'])")
+if [ "$op" = "query" ]; then
+  echo '{"results":[{"id":"r1","title":"Result One","score":80,"action_type":"copy","action_data":"hello"}]}'
+elif [ "$op" = "execute" ]; then
+  echo '{"output":"ok"}'
+fi
+"#;
+        write_plugin(tmp.path(), script);
+
+        let plugins =
+            load_external_plugins_from(&[tmp.path().to_string_lossy().to_string()]);
+        let plugin = plugins
+            .iter()
+            .find(|p| p.name() == "e2e-plugin")
+            .expect("plugin should be discovered");
+
+        let results = plugin.query(&mk_query("e2e foo")).await;
+        assert_eq!(results.len(), 1, "expected one parsed result");
+        assert_eq!(results[0].title, "Result One");
+
+        let out = plugin.execute_action("r1", "hello").await;
+        assert_eq!(out.as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn external_plugin_failing_script_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Always exits 1 → call() returns None → query returns empty.
+        let script = "#!/usr/bin/env bash\nexit 1\n";
+        write_plugin(tmp.path(), script);
+
+        let plugins =
+            load_external_plugins_from(&[tmp.path().to_string_lossy().to_string()]);
+        let plugin = plugins
+            .iter()
+            .find(|p| p.name() == "e2e-plugin")
+            .expect("plugin should be discovered");
+
+        let results = plugin.query(&mk_query("e2e foo")).await;
+        assert!(results.is_empty(), "failing script should yield no results");
+    }
+}

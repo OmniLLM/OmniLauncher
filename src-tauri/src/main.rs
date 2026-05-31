@@ -561,6 +561,7 @@ pub fn run() {
             update_plugin_collection_all,
             remove_plugin_collection,
             list_plugins,
+            list_quarantined_plugins,
             remove_plugin,
             capture_vision_screenshot,
             set_window_size_centered,
@@ -1625,6 +1626,15 @@ async fn install_system_runtime(id: &str, window: &tauri::WebviewWindow) -> Resu
 fn list_plugins() -> Vec<serde_json::Value> {
     log::trace!("list_plugins invoked");
     omnilauncher_lib::plugins::plugin_manager_cmd::list_plugins()
+}
+
+#[tauri::command]
+async fn list_quarantined_plugins(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    log::trace!("list_quarantined_plugins invoked");
+    let pm = state.plugin_manager.lock().await;
+    Ok(omnilauncher_lib::plugins::plugin_manager_cmd::list_quarantined_plugins(&pm))
 }
 
 #[tauri::command]

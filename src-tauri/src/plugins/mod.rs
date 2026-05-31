@@ -1,6 +1,55 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+pub mod agent_delegate;
+pub mod app_launcher;
+pub mod bash_exec;
+pub mod browser_bookmarks;
+pub mod calculator;
+pub mod clipboard;
+pub mod code_tools;
+pub mod color_picker;
+pub mod cron_explainer;
+pub mod emoji_picker;
+pub mod env_vars;
+pub mod external;
+pub mod file_read;
+pub mod file_search;
+pub mod file_write;
+pub mod flow;
+pub mod git;
+pub mod github;
+pub mod glob;
+pub mod grep;
+pub mod hosts;
+pub mod http_client;
+pub mod ls;
+pub mod network;
+pub mod plugin_manager_cmd;
+pub mod pomodoro;
+pub mod process_manager;
+pub mod raycast;
+pub mod runtime_deps;
+pub mod scheduler;
+pub mod screenshot;
+pub mod script_runner;
+pub mod selection;
+pub mod shell_plugin;
+pub mod skill_runner;
+pub mod snippets;
+pub mod sys_info;
+pub mod system_commands;
+pub mod timer;
+pub mod todo;
+pub mod translate;
+pub mod unit_converter;
+pub mod url_opener;
+pub mod vision_analyze;
+pub mod web_fetch;
+pub mod web_search;
+pub mod window_resize;
+pub mod windows_settings;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryResult {
     pub id: String,
@@ -57,6 +106,12 @@ pub trait Plugin: Send + Sync {
     /// Used by `PluginManager::reload_external_plugins` to discard and re-load
     /// only externally-sourced plugins without touching built-ins.
     fn is_external(&self) -> bool {
+        false
+    }
+    /// True when the plugin has been quarantined after repeated failures and is
+    /// short-circuiting its calls. Only meaningful for external plugins; the
+    /// default is `false`.
+    fn is_quarantined(&self) -> bool {
         false
     }
 }
@@ -165,6 +220,8 @@ impl PluginManager {
     pub fn register_override(&mut self, p: Box<dyn Plugin>) {
         let name = p.name().to_string();
         let keyword = p.keyword().map(str::to_string);
+        // Compute once and reuse — `tool_schema()` clones the schema value.
+        let tool_name = tool_schema_function_name(p.as_ref());
 
         if self.has_name(&name) {
             log::info!("Plugin '{}' overrides existing plugin with same name", name);
@@ -180,7 +237,6 @@ impl PluginManager {
                 self.unregister_by_keyword(kw);
             }
         }
-        let tool_name = tool_schema_function_name(p.as_ref());
         let idx = self.plugins.len();
         self.plugins.push(p);
         self.name_index.insert(name, idx);
@@ -271,6 +327,9 @@ impl PluginManager {
                 async move {
                     match tokio::time::timeout(plugin_timeout, p.query(q_ref)).await {
                         Ok(mut v) => {
+                            // Bound memory if a plugin misbehaves and returns a huge
+                            // list — we only ever surface the top results anyway.
+                            v.truncate(20);
                             // Stamp the plugin name onto every result so the
                             // launcher UI can group by source. Plugins that
                             // already set their own source (e.g. a meta-plugin
@@ -381,6 +440,15 @@ impl PluginManager {
         None
     }
 
+    /// Names of all plugins currently quarantined (after repeated failures).
+    pub fn quarantined_plugin_names(&self) -> Vec<String> {
+        self.plugins
+            .iter()
+            .filter(|p| p.is_quarantined())
+            .map(|p| p.name().to_string())
+            .collect()
+    }
+
     /// Drop all externally-sourced plugins and re-discover them from
     /// `~/.omnilauncher/plugins/` plus `extra_dirs`. Built-in plugins are
     /// untouched, preserving their internal state (caches, indexes, etc.).
@@ -389,11 +457,34 @@ impl PluginManager {
     /// registry reflects what's on disk without restarting the launcher.
     pub fn reload_external_plugins(&mut self, extra_dirs: &[String]) {
         let before = self.plugins.len();
+        // Drop all existing externals. Built-ins are kept (and their state).
         self.plugins.retain(|p| !p.is_external());
-        self.rebuild_index();
-        for plugin in external::load_external_plugins_from(extra_dirs) {
-            self.register_override(Box::new(plugin));
+
+        // Collect the freshly-discovered external plugins up front.
+        let new_plugins: Vec<Box<dyn Plugin>> = external::load_external_plugins_from(extra_dirs)
+            .into_iter()
+            .map(|p| Box::new(p) as Box<dyn Plugin>)
+            .collect();
+
+        // Externals win over built-ins on name/keyword conflicts. Externals were
+        // already removed above, so the only possible conflicts now are with
+        // built-ins — evict those in a single retain pass instead of paying
+        // register_override's per-plugin rebuild_index cost.
+        let new_names: std::collections::HashSet<&str> =
+            new_plugins.iter().map(|p| p.name()).collect();
+        let new_keywords: std::collections::HashSet<&str> =
+            new_plugins.iter().filter_map(|p| p.keyword()).collect();
+        self.plugins.retain(|p| {
+            !new_names.contains(p.name())
+                && !p.keyword().is_some_and(|kw| new_keywords.contains(kw))
+        });
+
+        // Append all new externals, then rebuild the index exactly once.
+        for plugin in new_plugins {
+            self.plugins.push(plugin);
         }
+        self.rebuild_index();
+
         log::info!(
             "PluginManager.reload_external_plugins: {} → {} registered plugins",
             before,
@@ -402,54 +493,6 @@ impl PluginManager {
     }
 }
 
-pub mod agent_delegate;
-pub mod app_launcher;
-pub mod bash_exec;
-pub mod browser_bookmarks;
-pub mod calculator;
-pub mod clipboard;
-pub mod code_tools;
-pub mod color_picker;
-pub mod cron_explainer;
-pub mod emoji_picker;
-pub mod env_vars;
-pub mod external;
-pub mod file_read;
-pub mod file_search;
-pub mod file_write;
-pub mod flow;
-pub mod git;
-pub mod github;
-pub mod glob;
-pub mod grep;
-pub mod hosts;
-pub mod http_client;
-pub mod ls;
-pub mod network;
-pub mod plugin_manager_cmd;
-pub mod pomodoro;
-pub mod process_manager;
-pub mod raycast;
-pub mod runtime_deps;
-pub mod scheduler;
-pub mod screenshot;
-pub mod script_runner;
-pub mod selection;
-pub mod shell_plugin;
-pub mod skill_runner;
-pub mod snippets;
-pub mod sys_info;
-pub mod system_commands;
-pub mod timer;
-pub mod todo;
-pub mod translate;
-pub mod unit_converter;
-pub mod url_opener;
-pub mod vision_analyze;
-pub mod web_fetch;
-pub mod web_search;
-pub mod window_resize;
-pub mod windows_settings;
 
 #[cfg(test)]
 mod plugin_manager_tests {

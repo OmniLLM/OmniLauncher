@@ -31,9 +31,10 @@ fn force_remove_dir_all(path: &std::path::Path) -> std::io::Result<()> {
                     }
                 }
             }
-            // Brief retry to handle transient file-handle holds (e.g. AV scanners).
-            for _ in 0..3 {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+            // Exponential backoff (~2s total) to handle transient file-handle
+            // holds (e.g. AV scanners, slow handle release on Windows).
+            for delay_ms in [100u64, 200, 400, 800, 1500] {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 if std::fs::remove_dir_all(path).is_ok() {
                     return Ok(());
                 }
@@ -532,6 +533,7 @@ async fn git_sparse_checkout_subdir(
     copy_result
 }
 
+// DEPRECATED: remove after v1.0 — migration shim for users upgrading from the pre-collection split layout
 fn legacy_split_collection_identity(repo_name: &str) -> Option<(String, String, String)> {
     const OMNILAUNCHER_PLUGINS: &[&str] = &[
         "color",
@@ -543,6 +545,9 @@ fn legacy_split_collection_identity(repo_name: &str) -> Option<(String, String, 
     ];
 
     if OMNILAUNCHER_PLUGINS.contains(&repo_name) {
+        log::info!(
+            "legacy_split_collection used for repo '{repo_name}' — this shim will be removed in a future release"
+        );
         let collection = "OmniLLM/omnilauncher-plugins".to_string();
         return Some((
             collection.clone(),
@@ -554,6 +559,7 @@ fn legacy_split_collection_identity(repo_name: &str) -> Option<(String, String, 
     None
 }
 
+// DEPRECATED: remove after v1.0 — migration shim for users upgrading from the pre-collection split layout
 fn legacy_split_collection_source(collection_key: &str) -> Option<String> {
     if collection_key == "OmniLLM/omnilauncher-plugins" {
         return Some("https://github.com/OmniLLM/omnilauncher-plugins.git".to_string());
@@ -1134,6 +1140,14 @@ fn install_staged_plugin(dest: &PathBuf) -> Result<String, String> {
         installed_names.len(),
         installed_names.join(", ")
     ))
+}
+
+/// Return the names of all currently quarantined external plugins.
+///
+/// A plugin is quarantined after 5 consecutive failures (see
+/// `ExternalPlugin`); quarantine is cleared by `reload_external_plugins`.
+pub fn list_quarantined_plugins(pm: &super::PluginManager) -> Vec<String> {
+    pm.quarantined_plugin_names()
 }
 
 /// List all installed external plugins as JSON objects.

@@ -43,7 +43,8 @@ You can also manage plugins programmatically:
   "version": "1.0.0",
   "keyword": "myplugin",
   "icon": "🔌",
-  "entry": "run.sh"
+  "entry": "run.sh",
+  "query_timeout_ms": 3000
 }
 ```
 
@@ -55,6 +56,7 @@ You can also manage plugins programmatically:
 | `keyword` | ✗ | If set, the plugin only runs when the query starts with this prefix |
 | `icon` | ✗ | Emoji shown for results that don't supply their own icon |
 | `entry` | ✅ | Relative path to the executable within the plugin directory |
+| `query_timeout_ms` | ✗ | Per-plugin query timeout in milliseconds. Default `3000`, capped at `5000`. |
 
 ---
 
@@ -93,8 +95,10 @@ Return an empty array when there are no matches:
 {"results": []}
 ```
 
-**Timeout:** 3 seconds.  If your plugin doesn't respond in time OmniLauncher
-returns no results for that query (it does **not** crash).
+**Timeout:** 3 seconds by default (configurable per-plugin via the
+`query_timeout_ms` manifest field, capped at 5 seconds).  If your plugin
+doesn't respond in time OmniLauncher returns no results for that query (it does
+**not** crash).
 
 ### Execute request (user picks a result)
 
@@ -123,46 +127,6 @@ Expected **stdout** response:
 ---
 
 ## Example plugins
-
-### Bash — simple echo
-
-`plugin.json`:
-```json
-{
-  "name": "hello",
-  "description": "Echoes your query back",
-  "version": "1.0.0",
-  "keyword": "hello",
-  "icon": "👋",
-  "entry": "run.sh"
-}
-```
-
-`run.sh`:
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Read one line of JSON from stdin
-read -r request
-
-op=$(echo "$request" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['op'])")
-query=$(echo "$request" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('query',''))" 2>/dev/null || echo "")
-
-if [ "$op" = "query" ]; then
-  echo "{\"results\":[{\"id\":\"hello-1\",\"title\":\"Hello, $query!\",\"subtitle\":\"Echoed by hello plugin\",\"score\":90,\"action_type\":\"copy\",\"action_data\":\"Hello, $query!\"}]}"
-elif [ "$op" = "execute" ]; then
-  action_data=$(echo "$request" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('action_data',''))" 2>/dev/null || echo "")
-  echo "{\"output\":\"$action_data\"}"
-fi
-```
-
-Make it executable:
-```bash
-chmod +x run.sh
-```
-
----
 
 ### Python — dictionary lookup
 
