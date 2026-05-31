@@ -136,7 +136,7 @@ function isConversationResetCommand(input: string): boolean {
 
 function isHelpQuery(input: string): boolean {
   const t = input.trim().toLowerCase();
-  return t === "/help" || t === "/?";
+  return t === "/help" || t === "/?" || t === "help";
 }
 
 function isHelpHintQuery(input: string): boolean {
@@ -219,7 +219,6 @@ export default function App() {
   const [aiModeEnabled, setAiModeEnabled] = useState(false);
   const [showPluginManager, setShowPluginManager] = useState(false);
   const [showSkillManager, setShowSkillManager] = useState(false);
-  const [isHintBarExpanded, setIsHintBarExpanded] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("system");
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(
     getSystemTheme(),
@@ -1006,9 +1005,7 @@ export default function App() {
       ? aiHeight
       : launcherHasContent
         ? 520
-        : isHintBarExpanded
-          ? 320
-          : compactHeight;
+        : compactHeight;
   const effectiveHeight = showSettings ? 560 : panelHeight;
   const windowHeight = `${effectiveHeight}px`;
   const maxHeight = `${effectiveHeight}px`;
@@ -1474,12 +1471,8 @@ export default function App() {
             onSettingsClick={() => setShowSettings(true)}
             resolvedTheme={resolvedTheme}
             onThemeToggle={handleThemeToggle}
-            showHintBar={
-              !isAiMode && (isHelpHintQuery(query) || query.trim() === "")
-            }
             compact={isCompactMode}
             inputRef={inputRef}
-            onHintBarExpandedChange={setIsHintBarExpanded}
             inputHistory={inputHistory}
             historyIdx={historyIdx}
             onHistoryNavigate={(idx, val) => {

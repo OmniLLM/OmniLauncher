@@ -12,13 +12,10 @@ interface Props {
   /** Called when the user clicks the spinner / Stop button while loading. */
   onCancel?: () => void;
   onSettingsClick: () => void;
-  /** Show the one-line hint bar at the bottom of an empty launcher input */
-  showHintBar?: boolean;
   /** Render the empty launcher as a centered card */
   compact?: boolean;
   /** External ref forwarded from App so App can imperatively focus */
   inputRef?: RefObject<HTMLInputElement | HTMLTextAreaElement>;
-  onHintBarExpandedChange?: (expanded: boolean) => void;
   inputHistory?: string[];
   historyIdx?: number;
   onHistoryNavigate?: (idx: number, value: string) => void;
@@ -27,81 +24,6 @@ interface Props {
   /** Called when the user clicks the theme toggle button */
   onThemeToggle?: () => void;
 }
-
-// Non-AI launcher prefixes shown in the idle hint bar.
-// `insert` is what we actually type into the input on click — the trigger token
-// the plugin actually expects, with a trailing space when needed.
-const HINT_LOCAL: { key: string; label: string; insert: string }[] = [
-  { key: "* / f / open", label: "files", insert: "f " },
-  { key: "=", label: "calc", insert: "=" },
-  { key: ">", label: "shell", insert: "> " },
-  { key: "cb", label: "clipboard", insert: "cb " },
-  { key: "bm / b", label: "bookmarks", insert: "bm " },
-  { key: "color", label: "color", insert: "color " },
-  { key: "env", label: "env", insert: "env " },
-  { key: "git", label: "git", insert: "git " },
-  { key: "hosts", label: "hosts", insert: "hosts " },
-  { key: "net", label: "network", insert: "net " },
-  { key: "plugins / pm", label: "plugins", insert: "plugins " },
-  { key: "ps", label: "processes", insert: "ps " },
-  { key: "settings", label: "windows", insert: "settings " },
-  { key: "snip", label: "snippets", insert: "snip " },
-  { key: "sys", label: "system", insert: "sys " },
-  { key: "timer", label: "timer", insert: "timer " },
-  { key: "todo", label: "todo", insert: "todo " },
-  { key: "conv", label: "units", insert: "conv " },
-];
-
-// Web search prefixes (shown in a second row).
-const HINT_SEARCH: { key: string; label: string; insert: string }[] = [
-  { key: "g", label: "Google", insert: "g " },
-  { key: "yt / youtube", label: "YouTube", insert: "yt " },
-  { key: "gh / github", label: "GitHub", insert: "gh " },
-  { key: "wiki", label: "Wikipedia", insert: "wiki " },
-  { key: "maps", label: "Maps", insert: "maps " },
-  { key: "so / stackoverflow", label: "StackOverflow", insert: "so " },
-  { key: "ddg / duckduckgo", label: "DuckDuckGo", insert: "ddg " },
-  { key: "bing", label: "Bing", insert: "bing " },
-  { key: "image", label: "Images", insert: "image " },
-  { key: "lucky", label: "Feeling Lucky", insert: "lucky " },
-  { key: "translate", label: "Translate", insert: "translate " },
-  { key: "ytmusic", label: "YT Music", insert: "ytmusic " },
-  { key: "netflix", label: "Netflix", insert: "netflix " },
-  { key: "gist", label: "Gist", insert: "gist " },
-  { key: "wolframalpha", label: "Wolfram", insert: "wolframalpha " },
-  { key: "gmail", label: "Gmail", insert: "gmail " },
-  { key: "drive", label: "Drive", insert: "drive " },
-  { key: "facebook", label: "Facebook", insert: "facebook " },
-  { key: "twitter", label: "X/Twitter", insert: "twitter " },
-];
-
-const PRIMARY_HINT_LOCAL_KEYS = new Set([
-  "* / f / open",
-  "=",
-  ">",
-  "cb",
-  "bm / b",
-  "git",
-  "plugins / pm",
-  "ps",
-]);
-
-const PRIMARY_HINT_SEARCH_KEYS = new Set([
-  "g",
-  "yt / youtube",
-  "gh / github",
-  "wiki",
-  "maps",
-  "translate",
-]);
-
-const PRIMARY_HINT_LOCAL = HINT_LOCAL.filter(({ key }) =>
-  PRIMARY_HINT_LOCAL_KEYS.has(key),
-);
-
-const PRIMARY_HINT_SEARCH = HINT_SEARCH.filter(({ key }) =>
-  PRIMARY_HINT_SEARCH_KEYS.has(key),
-);
 
 // ─── Layout sizing tokens ─────────────────────────────────────────────────────
 //
@@ -131,9 +53,6 @@ interface ModeSizes {
   taglineLetterSpacing: string;
   taglineGap: string;
   taglineOpacity: number;
-  hintRowPadding: string;
-  hintRowWidth: string;
-  hintRowMargin: string | undefined;
 }
 
 const AI_SHADOW =
@@ -160,9 +79,6 @@ const SIZES: Record<LayoutMode, ModeSizes> = {
     taglineLetterSpacing: "0.02em",
     taglineGap: "6px",
     taglineOpacity: 1,
-    hintRowPadding: "4px 16px 8px",
-    hintRowWidth: "100%",
-    hintRowMargin: undefined,
   },
   stacked: {
     wrapPadding: "0 18px",
@@ -181,9 +97,6 @@ const SIZES: Record<LayoutMode, ModeSizes> = {
     taglineLetterSpacing: "0.04em",
     taglineGap: "8px",
     taglineOpacity: 0.9,
-    hintRowPadding: "8px 2px 0",
-    hintRowWidth: COMPACT_WIDTH,
-    hintRowMargin: "0 auto",
   },
   inline: {
     wrapPadding: "0 14px",
@@ -202,9 +115,6 @@ const SIZES: Record<LayoutMode, ModeSizes> = {
     taglineLetterSpacing: "0.02em",
     taglineGap: "6px",
     taglineOpacity: 1,
-    hintRowPadding: "4px 16px 8px",
-    hintRowWidth: "100%",
-    hintRowMargin: undefined,
   },
 };
 
@@ -217,10 +127,8 @@ export default function SearchBar({
   queueDepth = 0,
   onCancel,
   onSettingsClick,
-  showHintBar = false,
   compact = false,
   inputRef: externalRef,
-  onHintBarExpandedChange,
   inputHistory,
   historyIdx,
   onHistoryNavigate,
@@ -229,24 +137,6 @@ export default function SearchBar({
 }: Props) {
   const internalRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const inputRef = externalRef ?? internalRef;
-  const [showAllHints, setShowAllHints] = useState(false);
-  const [hintsVisible, setHintsVisible] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem("omni_hints_visible");
-      return stored === null ? true : stored === "true";
-    } catch {
-      return true;
-    }
-  });
-
-  const handleToggleHints = () => {
-    const next = !hintsVisible;
-    setHintsVisible(next);
-    if (!next) setShowAllHints(false);
-    try {
-      localStorage.setItem("omni_hints_visible", String(next));
-    } catch { /* noop */ }
-  };
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -256,12 +146,6 @@ export default function SearchBar({
   useEffect(() => {
     inputRef.current?.focus();
   }, [isAiMode]);
-
-  useEffect(() => {
-    if (!showHintBar) {
-      setShowAllHints(false);
-    }
-  }, [showHintBar]);
 
   // Auto-resize textarea (AI mode) based on content
   useEffect(() => {
@@ -273,38 +157,12 @@ export default function SearchBar({
     }
   }, [value, isAiMode]);
 
-  useEffect(() => {
-    onHintBarExpandedChange?.(showHintBar && hintsVisible && showAllHints);
-  }, [showAllHints, showHintBar, hintsVisible, onHintBarExpandedChange]);
-
   const isAI = isAiPrefix(value);
   const mode: LayoutMode = isAiMode ? "ai" : compact ? "stacked" : "inline";
   const s = SIZES[mode];
   const placeholder = isAiMode
     ? "Ask AI anything…  (Shift+Enter for newline)"
     : "Type to launch, search, calculate…";
-  const localHints = showAllHints ? HINT_LOCAL : PRIMARY_HINT_LOCAL;
-  const searchHints = showAllHints ? HINT_SEARCH : PRIMARY_HINT_SEARCH;
-  const hasCollapsedHints =
-    PRIMARY_HINT_LOCAL.length < HINT_LOCAL.length ||
-    PRIMARY_HINT_SEARCH.length < HINT_SEARCH.length;
-  const wrapHints = !compact || showAllHints;
-
-  const handleHintClick = (insert: string) => {
-    onChange(insert);
-    // Re-focus so the user can keep typing immediately.
-    requestAnimationFrame(() => {
-      const el = inputRef.current;
-      if (!el) return;
-      el.focus();
-      try {
-        const len = insert.length;
-        (el as HTMLInputElement).setSelectionRange?.(len, len);
-      } catch {
-        /* noop */
-      }
-    });
-  };
 
   return (
     <div
@@ -580,20 +438,6 @@ export default function SearchBar({
           </button>
         )}
 
-        {/* Hints toggle button (only in launcher mode, empty query) */}
-        {showHintBar && (
-          <button
-            type="button"
-            onClick={handleToggleHints}
-            className={"omni-icon-btn omni-hints-toggle-btn" + (hintsVisible ? " omni-hints-toggle-btn--active" : "")}
-            title={hintsVisible ? "Hide hints" : "Show hints"}
-            aria-label={hintsVisible ? "Hide command hints" : "Show command hints"}
-            aria-expanded={hintsVisible}
-          >
-            ?
-          </button>
-        )}
-
         {/* Theme toggle button */}
         {onThemeToggle && (
           <ThemeToggleButton
@@ -613,122 +457,7 @@ export default function SearchBar({
           ⚙
         </button>
       </div>
-
-      {/* ── Hint bar (launcher mode, empty query only) ─────────────── */}
-      {showHintBar && hintsVisible && (
-        <div
-          style={{
-            padding: s.hintRowPadding,
-            width: s.hintRowWidth,
-            margin: s.hintRowMargin,
-            animation: "omni-hint-fadein 240ms ease both",
-          }}
-        >
-          {/* Core prefixes row */}
-          <div
-            className="omni-hint-row"
-            style={{
-              display: "flex",
-              justifyContent: "flex-start",
-              gap: "5px",
-              flexWrap: wrapHints ? "wrap" : "nowrap",
-              overflowX: wrapHints ? "visible" : "auto",
-              overflowY: "hidden",
-              paddingBottom: compact && !wrapHints ? "4px" : 0,
-              scrollbarWidth: compact && !wrapHints ? "thin" : undefined,
-              scrollbarColor:
-                compact && !wrapHints
-                  ? "var(--surface-2) transparent"
-                  : undefined,
-              marginBottom: "4px",
-            }}
-          >
-            {localHints.map(({ key, label, insert }) => (
-              <HintChip
-                key={key}
-                prefix={key}
-                label={label}
-                onActivate={() => handleHintClick(insert)}
-              />
-            ))}
-          </div>
-          <div
-            className="omni-hint-row"
-            style={{
-              display: "flex",
-              justifyContent: "flex-start",
-              gap: "5px",
-              flexWrap: wrapHints ? "wrap" : "nowrap",
-              overflowX: wrapHints ? "visible" : "auto",
-              overflowY: "hidden",
-              paddingBottom: compact && !wrapHints ? "4px" : 0,
-              scrollbarWidth: compact && !wrapHints ? "thin" : undefined,
-              scrollbarColor:
-                compact && !wrapHints
-                  ? "var(--surface-2) transparent"
-                  : undefined,
-            }}
-          >
-            {searchHints.map(({ key, label, insert }) => (
-              <HintChip
-                key={key}
-                prefix={key}
-                label={label}
-                onActivate={() => handleHintClick(insert)}
-              />
-            ))}
-          </div>
-          {hasCollapsedHints && (
-            <div
-              style={{
-                display: "flex",
-                justifyContent: compact ? "center" : "flex-start",
-                paddingTop: compact ? "6px" : "8px",
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setShowAllHints((current) => !current)}
-                className={
-                  "omni-hint-toggle" +
-                  (showAllHints ? " omni-hint-toggle--open" : "")
-                }
-                aria-expanded={showAllHints}
-              >
-                {showAllHints ? "Fewer hints" : "More hints"}
-                <span className="omni-hint-toggle__chev" aria-hidden>
-                  ▾
-                </span>
-              </button>
-            </div>
-          )}
-        </div>
-      )}
     </div>
-  );
-}
-
-// ─── Hint chip ────────────────────────────────────────────────────────────────
-
-function HintChip({
-  prefix,
-  label,
-  onActivate,
-}: {
-  prefix: string;
-  label: string;
-  onActivate: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="omni-hint-chip"
-      onClick={onActivate}
-      title={`Use prefix: ${prefix}`}
-    >
-      <kbd className="omni-hint-chip__kbd">{prefix}</kbd>
-      <span className="omni-hint-chip__label">{label}</span>
-    </button>
   );
 }
 
