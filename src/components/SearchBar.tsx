@@ -230,6 +230,23 @@ export default function SearchBar({
   const internalRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const inputRef = externalRef ?? internalRef;
   const [showAllHints, setShowAllHints] = useState(false);
+  const [hintsVisible, setHintsVisible] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem("omni_hints_visible");
+      return stored === null ? true : stored === "true";
+    } catch {
+      return true;
+    }
+  });
+
+  const handleToggleHints = () => {
+    const next = !hintsVisible;
+    setHintsVisible(next);
+    if (!next) setShowAllHints(false);
+    try {
+      localStorage.setItem("omni_hints_visible", String(next));
+    } catch { /* noop */ }
+  };
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -257,8 +274,8 @@ export default function SearchBar({
   }, [value, isAiMode]);
 
   useEffect(() => {
-    onHintBarExpandedChange?.(showHintBar && showAllHints);
-  }, [showAllHints, showHintBar, onHintBarExpandedChange]);
+    onHintBarExpandedChange?.(showHintBar && hintsVisible && showAllHints);
+  }, [showAllHints, showHintBar, hintsVisible, onHintBarExpandedChange]);
 
   const isAI = isAiPrefix(value);
   const mode: LayoutMode = isAiMode ? "ai" : compact ? "stacked" : "inline";
@@ -548,8 +565,8 @@ export default function SearchBar({
               minHeight: "30px",
               padding: "5px 10px",
               borderRadius: "8px",
-              border: "1px solid color-mix(in srgb, var(--accent) 33%, transparent)",
-              background: "color-mix(in srgb, var(--accent) 13%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--accent) 35%, transparent)",
+              background: "color-mix(in srgb, var(--accent) 18%, transparent)",
               color: "var(--accent)",
               fontSize: "12px",
               fontWeight: 700,
@@ -560,6 +577,20 @@ export default function SearchBar({
           >
             <span style={{ fontSize: "12px", lineHeight: 1 }}>■</span>
             Cancel
+          </button>
+        )}
+
+        {/* Hints toggle button (only in launcher mode, empty query) */}
+        {showHintBar && (
+          <button
+            type="button"
+            onClick={handleToggleHints}
+            className={"omni-icon-btn omni-hints-toggle-btn" + (hintsVisible ? " omni-hints-toggle-btn--active" : "")}
+            title={hintsVisible ? "Hide hints" : "Show hints"}
+            aria-label={hintsVisible ? "Hide command hints" : "Show command hints"}
+            aria-expanded={hintsVisible}
+          >
+            ?
           </button>
         )}
 
@@ -584,7 +615,7 @@ export default function SearchBar({
       </div>
 
       {/* ── Hint bar (launcher mode, empty query only) ─────────────── */}
-      {showHintBar && (
+      {showHintBar && hintsVisible && (
         <div
           style={{
             padding: s.hintRowPadding,
