@@ -88,6 +88,7 @@ impl Plugin for ClipboardPlugin {
                     score: (90 - i as i32).max(0),
                     action_type: "copy".to_string(),
                     action_data: entry.to_string(),
+                    source: None,
                 }
             })
             .collect()

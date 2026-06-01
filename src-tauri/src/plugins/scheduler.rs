@@ -951,6 +951,7 @@ impl Plugin for SchedulerPlugin {
                     score: 100,
                     action_type: "sched_del".to_string(),
                     action_data: id.to_string(),
+                    source: None,
                 }];
             }
         }
@@ -969,6 +970,7 @@ impl Plugin for SchedulerPlugin {
                     score: 100,
                     action_type: "sched_off".to_string(),
                     action_data: id.to_string(),
+                    source: None,
                 }];
             }
         }
@@ -986,6 +988,7 @@ impl Plugin for SchedulerPlugin {
                     score: 100,
                     action_type: "sched_on".to_string(),
                     action_data: id.to_string(),
+                    source: None,
                 }];
             }
         }
@@ -1175,6 +1178,7 @@ fn list_results() -> Vec<QueryResult> {
             score: 50,
             action_type: "none".to_string(),
             action_data: String::new(),
+            source: None,
         }];
     }
 
@@ -1196,6 +1200,7 @@ fn list_results() -> Vec<QueryResult> {
                 score: 90,
                 action_type: "none".to_string(),
                 action_data: String::new(),
+                source: None,
             }
         })
         .collect()
@@ -1211,6 +1216,7 @@ fn hint_results() -> Vec<QueryResult> {
             score: 80,
             action_type: "none".to_string(),
             action_data: String::new(),
+            source: None,
         },
         QueryResult {
             id: "sched:hint:add".to_string(),
@@ -1222,6 +1228,7 @@ fn hint_results() -> Vec<QueryResult> {
             score: 75,
             action_type: "none".to_string(),
             action_data: String::new(),
+            source: None,
         },
         QueryResult {
             id: "sched:hint:del".to_string(),
@@ -1231,6 +1238,7 @@ fn hint_results() -> Vec<QueryResult> {
             score: 70,
             action_type: "none".to_string(),
             action_data: String::new(),
+            source: None,
         },
         QueryResult {
             id: "sched:hint:toggle".to_string(),
@@ -1240,6 +1248,7 @@ fn hint_results() -> Vec<QueryResult> {
             score: 65,
             action_type: "none".to_string(),
             action_data: String::new(),
+            source: None,
         },
     ]
 }
@@ -1294,6 +1303,7 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
                     score: 100,
                     action_type: "sched_add".to_string(),
                     action_data: format!("{}|||{}|||{}", label, stored, cmd),
+                    source: None,
                 }];
             }
         }
@@ -1312,6 +1322,7 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
                     score: 100,
                     action_type: "sched_add".to_string(),
                     action_data: format!("{}|||{}|||{}", label, stored, cmd),
+                    source: None,
                 }];
             }
         }
@@ -1335,6 +1346,7 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
                 score: 100,
                 action_type: "sched_add".to_string(),
                 action_data: format!("{}|||{}|||{}", label, stored, cmd),
+                source: None,
             }];
         }
     }

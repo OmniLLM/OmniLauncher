@@ -187,6 +187,7 @@ impl Plugin for ExternalPlugin {
                                     .unwrap_or("shell")
                                     .to_string(),
                                 action_data: item["action_data"].as_str().unwrap_or("").to_string(),
+                                source: None,
                             })
                         })
                         .collect()

@@ -28,6 +28,7 @@ impl Plugin for CalculatorPlugin {
                 score: 100,
                 action_type: "copy".to_string(),
                 action_data: result.to_string(),
+                source: None,
             }],
             None => vec![],
         }

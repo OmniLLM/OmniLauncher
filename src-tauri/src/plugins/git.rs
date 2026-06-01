@@ -40,6 +40,7 @@ impl Plugin for GitPlugin {
                 score: 70,
                 action_type: "shell".to_string(),
                 action_data: format!("git {}", name),
+                source: None,
             })
             .collect()
     }

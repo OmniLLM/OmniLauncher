@@ -44,6 +44,7 @@ impl Plugin for UnitConverterPlugin {
                 score: 100,
                 action_type: "copy".to_string(),
                 action_data: result,
+                source: None,
             }];
         }
 

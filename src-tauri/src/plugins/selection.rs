@@ -63,6 +63,7 @@ fn build_actions(text: &str) -> Vec<QueryResult> {
             score: 95,
             action_type: "url".to_string(),
             action_data: format!("https://www.google.com/search?q={}", encoded),
+            source: None,
         },
         // Copy to clipboard
         QueryResult {
@@ -73,6 +74,7 @@ fn build_actions(text: &str) -> Vec<QueryResult> {
             score: 90,
             action_type: "copy".to_string(),
             action_data: text.to_string(),
+            source: None,
         },
         // AI Ask
         QueryResult {
@@ -83,6 +85,7 @@ fn build_actions(text: &str) -> Vec<QueryResult> {
             score: 88,
             action_type: "ai_query".to_string(),
             action_data: text.to_string(),
+            source: None,
         },
         // Translate (via Google Translate)
         QueryResult {
@@ -93,6 +96,7 @@ fn build_actions(text: &str) -> Vec<QueryResult> {
             score: 85,
             action_type: "url".to_string(),
             action_data: format!("https://translate.google.com/?text={}", encoded),
+            source: None,
         },
         // GitHub code search
         QueryResult {
@@ -103,6 +107,7 @@ fn build_actions(text: &str) -> Vec<QueryResult> {
             score: 80,
             action_type: "url".to_string(),
             action_data: format!("https://github.com/search?q={}", encoded),
+            source: None,
         },
         // Dict lookup (Chinese ↔ English)
         QueryResult {
@@ -113,6 +118,7 @@ fn build_actions(text: &str) -> Vec<QueryResult> {
             score: 78,
             action_type: "url".to_string(),
             action_data: format!("https://dict.youdao.com/result?word={}&lang=en", encoded),
+            source: None,
         },
         // StackOverflow
         QueryResult {
@@ -123,6 +129,7 @@ fn build_actions(text: &str) -> Vec<QueryResult> {
             score: 75,
             action_type: "url".to_string(),
             action_data: format!("https://stackoverflow.com/search?q={}", encoded),
+            source: None,
         },
     ]
 }

@@ -57,6 +57,7 @@ impl Plugin for UrlOpenerPlugin {
                 score: 100,
                 action_type: "url".to_string(),
                 action_data: raw.to_string(),
+                source: None,
             }]
         } else {
             vec![]

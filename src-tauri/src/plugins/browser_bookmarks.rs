@@ -227,6 +227,7 @@ impl Plugin for BrowserBookmarksPlugin {
                 score: 70,
                 action_type: "open_url".to_string(),
                 action_data: url,
+                source: None,
             })
             .collect()
     }

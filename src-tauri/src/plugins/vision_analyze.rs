@@ -90,6 +90,7 @@ impl Plugin for VisionAnalyzePlugin {
             score: 100,
             action_type: "vision_analyze".to_string(),
             action_data: original_prompt,
+            source: None,
         }]
     }
 }

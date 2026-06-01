@@ -359,6 +359,7 @@ impl Plugin for WindowsSettingsPlugin {
                 }
                 .to_string(),
                 action_data: uri.to_string(),
+                source: None,
             })
             .collect()
     }

@@ -33,6 +33,7 @@ impl Plugin for ShellPlugin {
             score: 95,
             action_type: "shell".to_string(),
             action_data: cmd.to_string(),
+            source: None,
         }]
     }
 

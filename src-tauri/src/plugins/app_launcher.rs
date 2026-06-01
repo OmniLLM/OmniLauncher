@@ -249,6 +249,7 @@ impl Plugin for AppLauncherPlugin {
                     score: 85,
                     action_type: "open_app".to_string(),
                     action_data: app.exec.clone(),
+                    source: None,
                 });
             } else if name_lower.contains(&term) {
                 results.push(QueryResult {
@@ -259,6 +260,7 @@ impl Plugin for AppLauncherPlugin {
                     score: 60,
                     action_type: "open_app".to_string(),
                     action_data: app.exec.clone(),
+                    source: None,
                 });
             }
         }

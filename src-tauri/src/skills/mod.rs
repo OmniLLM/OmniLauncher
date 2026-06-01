@@ -167,6 +167,62 @@ fn normalize_skill_url(url: &str) -> String {
     trimmed.to_string()
 }
 
+/// Parse a GitHub `blob/<branch>/<path>` or `tree/<branch>/<path>` URL into
+/// `(repo, branch, path_in_repo)` for use with `gh api repos/.../contents/...`.
+/// `tree/` URLs get `SKILL.md` appended when the path doesn't already end in
+/// it, mirroring `normalize_skill_url`.
+fn parse_github_blob_or_tree(
+    url: &str,
+) -> Option<(crate::gh_helper::GithubRepoRef, String, String)> {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return None;
+    }
+    let parts: Vec<&str> = trimmed.split('/').collect();
+    if parts.len() < 7 {
+        return None;
+    }
+    let host = parts[2];
+    let owner = parts[3];
+    let repo = parts[4].trim_end_matches(".git");
+    let action = parts[5];
+    let branch = parts[6];
+    if owner.is_empty() || repo.is_empty() || branch.is_empty() {
+        return None;
+    }
+    if action != "blob" && action != "tree" {
+        return None;
+    }
+    if !crate::gh_helper::is_known_github_host(host) {
+        return None;
+    }
+
+    let path_parts = &parts[7..];
+    let mut path = path_parts.join("/");
+    if action == "tree" && !path.ends_with("SKILL.md") {
+        path = if path.is_empty() {
+            "SKILL.md".to_string()
+        } else if path.ends_with('/') {
+            format!("{}SKILL.md", path)
+        } else {
+            format!("{}/SKILL.md", path)
+        };
+    }
+    if path.is_empty() {
+        return None;
+    }
+
+    Some((
+        crate::gh_helper::GithubRepoRef {
+            host: host.to_string(),
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+        },
+        branch.to_string(),
+        path,
+    ))
+}
+
 // ─── SkillManager ─────────────────────────────────────────────────────────────
 
 impl SkillManager {
@@ -247,25 +303,56 @@ impl SkillManager {
     }
 
     /// Download and install a skill from a URL.
+    ///
+    /// Priority: `curl` → `gh api`. We try plain `curl` against the raw
+    /// `raw.githubusercontent.com` form first because it has no extra
+    /// dependencies and works for all public skills. Only when curl fails
+    /// (e.g. 404 because the repo is private, or it's on GitHub Enterprise)
+    /// do we fall back to `gh api`, which transparently authenticates via
+    /// the user's `gh auth login` token.
     pub fn install_from_url(&mut self, url: &str) -> Result<String, String> {
         let download_url = normalize_skill_url(url);
 
-        // Use reqwest in blocking mode via std::process or tokio — but we're in a sync context.
-        // We'll delegate to curl/wget as a simple approach.
-        let output = std::process::Command::new("curl")
+        // First: try curl against the raw URL.
+        let mut content_opt: Option<String> = None;
+        let mut curl_err: Option<String> = None;
+        log::info!("install_from_url: curl -fsSL {}", download_url);
+        match std::process::Command::new("curl")
             .args(["-fsSL", &download_url])
             .output()
-            .map_err(|e| format!("curl failed: {}", e))?;
-
-        if !output.status.success() {
-            return Err(format!(
-                "Download failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+        {
+            Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
+                Ok(text) => content_opt = Some(text),
+                Err(e) => curl_err = Some(format!("UTF-8 decode error: {e}")),
+            },
+            Ok(output) => {
+                curl_err = Some(format!(
+                    "Download failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            Err(e) => curl_err = Some(format!("curl failed: {e}")),
         }
 
-        let content =
-            String::from_utf8(output.stdout).map_err(|e| format!("UTF-8 decode error: {}", e))?;
+        // Fallback: gh api (handles private repos & GHE when authed).
+        if content_opt.is_none() {
+            if let Some((repo, branch, path_in_repo)) = parse_github_blob_or_tree(url) {
+                if crate::gh_helper::is_gh_available() {
+                    log::info!(
+                        "install_from_url: curl failed, trying gh api {}/{}@{}:{}",
+                        repo.owner, repo.repo, branch, path_in_repo
+                    );
+                    match crate::gh_helper::gh_fetch_raw(&repo, &branch, &path_in_repo) {
+                        Ok(text) => content_opt = Some(text),
+                        Err(e) => log::warn!("install_from_url: gh fetch also failed: {e}"),
+                    }
+                }
+            }
+        }
+
+        let content = content_opt.ok_or_else(|| {
+            curl_err.unwrap_or_else(|| "Download failed: unknown error".to_string())
+        })?;
 
         // Parse to extract name
         let tmp_path = PathBuf::from("/tmp/SKILL.md");

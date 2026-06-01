@@ -42,6 +42,7 @@ impl Plugin for SystemCommandsPlugin {
                 score: 80,
                 action_type: "shell".to_string(),
                 action_data: cmd,
+                source: None,
             })
             .collect()
     }

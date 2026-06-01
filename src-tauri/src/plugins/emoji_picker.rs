@@ -629,6 +629,7 @@ impl Plugin for EmojiPickerPlugin {
                     score,
                     action_type: "copy".to_string(),
                     action_data: emoji.to_string(),
+                    source: None,
                 })
             })
             .collect();

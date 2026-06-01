@@ -288,6 +288,7 @@ impl Plugin for ScreenshotPlugin {
                 score: 100,
                 action_type: "shell".to_string(),
                 action_data: area_select_action(&dir),
+                source: None,
             }];
         }
 
@@ -302,6 +303,7 @@ impl Plugin for ScreenshotPlugin {
                 score: 100,
                 action_type: "shell".to_string(),
                 action_data: fullscreen_action(&path),
+                source: None,
             }];
         }
 
@@ -317,6 +319,7 @@ impl Plugin for ScreenshotPlugin {
                 score: 95,
                 action_type: "shell".to_string(),
                 action_data: area_select_action(&dir),
+                source: None,
             });
             // Second item: full-screen
             let path = new_screenshot_path();
@@ -328,6 +331,7 @@ impl Plugin for ScreenshotPlugin {
                 score: 90,
                 action_type: "shell".to_string(),
                 action_data: fullscreen_action(&path),
+                source: None,
             });
         }
 
@@ -364,6 +368,7 @@ impl Plugin for ScreenshotPlugin {
                 score: if filter.is_empty() { 70 } else { 80 },
                 action_type: "shell".to_string(),
                 action_data: open_file_action(&path),
+                source: None,
             });
         }
 

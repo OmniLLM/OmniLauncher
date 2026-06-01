@@ -56,6 +56,7 @@ impl Plugin for ProcessManagerPlugin {
                             "{} (PID: {}) — {:.1} MB, {:.1}% CPU",
                             name, pid, mem_mb, cpu
                         ),
+                        source: None,
                     }
                 })
                 .collect();
@@ -110,6 +111,7 @@ impl Plugin for ProcessManagerPlugin {
                     score: 50,
                     action_type: "copy".to_string(),
                     action_data: data,
+                    source: None,
                 }];
             }
 
@@ -126,6 +128,7 @@ impl Plugin for ProcessManagerPlugin {
                 score: 100,
                 action_type: "copy".to_string(),
                 action_data: format!("Killed: {}", killed.join(", ")),
+                source: None,
             }];
         }
 

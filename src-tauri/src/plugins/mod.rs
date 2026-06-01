@@ -10,6 +10,14 @@ pub struct QueryResult {
     pub score: i32,
     pub action_type: String,
     pub action_data: String,
+    /// Plugin / category that produced this result. Used by the launcher UI to
+    /// group rows under section headers (Raycast-style). Plugins may leave
+    /// this `None` — `query_all` will inject the plugin's `name()` automatically
+    /// for every result that doesn't already specify one. Optional so existing
+    /// plugins that build `QueryResult { ... }` literals keep compiling without
+    /// modification.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 pub struct Query {
@@ -213,17 +221,32 @@ impl PluginManager {
                 // that don't override it.
                 None => p.cheap_prefix_match(raw),
             })
-            .map(|p| async move {
-                match tokio::time::timeout(PLUGIN_TIMEOUT, p.query(q_ref)).await {
-                    Ok(v) => v,
-                    Err(_) => {
-                        log::warn!(
-                            "plugin '{}' exceeded {}ms budget for query {:?} — dropped",
-                            p.name(),
-                            PLUGIN_TIMEOUT.as_millis(),
-                            raw
-                        );
-                        Vec::new()
+            .map(|p| {
+                let plugin_name = p.name().to_string();
+                async move {
+                    match tokio::time::timeout(PLUGIN_TIMEOUT, p.query(q_ref)).await {
+                        Ok(mut v) => {
+                            // Stamp the plugin name onto every result so the
+                            // launcher UI can group by source. Plugins that
+                            // already set their own source (e.g. a meta-plugin
+                            // surfacing results from multiple subsystems)
+                            // win — we only fill in the gap.
+                            for r in v.iter_mut() {
+                                if r.source.is_none() {
+                                    r.source = Some(plugin_name.clone());
+                                }
+                            }
+                            v
+                        }
+                        Err(_) => {
+                            log::warn!(
+                                "plugin '{}' exceeded {}ms budget for query {:?} — dropped",
+                                plugin_name,
+                                PLUGIN_TIMEOUT.as_millis(),
+                                raw
+                            );
+                            Vec::new()
+                        }
                     }
                 }
             });

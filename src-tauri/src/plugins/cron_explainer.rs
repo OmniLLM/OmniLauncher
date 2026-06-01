@@ -244,6 +244,7 @@ impl Plugin for CronExplainerPlugin {
                     score: 100,
                     action_type: "copy".to_string(),
                     action_data: human,
+                    source: None,
                 }]
             }
             None => {
@@ -255,6 +256,7 @@ impl Plugin for CronExplainerPlugin {
                     score: 50,
                     action_type: "none".to_string(),
                     action_data: String::new(),
+                    source: None,
                 }]
             }
         }
@@ -301,5 +303,6 @@ fn mk_example(expr: &str, desc: &str) -> QueryResult {
         score: 60,
         action_type: "copy".to_string(),
         action_data: expr.to_string(),
+        source: None,
     }
 }

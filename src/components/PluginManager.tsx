@@ -402,7 +402,7 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
           value={source}
           onChange={(e) => setSource(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleInstall()}
-          placeholder="Git URL or local path…"
+          placeholder="Git URL, owner/repo, or local path…"
         />
         {extraDirs.length > 0 && (
           <select
@@ -507,7 +507,8 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
             No external plugin repos installed yet.
             <br />
             <span className="plugin-panel__empty-hint">
-              Paste a Git URL or local path above to install one.
+              Paste a Git URL, GitHub <code>owner/repo</code>, or local path above to install one.
+              GitHub repos use <code>gh</code> when authenticated (private &amp; GHE supported).
             </span>
           </div>
         ) : (

@@ -100,6 +100,7 @@ impl Plugin for GitHubPlugin {
                     score: 70,
                     action_type: "plugin_execute".to_string(),
                     action_data: format!("github:{}:{}", host, name),
+                    source: None,
                 });
             }
         }

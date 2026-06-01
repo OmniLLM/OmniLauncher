@@ -9,6 +9,8 @@ interface QueryResult {
   score: number;
   action_type: string;
   action_data: string;
+  /** Plugin name that produced this result. Used for section grouping. */
+  source?: string;
 }
 
 interface Props {
@@ -19,12 +21,12 @@ interface Props {
   groupTitle?: string;
 }
 
-const ACTION_BADGE: Record<string, string> = {
-  open: "↵ Open",
-  url: "↵ Open",
-  shell: "↵ Run",
-  copy: "↵ Copy",
-  help_command: "↵ Use",
+const ACTION_LABEL: Record<string, string> = {
+  open: "Open",
+  url: "Open",
+  shell: "Run",
+  copy: "Copy",
+  help_command: "Use",
 };
 
 // Detect mac so we show ⌘ vs Ctrl in the kbd hints.
@@ -47,7 +49,6 @@ function escapeHtml(s: string): string {
 
 function highlight(text: string, q: string): string {
   if (!q) return escapeHtml(text);
-  // First try exact substring (faster, cleaner output).
   const idx = text.toLowerCase().indexOf(q.toLowerCase());
   if (idx !== -1) {
     return (
@@ -56,7 +57,6 @@ function highlight(text: string, q: string): string {
       escapeHtml(text.slice(idx + q.length))
     );
   }
-  // Fuzzy: highlight individual matched chars in order.
   const lower = text.toLowerCase();
   const qLower = q.toLowerCase();
   let qi = 0;
@@ -72,6 +72,55 @@ function highlight(text: string, q: string): string {
   }
   if (qi === qLower.length) return out;
   return escapeHtml(text);
+}
+
+/** Convert a plugin slug ("file_search", "calculator") to a friendly section
+ * header label ("File Search", "Calculator"). */
+function prettifySource(s: string | undefined): string {
+  if (!s) return "Other";
+  return s
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Group results by `source`, preserving the order in which each source
+ * first appears (matches the backend's pre-sorted-by-score ordering, which
+ * already approximates relevance). Returns a flat array of section-tagged
+ * rows so we can keep a single list cursor across all groups (Raycast does
+ * the same thing). */
+type Row =
+  | { kind: "header"; key: string; label: string }
+  | { kind: "item"; key: string; result: QueryResult; flatIndex: number };
+
+function buildRows(results: QueryResult[]): { rows: Row[]; itemRows: Row[] } {
+  const byGroup = new Map<string, QueryResult[]>();
+  const order: string[] = [];
+  for (const r of results) {
+    const g = r.source || "other";
+    if (!byGroup.has(g)) {
+      byGroup.set(g, []);
+      order.push(g);
+    }
+    byGroup.get(g)!.push(r);
+  }
+
+  const rows: Row[] = [];
+  const itemRows: Row[] = [];
+  let flatIndex = 0;
+  // If only one group, skip the header (looks redundant for a single section).
+  const showHeaders = order.length > 1;
+  for (const g of order) {
+    if (showHeaders) {
+      rows.push({ kind: "header", key: `h:${g}`, label: prettifySource(g) });
+    }
+    for (const r of byGroup.get(g)!) {
+      const row: Row = { kind: "item", key: r.id, result: r, flatIndex };
+      rows.push(row);
+      itemRows.push(row);
+      flatIndex++;
+    }
+  }
+  return { rows, itemRows };
 }
 
 export default function ResultList({
@@ -96,6 +145,8 @@ export default function ResultList({
 
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
+
+  const { rows } = useMemo(() => buildRows(results), [results]);
 
   const toggleFavorite = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -153,7 +204,6 @@ export default function ResultList({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      // Cmd/Ctrl + 1..9 — direct invocation.
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       if (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
         const i = parseInt(e.key, 10) - 1;
@@ -210,6 +260,7 @@ export default function ResultList({
   }, [ctxMenu]);
 
   const sel = results[selected];
+  const selActionLabel = sel ? (ACTION_LABEL[sel.action_type] ?? "Run") : "";
 
   return (
     <>
@@ -219,13 +270,17 @@ export default function ResultList({
         role="listbox"
         aria-activedescendant={selected >= 0 ? `omni-opt-${selected}` : undefined}
       >
-        {groupTitle && (
-          <div className="result-group__header" aria-hidden="true">
-            <span>{groupTitle}</span>
-            <span className="result-group__header-rule" />
-          </div>
-        )}
-        {results.map((r, i) => {
+        {rows.map((row) => {
+          if (row.kind === "header") {
+            return (
+              <div key={row.key} className="result-group__header" role="presentation">
+                <span>{row.label}</span>
+                <span className="result-group__header-rule" aria-hidden="true" />
+              </div>
+            );
+          }
+          const i = row.flatIndex;
+          const r = row.result;
           const isSelected = i === selected;
           const isHovered = i === hovered;
           const isFav = favorites.has(r.id);
@@ -233,7 +288,7 @@ export default function ResultList({
 
           return (
             <div
-              key={r.id}
+              key={row.key}
               ref={(el) => { itemRefs.current[i] = el; }}
               id={`omni-opt-${i}`}
               role="option"
@@ -259,10 +314,16 @@ export default function ResultList({
                   className="result-item__title"
                   dangerouslySetInnerHTML={{ __html: highlight(r.title, query) }}
                 />
-                {r.subtitle && (
-                  <FormattedSubtitle text={r.subtitle} color="var(--sub)" />
-                )}
               </div>
+
+              {/* Right-aligned accessory: subtitle as a single-line chip,
+                  Raycast-style. Long subtitles are ellipsized so the row
+                  height stays uniform regardless of content. */}
+              {r.subtitle && (
+                <div className="result-item__accessory" title={r.subtitle}>
+                  <FormattedSubtitle text={r.subtitle} color="var(--sub)" />
+                </div>
+              )}
 
               <div className="result-item__trailing">
                 <button
@@ -281,33 +342,35 @@ export default function ResultList({
                     {kbd}
                   </span>
                 )}
-                {isSelected && (
-                  <span className="result-item__action-badge">
-                    {ACTION_BADGE[r.action_type] ?? "↵"}
-                  </span>
-                )}
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Preview panel for selected item */}
-      {sel && (sel.subtitle || sel.action_data) && (
-        <div className="result-preview" aria-live="polite">
-          <span className="result-preview__icon" aria-hidden="true">
+      {/* Footer action bar — Raycast-style. Shows the primary action of the
+          currently selected row plus a hint for the (future) ⌘K action panel.
+          Replaces the old bottom preview pane: subtitles already moved to the
+          right of each row, so the preview was redundant. */}
+      {sel && (
+        <div className="result-actionbar" aria-live="polite">
+          <span className="result-actionbar__icon" aria-hidden="true">
             {sel.icon || "📄"}
           </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="result-preview__title">{sel.title}</div>
-            {sel.subtitle ? (
-              <div className="result-preview__body">{sel.subtitle}</div>
-            ) : (
-              <div className="result-preview__body result-preview__body--mono">
-                {sel.action_data}
-              </div>
-            )}
-          </div>
+          <span className="result-actionbar__title" title={sel.title}>
+            {sel.title}
+          </span>
+          <span className="result-actionbar__spacer" />
+          <span className="result-actionbar__primary">
+            <span className="result-actionbar__label">{selActionLabel}</span>
+            <kbd className="result-actionbar__kbd">↵</kbd>
+          </span>
+          <span className="result-actionbar__sep" aria-hidden="true" />
+          <span className="result-actionbar__secondary" title="Open actions menu (right-click for now)">
+            <span className="result-actionbar__label">Actions</span>
+            <kbd className="result-actionbar__kbd">{IS_MAC ? "⌘" : "Ctrl"}</kbd>
+            <kbd className="result-actionbar__kbd">K</kbd>
+          </span>
         </div>
       )}
 

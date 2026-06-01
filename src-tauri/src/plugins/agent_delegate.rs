@@ -183,6 +183,7 @@ impl Plugin for AgentDelegatePlugin {
                 score: 100,
                 action_type: "shell".to_string(),
                 action_data: shell_cmd,
+                source: None,
             }];
         }
 
