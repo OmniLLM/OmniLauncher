@@ -135,17 +135,6 @@
   }
 }
 
-@keyframes omni-hint-fadein {
-  from {
-    opacity: 0;
-    transform: translateY(3px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes skeleton-shimmer {
   from {
     background-position: -400px 0;
@@ -453,13 +442,6 @@ body {
   border-radius: 999px;
 }
 
-/* Hint row horizontal scrollbar (compact mode overflow) */
-.omni-hint-row::-webkit-scrollbar { height: 4px; }
-.omni-hint-row::-webkit-scrollbar-thumb {
-  background: var(--surface-2);
-  border-radius: 999px;
-}
-
 /* Brand tagline reveal */
 @keyframes omni-tagline-fadein {
   from { opacity: 0; transform: translateY(4px); }
@@ -489,61 +471,6 @@ body {
   color: var(--accent);
 }
 .omni-icon-btn:focus-visible {
-  opacity: 1;
-}
-
-/* Hints toggle button — slightly more prominent when active */
-.omni-hints-toggle-btn {
-  font-size: 13px;
-  font-weight: 700;
-  font-family: inherit;
-}
-.omni-hints-toggle-btn--active {
-  opacity: 0.75;
-  color: var(--accent);
-}
-.omni-hints-toggle-btn--active:hover {
-  color: var(--accent);
-}
-
-/* ── Interactive hint chip ──────────────────────────────────────────────── */
-.omni-hint-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--sub);
-  line-height: 1.25;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 3px 7px 3px 4px;
-  cursor: pointer;
-  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
-  font-family: inherit;
-}
-.omni-hint-chip:hover,
-.omni-hint-chip:focus-visible {
-  background: var(--accent-dim);
-  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
-  color: var(--text);
-}
-.omni-hint-chip__kbd {
-  font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 10px;
-  background: var(--surface);
-  color: var(--accent);
-  padding: 1px 6px;
-  border-radius: 5px;
-  border: 1px solid var(--surface-2);
-  line-height: 1.55;
-  white-space: nowrap;
-}
-.omni-hint-chip__label {
-  opacity: 0.78;
-}
-.omni-hint-chip:hover .omni-hint-chip__label {
   opacity: 1;
 }
 
@@ -611,37 +538,6 @@ body {
 .omni-badge--outline {
   background: transparent;
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-}
-
-/* ── Hint toggle button (Show all hints / fewer) ────────────────────────── */
-.omni-hint-toggle {
-  background: transparent;
-  border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
-  color: var(--accent);
-  border-radius: 999px;
-  padding: 3px 12px;
-  font-size: 10.5px;
-  font-weight: 600;
-  line-height: 1.3;
-  cursor: pointer;
-  transition: background-color 140ms ease, border-color 140ms ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: inherit;
-}
-.omni-hint-toggle:hover,
-.omni-hint-toggle:focus-visible {
-  background: var(--accent-dim);
-  border-style: solid;
-}
-.omni-hint-toggle__chev {
-  font-size: 9px;
-  opacity: 0.8;
-  transition: transform 180ms ease;
-}
-.omni-hint-toggle--open .omni-hint-toggle__chev {
-  transform: rotate(180deg);
 }
 
 /* === Results List === */
