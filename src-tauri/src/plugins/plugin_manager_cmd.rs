@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::gh_helper;
 use super::external::{discover_plugins_in_repo, ext_plugins_dir, load_manifest};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -447,9 +448,18 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
         }
     }
 
+    let is_gh_shorthand = !source.starts_with('/')
+        && !source.starts_with('.')
+        && !source.starts_with('~')
+        && !source.contains("://")
+        && !source.starts_with("git@")
+        && !source.contains(' ')
+        && source.matches('/').count() == 1
+        && gh_helper::parse_github_repo(&source).is_some();
     let is_remote = source.starts_with("http://")
         || source.starts_with("https://")
-        || source.starts_with("git@");
+        || source.starts_with("git@")
+        || is_gh_shorthand;
 
     if let Some(subdir) = parse_github_subdir_url(&source) {
         // GitHub `tree/<branch>/<subpath>` URLs are not clone-able. Sparse-
@@ -463,22 +473,68 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
         );
         sparse_checkout_subdir(&subdir, &dest).await?;
     } else if is_remote {
-        // Clone the repo
+        // Priority: git → gh (→ curl, for raw single-file paths handled
+        // elsewhere). Plain `git clone` works for all public repos with no
+        // extra dependencies, so try it first. Only fall back to `gh repo
+        // clone` when git fails — typically because the repo is private or on
+        // GitHub Enterprise and the user is authenticated via `gh auth login`.
         let dest_str = dest.to_string_lossy().into_owned();
+        let mut cloned = false;
+        let mut git_err: Option<String> = None;
+
+        // For gh shorthand (`owner/repo`), git won't accept the bare form, so
+        // resolve it to a full clone URL via gh's parser before invoking git.
+        let git_source: String = match gh_helper::parse_github_repo(&source) {
+            Some(repo) if is_gh_shorthand => repo.clone_url(),
+            _ => source.clone(),
+        };
+
         log::info!(
             "install_plugin: git clone --depth=1 {} -> {}",
-            source,
+            git_source,
             dest_str
         );
         let output = tokio::process::Command::new("git")
-            .args(["clone", "--depth=1", &source, &dest_str])
+            .args(["clone", "--depth=1", &git_source, &dest_str])
             .output()
             .await
             .map_err(|e| format!("Failed to spawn git: {e}"))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("git clone failed: {stderr}"));
+        if output.status.success() {
+            cloned = true;
+        } else {
+            git_err = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+            // Clean up partial clone before gh retry.
+            if dest.exists() {
+                let _ = force_remove_dir_all(&dest);
+            }
+        }
+
+        if !cloned {
+            if let Some(repo) = gh_helper::parse_github_repo(&source) {
+                if gh_helper::is_gh_available() {
+                    log::info!(
+                        "install_plugin: git failed, trying gh repo clone {}/{} -> {} (host={})",
+                        repo.owner, repo.repo, dest_str, repo.host
+                    );
+                    match gh_helper::gh_clone(&repo, &dest, &["--depth=1"]).await {
+                        Ok(()) => cloned = true,
+                        Err(e) => {
+                            log::warn!("install_plugin: gh clone also failed: {e}");
+                            if dest.exists() {
+                                let _ = force_remove_dir_all(&dest);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !cloned {
+            return Err(format!(
+                "git clone failed: {}",
+                git_err.unwrap_or_else(|| "unknown error".to_string())
+            ));
         }
     } else {
         // Local path — resolve it
@@ -598,21 +654,80 @@ pub async fn update_plugin_collection(
         .as_millis();
     let stage = std::env::temp_dir().join(format!("omnilauncher-plugin-update-{now}"));
 
+    let is_gh_shorthand = !source.starts_with('/')
+        && !source.starts_with('.')
+        && !source.starts_with('~')
+        && !source.contains("://")
+        && !source.starts_with("git@")
+        && !source.contains(' ')
+        && source.matches('/').count() == 1
+        && gh_helper::parse_github_repo(&source).is_some();
     let is_remote = source.starts_with("http://")
         || source.starts_with("https://")
-        || source.starts_with("git@");
+        || source.starts_with("git@")
+        || is_gh_shorthand;
 
     if is_remote {
         let stage_str = stage.to_string_lossy().into_owned();
+
+        // Priority: git → gh. Same logic as install_plugin: try plain
+        // `git clone` first, fall back to `gh repo clone` only if git fails
+        // (private/GHE repo where the user has gh auth).
+        let mut cloned = false;
+        let mut git_err: Option<String> = None;
+
+        let git_source: String = match gh_helper::parse_github_repo(&source) {
+            Some(repo) if is_gh_shorthand => repo.clone_url(),
+            _ => source.clone(),
+        };
+
+        log::info!(
+            "update_plugin_collection: git clone --depth=1 {} -> {}",
+            git_source,
+            stage_str
+        );
         let output = tokio::process::Command::new("git")
-            .args(["clone", "--depth=1", &source, &stage_str])
+            .args(["clone", "--depth=1", &git_source, &stage_str])
             .output()
             .await
             .map_err(|e| format!("Failed to spawn git: {e}"))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("git clone failed: {stderr}"));
+        if output.status.success() {
+            cloned = true;
+        } else {
+            git_err = Some(String::from_utf8_lossy(&output.stderr).into_owned());
+            if stage.exists() {
+                let _ = force_remove_dir_all(&stage);
+            }
+        }
+
+        if !cloned {
+            if let Some(repo) = gh_helper::parse_github_repo(&source) {
+                if gh_helper::is_gh_available() {
+                    log::info!(
+                        "update_plugin_collection: git failed, trying gh repo clone {}/{} -> {}",
+                        repo.owner, repo.repo, stage_str
+                    );
+                    match gh_helper::gh_clone(&repo, &stage, &["--depth=1"]).await {
+                        Ok(()) => cloned = true,
+                        Err(e) => {
+                            log::warn!(
+                                "update_plugin_collection: gh clone also failed: {e}"
+                            );
+                            if stage.exists() {
+                                let _ = force_remove_dir_all(&stage);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !cloned {
+            return Err(format!(
+                "git clone failed: {}",
+                git_err.unwrap_or_else(|| "unknown error".to_string())
+            ));
         }
     } else {
         let src_path = PathBuf::from(&source);

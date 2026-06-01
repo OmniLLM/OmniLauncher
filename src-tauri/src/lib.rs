@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod dashboard;
 pub mod db;
+pub mod gh_helper;
 pub mod guardrails;
 pub mod live_server;
 pub mod path_config;

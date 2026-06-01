@@ -159,6 +159,7 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
             <br />
             <span className="skill-panel__empty-hint">
               Paste a URL or local path above to install one.
+              GitHub URLs use <code>gh</code> when authenticated (private &amp; GHE supported).
             </span>
           </div>
         ) : (
