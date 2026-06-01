@@ -242,6 +242,11 @@ export default function App() {
   const pendingQueueRef = useRef<string[]>([]);
   const cancelRequestedRef = useRef(false);
   const aiCleanupRef = useRef<(() => void) | null>(null);
+  // Tracks whether the user has manually resized the window via the corner
+  // grip. While true we stop auto-fitting the window to its content height so
+  // the manual size sticks (remembered across hide/show via Ctrl+Shift+O).
+  const userResizedRef = useRef(false);
+  const [userResized, setUserResized] = useState(false);
   const [queueDepth, setQueueDepth] = useState(0);
   const [queuedPrompts, setQueuedPrompts] = useState<string[]>([]);
 
@@ -997,6 +1002,15 @@ export default function App() {
         setResults([]);
         setTimeout(() => focusInput(), 50);
       }
+
+      // Reset window back to its initial auto-fitted size.
+      if (e.key === "0" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (userResizedRef.current) {
+          userResizedRef.current = false;
+          setUserResized(false);
+        }
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -1039,12 +1053,73 @@ export default function App() {
     "'Aptos Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif";
 
   useEffect(() => {
+    // Skip auto-fitting while the user is manually controlling the window size.
+    if (userResizedRef.current) return;
     invoke("set_window_geometry", {
       height: showSettings ? 560 : panelHeight,
       aiMode: isAiMode && !showSettings,
       panelMode: isPanelMode && !showSettings,
     }).catch(() => {});
-  }, [panelHeight, isAiMode, isPanelMode, showSettings]);
+  }, [panelHeight, isAiMode, isPanelMode, showSettings, userResized]);
+
+  // Corner resize grip: drag the bottom-right corner to resize the window while
+  // keeping it centered on screen. Width/height grow at 2× the cursor delta so
+  // the grabbed corner tracks the pointer exactly under centered layout.
+  const resetWindowSize = useCallback(() => {
+    if (!userResizedRef.current) return;
+    // Clearing the manual-resize flag re-enables the content auto-fit effect,
+    // which immediately re-applies the initial centered geometry and relayout.
+    userResizedRef.current = false;
+    setUserResized(false);
+  }, []);
+
+  const handleResizeStart = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      userResizedRef.current = true;
+      setUserResized(true);
+      const startW = window.innerWidth;
+      const startH = window.innerHeight;
+      const startX = e.screenX;
+      const startY = e.screenY;
+      const minW = 360;
+      const minH = 120;
+      const maxW = window.screen.width;
+      const maxH = window.screen.height;
+
+      let raf = 0;
+      let pending: { w: number; h: number } | null = null;
+      const flush = () => {
+        raf = 0;
+        if (pending) {
+          invoke("set_window_size_centered", {
+            width: pending.w,
+            height: pending.h,
+          }).catch(() => {});
+          pending = null;
+        }
+      };
+      const onMove = (ev: PointerEvent) => {
+        const w = Math.max(minW, Math.min(maxW, startW + 2 * (ev.screenX - startX)));
+        const h = Math.max(minH, Math.min(maxH, startH + 2 * (ev.screenY - startY)));
+        pending = { w, h };
+        if (!raf) raf = requestAnimationFrame(flush);
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        if (raf) {
+          cancelAnimationFrame(raf);
+          flush();
+        }
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    []
+  );
+
   return (
     <>
       {/* Global keyframe animations injected once */}
@@ -1078,8 +1153,8 @@ export default function App() {
       <div
         style={{
           width: "100%",
-          height: windowHeight,
-          maxHeight,
+          height: userResized ? "100vh" : windowHeight,
+          maxHeight: userResized ? "100vh" : maxHeight,
           background:
             resolvedTheme === "dark"
               ? backgroundUrl
@@ -1554,6 +1629,27 @@ export default function App() {
             }}
           />
         </div>
+
+        {/* ── Bottom-right corner resize grip (keeps window centered) ──── */}
+        <div
+          onPointerDown={handleResizeStart}
+          onDoubleClick={resetWindowSize}
+          title="Drag to resize · Double-click or Ctrl+0 to reset"
+          style={{
+            position: "fixed",
+            right: 0,
+            bottom: 0,
+            width: "18px",
+            height: "18px",
+            cursor: "nwse-resize",
+            zIndex: 9990,
+            background:
+              "linear-gradient(135deg, transparent 0 45%, color-mix(in srgb, var(--text) 35%, transparent) 45% 55%, transparent 55% 70%, color-mix(in srgb, var(--text) 35%, transparent) 70% 80%, transparent 80%)",
+            opacity: 0.5,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.9")}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.5")}
+        />
         </>)}
       </div>
 
@@ -1597,6 +1693,7 @@ export default function App() {
             {[
               ["Ctrl+K", "Toggle AI mode"],
               ["Ctrl+,", "Open Settings"],
+              ["Ctrl+0", "Reset window size"],
               ["F1", "Show/hide this help"],
               ["Escape", "Clear / Hide window"],
               ["↑ / ↓", "Navigate results"],

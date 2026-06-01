@@ -538,6 +538,7 @@ pub fn run() {
             remove_plugin,
             vision_analyze,
             save_window_position,
+            set_window_size_centered,
             list_plugin_runtime_dependencies,
             install_plugin_runtime_dependency,
             install_python_command,
@@ -563,6 +564,45 @@ async fn save_window_position(x: i32, y: i32) -> Result<(), String> {
     let json = format!("{{\"x\":{},\"y\":{}}}", x, y);
     std::fs::write(&path, json).map_err(|e| e.to_string())
 }
+
+/// Resize the window to an explicit logical size while keeping it centered on
+/// the current monitor. Driven by the front-end corner resize grip.
+#[tauri::command]
+async fn set_window_size_centered(
+    window: tauri::WebviewWindow,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
+        let scale_factor = monitor.scale_factor();
+        let monitor_size = monitor.size();
+        let monitor_position = monitor.position();
+        let monitor_width = monitor_size.width as f64 / scale_factor;
+        let monitor_height = monitor_size.height as f64 / scale_factor;
+        let monitor_x = monitor_position.x as f64 / scale_factor;
+        let monitor_y = monitor_position.y as f64 / scale_factor;
+
+        let win_width = width.clamp(360.0, monitor_width);
+        let win_height = height.clamp(120.0, monitor_height);
+        let window_x = monitor_x + (monitor_width - win_width) / 2.0;
+        let window_y = monitor_y + (monitor_height - win_height) / 2.0;
+
+        window
+            .set_size(Size::Logical(LogicalSize::new(win_width, win_height)))
+            .map_err(|e| e.to_string())?;
+        window
+            .set_position(Position::Logical(LogicalPosition::new(window_x, window_y)))
+            .map_err(|e| e.to_string())?;
+    } else {
+        let win_width = width.clamp(360.0, 3000.0);
+        let win_height = height.clamp(120.0, 2000.0);
+        window
+            .set_size(Size::Logical(LogicalSize::new(win_width, win_height)))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 
 async fn sync_window_geometry(
     window: &tauri::WebviewWindow,
