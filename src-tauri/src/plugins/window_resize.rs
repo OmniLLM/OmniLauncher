@@ -264,6 +264,7 @@ impl Plugin for WindowResizePlugin {
                     score,
                     action_type: "shell".to_string(),
                     action_data: build_resize_command(l.rect),
+                    source: None,
                 }
             })
             .collect();

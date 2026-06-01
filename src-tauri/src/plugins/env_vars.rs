@@ -34,6 +34,7 @@ impl Plugin for EnvVarsPlugin {
                 score: 50,
                 action_type: "copy".to_string(),
                 action_data: String::new(),
+                source: None,
             }];
         }
 
@@ -56,6 +57,7 @@ impl Plugin for EnvVarsPlugin {
                     score: 65,
                     action_type: "copy".to_string(),
                     action_data: val,
+                    source: None,
                 }
             })
             .collect()

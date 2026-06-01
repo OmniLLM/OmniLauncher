@@ -21,6 +21,7 @@ interface QueryResult {
   score: number;
   action_type: string;
   action_data: string;
+  source?: string;
 }
 
 interface AiResponse {

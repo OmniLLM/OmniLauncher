@@ -227,6 +227,7 @@ impl Plugin for WebSearchPlugin {
                     score: 90,
                     action_type: "url".to_string(),
                     action_data: url,
+                    source: None,
                 });
                 break; // first match wins
             }
@@ -243,6 +244,7 @@ impl Plugin for WebSearchPlugin {
                 score: 30,
                 action_type: "url".to_string(),
                 action_data: format!("https://www.google.com/search?q={}", encoded),
+                source: None,
             });
         }
 

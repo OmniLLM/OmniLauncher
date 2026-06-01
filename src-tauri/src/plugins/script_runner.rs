@@ -264,6 +264,7 @@ impl Plugin for ScriptRunnerPlugin {
                     score: 50,
                     action_type: "shell".to_string(),
                     action_data: format!("mkdir -p {}", scripts_dir().display()),
+                    source: None,
                 }];
             }
             return vec![];
@@ -300,6 +301,7 @@ impl Plugin for ScriptRunnerPlugin {
                     score,
                     action_type: "shell".to_string(),
                     action_data: argv_to_shell_string(&shell_run_cmd(&s.path)),
+                    source: None,
                 }
             })
             .collect()

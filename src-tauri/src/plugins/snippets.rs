@@ -36,6 +36,7 @@ impl Plugin for SnippetsPlugin {
                 score: 50,
                 action_type: "copy".to_string(),
                 action_data: String::new(),
+                source: None,
             }];
         }
 
@@ -61,6 +62,7 @@ impl Plugin for SnippetsPlugin {
                     score: 70,
                     action_type: "copy".to_string(),
                     action_data: content,
+                    source: None,
                 }
             })
             .collect()

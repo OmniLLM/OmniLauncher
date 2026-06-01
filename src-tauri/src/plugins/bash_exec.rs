@@ -36,6 +36,7 @@ impl Plugin for ShellExecPlugin {
                 score: 50,
                 action_type: "shell".to_string(),
                 action_data: String::new(),
+                source: None,
             }];
         }
         vec![QueryResult {
@@ -46,6 +47,7 @@ impl Plugin for ShellExecPlugin {
             score: 90,
             action_type: "shell".to_string(),
             action_data: cmd.to_string(),
+            source: None,
         }]
     }
 

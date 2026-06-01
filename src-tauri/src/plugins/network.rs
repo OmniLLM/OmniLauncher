@@ -57,6 +57,7 @@ impl Plugin for NetworkPlugin {
                 score: 70,
                 action_type: "shell".to_string(),
                 action_data: cmd,
+                source: None,
             })
             .collect();
 
@@ -74,6 +75,7 @@ impl Plugin for NetworkPlugin {
                     score: 80,
                     action_type: "shell".to_string(),
                     action_data: format!("ping {}", term),
+                    source: None,
                 },
             );
         }

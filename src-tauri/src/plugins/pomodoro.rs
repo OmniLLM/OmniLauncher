@@ -208,6 +208,7 @@ impl Plugin for PomodoroPlugin {
                 score: 95,
                 action_type: "none".to_string(),
                 action_data: String::new(),
+                source: None,
             })
         } else {
             None
@@ -238,6 +239,7 @@ impl Plugin for PomodoroPlugin {
                     score: 90,
                     action_type: "shell_bg".to_string(),
                     action_data: cmd,
+                    source: None,
                 });
             }
             if "stop".starts_with(sub) || sub == "stop" {
@@ -249,6 +251,7 @@ impl Plugin for PomodoroPlugin {
                     score: 80,
                     action_type: "callback".to_string(),
                     action_data: "pomo:stop".to_string(),
+                    source: None,
                 });
             }
         }
@@ -264,6 +267,7 @@ impl Plugin for PomodoroPlugin {
                 score: 85,
                 action_type: "shell_bg".to_string(),
                 action_data: cmd,
+                source: None,
             });
         }
 
@@ -278,6 +282,7 @@ impl Plugin for PomodoroPlugin {
                 score: 82,
                 action_type: "shell_bg".to_string(),
                 action_data: cmd,
+                source: None,
             });
         }
 

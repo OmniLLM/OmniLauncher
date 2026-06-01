@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>OmniLauncher — Raycast-style results mockup</title>
+<style>
+  :root {
+    --bg: #1e1e2e;
+    --bg-elevated: #181825;
+    --surface: #313244;
+    --surface-2: #45475a;
+    --surface-hover: #383852;
+    --border: #313244;
+    --text: #cdd6f4;
+    --sub: #a6adc8;
+    --muted: #6c7086;
+    --accent: #89b4fa;
+    --accent-dim: rgba(137, 180, 250, 0.14);
+    --shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 20% 10%, #2a2a40 0%, transparent 40%),
+      radial-gradient(circle at 80% 90%, #2c2440 0%, transparent 40%),
+      #0e0e18;
+    color: var(--text);
+    font-family: -apple-system, 'Segoe UI', Inter, sans-serif;
+    display: grid;
+    place-items: center;
+    padding: 40px 20px;
+  }
+
+  /* ---------- Launcher shell ---------- */
+  .launcher {
+    width: 780px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .search__icon { font-size: 16px; opacity: 0.6; }
+  .search__input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 16px;
+    color: var(--text);
+    font-family: inherit;
+  }
+  .search__input::placeholder { color: var(--muted); }
+  .search__chip {
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 5px;
+    background: var(--surface);
+    border: 1px solid var(--surface-2);
+    color: var(--sub);
+  }
+
+  /* ---------- Body: list + detail pane ---------- */
+  .body {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    min-height: 420px;
+    max-height: 520px;
+  }
+  .results {
+    overflow-y: auto;
+    padding: 6px 0 8px;
+    border-right: 1px solid var(--border);
+  }
+
+  /* Section header */
+  .group-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px 4px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sub);
+    opacity: 0.65;
+    user-select: none;
+  }
+  .group-header__rule {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .group-header__count {
+    font-weight: 500;
+    color: var(--muted);
+    letter-spacing: 0;
+  }
+
+  /* Result row */
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 16px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .row:hover {
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+  }
+  .row--selected {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-left-color: var(--accent);
+  }
+  .row__icon {
+    font-size: 16px;
+    width: 22px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .row__title {
+    font-size: 13.5px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 0 1 auto;
+  }
+  .row__title mark {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+    color: var(--text);
+    border-radius: 3px;
+    padding: 0 1px;
+  }
+  .row--selected .row__title { color: var(--accent); }
+
+  /* Right-aligned accessory text (Raycast's "subtitle as accessory") */
+  .row__accessory {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .row__sub {
+    font-size: 11.5px;
+    color: var(--sub);
+    opacity: 0.75;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+    font-family: var(--mono);
+  }
+  .row__tag {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--sub);
+    border: 1px solid var(--surface-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+
+  /* Detail pane (right) */
+  .detail {
+    padding: 18px 18px 14px;
+    background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .detail__header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .detail__icon { font-size: 22px; }
+  .detail__title { font-size: 14px; font-weight: 600; }
+  .detail__source {
+    font-size: 10.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 2px;
+  }
+  .detail__body {
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--sub);
+  }
+  .detail__body code {
+    font-family: var(--mono);
+    background: var(--surface);
+    border: 1px solid var(--surface-2);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 11.5px;
+  }
+  .detail__meta {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 6px 12px;
+    font-size: 11.5px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+  .detail__meta-key {
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 10.5px;
+    padding-top: 1px;
+  }
+  .detail__meta-val {
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    word-break: break-all;
+  }
+
+  /* Footer action bar */
+  .footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-elevated);
+    font-size: 11.5px;
+    color: var(--sub);
+  }
+  .footer__brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .footer__brand-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+  }
+  .footer__spacer { flex: 1; }
+  .footer__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .footer__btn:hover { background: var(--surface); color: var(--text); }
+  .footer__btn--primary {
+    color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .kbd {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    border: 1px solid var(--surface-2);
+    background: var(--surface);
+    color: var(--sub);
+    line-height: 1.3;
+  }
+  .footer__btn--primary .kbd {
+    background: transparent;
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+    color: var(--accent);
+  }
+
+  /* Two-up comparison */
+  h2.section {
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 30px 0 12px;
+  }
+</style>
+</head>
+<body>
+  <div>
+    <h2 class="section">Raycast-style proposal</h2>
+    <div class="launcher">
+      <div class="search">
+        <span class="search__icon">🔍</span>
+        <input class="search__input" value="ssh prod" />
+        <span class="search__chip">8 results</span>
+      </div>
+
+      <div class="body">
+        <!-- Result list with grouping -->
+        <div class="results">
+          <div class="group-header">
+            <span>Apps</span>
+            <span class="group-header__rule"></span>
+            <span class="group-header__count">2</span>
+          </div>
+          <div class="row">
+            <span class="row__icon">📱</span>
+            <span class="row__title">SSH Manager</span>
+            <span class="row__accessory">
+              <span class="row__sub">/Applications/SSH Manager.app</span>
+            </span>
+          </div>
+          <div class="row">
+            <span class="row__icon">🖥️</span>
+            <span class="row__title">Terminal</span>
+            <span class="row__accessory">
+              <span class="row__sub">/System/Applications/Utilities</span>
+            </span>
+          </div>
+
+          <div class="group-header">
+            <span>Snippets</span>
+            <span class="group-header__rule"></span>
+            <span class="group-header__count">3</span>
+          </div>
+          <div class="row row--selected">
+            <span class="row__icon">📝</span>
+            <span class="row__title">ssh <mark>prod</mark>uction-web-01</span>
+            <span class="row__accessory">
+              <span class="row__tag">Snippet</span>
+              <span class="row__sub">last used 2h ago</span>
+            </span>
+          </div>
+          <div class="row">
+            <span class="row__icon">📝</span>
+            <span class="row__title">ssh <mark>prod</mark>-db (read replica)</span>
+            <span class="row__accessory">
+              <span class="row__sub">last used yesterday</span>
+            </span>
+          </div>
+          <div class="row">
+            <span class="row__icon">📝</span>
+            <span class="row__title">ssh <mark>prod</mark>uction-jumphost</span>
+            <span class="row__accessory">
+              <span class="row__sub">last used 3d ago</span>
+            </span>
+          </div>
+
+          <div class="group-header">
+            <span>Files</span>
+            <span class="group-header__rule"></span>
+            <span class="group-header__count">2</span>
+          </div>
+          <div class="row">
+            <span class="row__icon">📄</span>
+            <span class="row__title">prod-deployment.md</span>
+            <span class="row__accessory">
+              <span class="row__sub">~/Documents/runbooks</span>
+            </span>
+          </div>
+          <div class="row">
+            <span class="row__icon">📄</span>
+            <span class="row__title">prod.env</span>
+            <span class="row__accessory">
+              <span class="row__sub">~/projects/api-server</span>
+            </span>
+          </div>
+
+          <div class="group-header">
+            <span>Web Search</span>
+            <span class="group-header__rule"></span>
+            <span class="group-header__count">1</span>
+          </div>
+          <div class="row">
+            <span class="row__icon">🌐</span>
+            <span class="row__title">Search Google for "ssh prod"</span>
+            <span class="row__accessory">
+              <span class="row__sub">google.com</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Detail pane shows rich info for the selected row -->
+        <div class="detail">
+          <div class="detail__header">
+            <span class="detail__icon">📝</span>
+            <div>
+              <div class="detail__title">ssh production-web-01</div>
+              <div class="detail__source">Snippets · expand & run</div>
+            </div>
+          </div>
+
+          <div class="detail__body">
+            Connect to the primary production web node via the bastion. Uses
+            <code>~/.ssh/config</code> alias <code>prod-web</code> with
+            <code>ProxyJump bastion-prod</code> configured.
+          </div>
+
+          <div class="detail__meta">
+            <div class="detail__meta-key">Command</div>
+            <div class="detail__meta-val">ssh prod-web</div>
+
+            <div class="detail__meta-key">Tags</div>
+            <div class="detail__meta-val" style="font-family: inherit;">production · ssh · web</div>
+
+            <div class="detail__meta-key">Last used</div>
+            <div class="detail__meta-val" style="font-family: inherit;">2 hours ago</div>
+
+            <div class="detail__meta-key">Source</div>
+            <div class="detail__meta-val">~/.config/omnilauncher/snippets.toml</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Persistent action bar -->
+      <div class="footer">
+        <span class="footer__brand">
+          <span class="footer__brand-dot"></span>
+          OmniLauncher
+        </span>
+        <span class="footer__spacer"></span>
+        <span class="footer__btn footer__btn--primary">
+          Run Snippet <span class="kbd">↵</span>
+        </span>
+        <span class="footer__btn">
+          Actions <span class="kbd">⌘K</span>
+        </span>
+      </div>
+    </div>
+
+    <h2 class="section">Key changes vs current</h2>
+    <ul style="color: var(--sub); font-size: 13px; line-height: 1.7; max-width: 780px;">
+      <li><b>Grouping by plugin/source</b> — every plugin's results sit under a small uppercase header (CSS already exists, just needs to be wired up in <code>ResultList.tsx</code> and a <code>source</code> field added to <code>QueryResult</code>).</li>
+      <li><b>Single-line rows</b> — subtitle moved to the right as a faded accessory; titles and subtitles never wrap, no row-height jumps when markdown subtitles appear.</li>
+      <li><b>Right-side detail pane</b> — replaces the bottom 2-line preview. Renders rich markdown, structured metadata, and a clear "source" line so users always know which plugin produced the result.</li>
+      <li><b>Persistent footer action bar</b> — primary action (<code>↵</code>) labelled per-result type (Run Snippet / Open File / Search Web…), and a <code>⌘K</code> button to open the action panel.</li>
+      <li><b>Type tag chip</b> — small "Snippet" / "App" / "Web" chip on rows where the type isn't obvious from the icon.</li>
+    </ul>
+  </div>
+</body>
+</html>

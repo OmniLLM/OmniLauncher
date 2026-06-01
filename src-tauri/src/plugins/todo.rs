@@ -866,6 +866,7 @@ impl Plugin for TodoPlugin {
                     score: 50,
                     action_type: "copy".to_string(),
                     action_data: String::new(),
+                    source: None,
                 }];
             }
             return items
@@ -891,6 +892,7 @@ impl Plugin for TodoPlugin {
                         score: 60,
                         action_type: "copy".to_string(),
                         action_data: item.text.clone(),
+                        source: None,
                     }
                 })
                 .collect();
@@ -905,6 +907,7 @@ impl Plugin for TodoPlugin {
                 score: 80,
                 action_type: "open_url".to_string(),
                 action_data: "/todo".to_string(),
+                source: None,
             }];
         }
 
@@ -920,6 +923,7 @@ impl Plugin for TodoPlugin {
                             score: 80,
                             action_type: $action_type.to_string(),
                             action_data: id.to_string(),
+                            source: None,
                         }];
                     }
                 }
@@ -952,6 +956,7 @@ impl Plugin for TodoPlugin {
             score: 70,
             action_type: "todo_add".to_string(),
             action_data: term.to_string(),
+            source: None,
         }]
     }
 

@@ -151,6 +151,7 @@ impl Plugin for FileSearchPlugin {
                     score: 10,
                     action_type: "none".to_string(),
                     action_data: String::new(),
+                    source: None,
                 }]
             }
             IndexSnapshot::Ready(paths) => {
@@ -175,6 +176,7 @@ impl Plugin for FileSearchPlugin {
                         score,
                         action_type: "open".to_string(),
                         action_data: path_str,
+                        source: None,
                     });
                     if results.len() >= MAX_RESULTS {
                         break;

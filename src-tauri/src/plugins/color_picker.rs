@@ -33,6 +33,7 @@ impl Plugin for ColorPickerPlugin {
                 score: 50,
                 action_type: "copy".to_string(),
                 action_data: String::new(),
+                source: None,
             }];
         }
 
@@ -121,6 +122,7 @@ fn make_result(format: &str, value: &str) -> QueryResult {
         score: 80,
         action_type: "copy".to_string(),
         action_data: value.to_string(),
+        source: None,
     }
 }
 

@@ -892,6 +892,7 @@ async fn slash_preview(
                     score: 100,
                     action_type: "url".to_string(),
                     action_data: format!("https://www.google.com/search?q={}", encoded),
+                    source: None,
                 },
                 QueryResult {
                     id: "web-youtube".to_string(),
@@ -904,6 +905,7 @@ async fn slash_preview(
                         "https://www.youtube.com/results?search_query={}",
                         encoded
                     ),
+                    source: None,
                 },
                 QueryResult {
                     id: "web-github".to_string(),
@@ -913,6 +915,7 @@ async fn slash_preview(
                     score: 80,
                     action_type: "url".to_string(),
                     action_data: format!("https://github.com/search?q={}", encoded),
+                    source: None,
                 },
             ])
         }
@@ -961,6 +964,7 @@ async fn slash_preview(
                         // injection is possible even if action_data is tampered.
                         action_type: "kill_pid".to_string(),
                         action_data: pid.to_string(),
+                        source: None,
                     }
                 })
                 .collect();
@@ -1006,6 +1010,7 @@ async fn slash_preview(
             score: 100,
             action_type: "open_plugin_manager".to_string(),
             action_data: String::new(),
+            source: None,
         }]),
         _ => Ok(vec![]),
     }

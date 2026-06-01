@@ -38,6 +38,7 @@ impl Plugin for HostsPlugin {
                     score: 50,
                     action_type: "copy".to_string(),
                     action_data: hosts_path,
+                    source: None,
                 }];
             }
         };
@@ -62,6 +63,7 @@ impl Plugin for HostsPlugin {
                     score: 60,
                     action_type: "copy".to_string(),
                     action_data: line.trim().to_string(),
+                    source: None,
                 }
             })
             .collect();
@@ -75,6 +77,7 @@ impl Plugin for HostsPlugin {
             score: 40,
             action_type: "shell".to_string(),
             action_data: edit_hosts_cmd(),
+            source: None,
         });
 
         results
