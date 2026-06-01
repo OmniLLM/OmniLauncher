@@ -36,14 +36,16 @@
   --surface-2: #bcc0cc;
   --surface-hover: #c5c9d4;
   --text: #4c4f69;
-  --text-secondary: #7c7f93;
-  --sub: #9ca0b0;
-  --accent: #8839ef;
-  --accent-dim: rgba(136, 57, 239, 0.1);
-  --accent-hover: rgba(136, 57, 239, 0.06);
-  --border: rgba(136, 57, 239, 0.12);
+  --text-secondary: #5c5f77;
+  /* --sub: darkened from #9ca0b0 → #5c5f77 for ~5.5:1 contrast on --bg (WCAG AA) */
+  --sub: #5c5f77;
+  /* accent: unified to the same blue hue as dark (#8ab4f8), tuned darker/saturated for light bg */
+  --accent: #1a73e8;
+  --accent-dim: rgba(26, 115, 232, 0.1);
+  --accent-hover: rgba(26, 115, 232, 0.06);
+  --border: rgba(26, 115, 232, 0.12);
   --shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(0, 0, 0, 0.06);
-  --user-bubble: #8839ef;
+  --user-bubble: #1a73e8;
   --user-bubble-text: #eff1f5;
   --ai-bubble: #ccd0da;
   --ai-text: #4c4f69;
@@ -561,13 +563,11 @@ body {
 
 .result-item:hover {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
-  transform: translateX(2px);
 }
 
 .result-item--selected {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   border-left-color: var(--accent);
-  transform: translateX(2px);
 }
 
 .result-item__icon {
@@ -600,7 +600,7 @@ body {
 }
 
 .result-item--selected .result-item__title {
-  color: var(--accent);
+  color: var(--text);
 }
 
 .result-item__subtitle {
@@ -820,6 +820,9 @@ body {
   line-height: 1.5;
   overflow: hidden;
   max-height: 160px; /* cap so a huge table doesn't blow up the row */
+  /* Fade out the bottom edge where content is clipped by max-height. */
+  -webkit-mask-image: linear-gradient(to bottom, black 70%, transparent);
+  mask-image: linear-gradient(to bottom, black 70%, transparent);
 }
 
 .omni-subtitle-rich .md-table {
@@ -854,9 +857,10 @@ body {
   border: 1px solid var(--surface-2);
   border-radius: 4px;
   padding: 4px 8px;
-  overflow-x: auto;
+  overflow-x: hidden;
   margin: 2px 0;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .omni-subtitle-rich .md-list {

@@ -15,6 +15,8 @@ interface Props {
   results: QueryResult[];
   query: string;
   onExecute: (r: QueryResult) => void;
+  /** Optional group header rendered above the list (e.g. "★ Favorites"). */
+  groupTitle?: string;
 }
 
 const ACTION_BADGE: Record<string, string> = {
@@ -76,6 +78,7 @@ export default function ResultList({
   results,
   query,
   onExecute,
+  groupTitle,
 }: Props) {
   const [selected, setSelected] = useState(0);
   const [hovered, setHovered] = useState(-1);
@@ -206,18 +209,6 @@ export default function ResultList({
     };
   }, [ctxMenu]);
 
-  if (results.length === 0) {
-    return (
-      <div className="results-empty">
-        <div className="results-empty__icon">🔍</div>
-        <div className="results-empty__title">No results</div>
-        <div className="results-empty__hint">
-          Try a different query, or hit <kbd>?</kbd> to see available prefixes.
-        </div>
-      </div>
-    );
-  }
-
   const sel = results[selected];
 
   return (
@@ -228,6 +219,12 @@ export default function ResultList({
         role="listbox"
         aria-activedescendant={selected >= 0 ? `omni-opt-${selected}` : undefined}
       >
+        {groupTitle && (
+          <div className="result-group__header" aria-hidden="true">
+            <span>{groupTitle}</span>
+            <span className="result-group__header-rule" />
+          </div>
+        )}
         {results.map((r, i) => {
           const isSelected = i === selected;
           const isHovered = i === hovered;
@@ -284,9 +281,11 @@ export default function ResultList({
                     {kbd}
                   </span>
                 )}
-                <span className="result-item__action-badge">
-                  {ACTION_BADGE[r.action_type] ?? "↵"}
-                </span>
+                {isSelected && (
+                  <span className="result-item__action-badge">
+                    {ACTION_BADGE[r.action_type] ?? "↵"}
+                  </span>
+                )}
               </div>
             </div>
           );

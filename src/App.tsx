@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SearchBar from "./components/SearchBar";
 import ResultList from "./components/ResultList";
-import FavoritesList from "./components/FavoritesList";
+
 
 // Code-split heavy on-demand panels so they don't bloat the initial launcher bundle.
 const SettingsWindow = lazy(() => import("./components/SettingsWindow"));
@@ -212,6 +212,7 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<QueryResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   // Monotonic request id — stale plugin responses (slower than a newer
   // keystroke's request) get dropped instead of clobbering fresh results.
   const searchSeqRef = useRef(0);
@@ -249,6 +250,21 @@ export default function App() {
       return stored ? JSON.parse(stored) : [];
     } catch { return []; }
   });
+
+  // Resolve favorite ids → full QueryResult objects (persisted alongside ids).
+  // Recomputed whenever the favorites id list changes (add / remove).
+  const favoriteItems = useMemo<QueryResult[]>(() => {
+    if (favorites.length === 0) return [];
+    try {
+      const stored = localStorage.getItem("omni-favorite-items");
+      const all: QueryResult[] = stored ? JSON.parse(stored) : [];
+      return favorites
+        .map((id) => all.find((r) => r.id === id))
+        .filter(Boolean) as QueryResult[];
+    } catch {
+      return [];
+    }
+  }, [favorites]);
   const [showCheatSheet, setShowCheatSheet] = useState(false);
   const [exportToast, setExportToast] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -354,6 +370,7 @@ export default function App() {
   }, [resolvedTheme]);
 
   const doSearch = useCallback(async (q: string) => {
+    setSearchError(null);
     if (isHelpQuery(q)) {
       setResults(HELP_RESULTS);
       setSearching(false);
@@ -393,9 +410,13 @@ export default function App() {
       const res = await invoke<QueryResult[]>("search", { query: q });
       if (mySeq !== searchSeqRef.current) return; // stale response — drop
       setResults(res);
-    } catch {
+      setSearchError(null);
+    } catch (e) {
       if (mySeq !== searchSeqRef.current) return;
       setResults([]);
+      setSearchError(
+        e instanceof Error ? e.message : typeof e === "string" ? e : String(e),
+      );
     } finally {
       if (mySeq === searchSeqRef.current) setSearching(false);
     }
@@ -1370,11 +1391,12 @@ export default function App() {
         {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
         {!isAiMode && !showPluginManager && !showSkillManager && (
           <>
-            {query.trim() === "" && favorites.length > 0 && (
-              <FavoritesList
-                favoriteIds={favorites}
+            {query.trim() === "" && favoriteItems.length > 0 && (
+              <ResultList
+                results={favoriteItems}
+                query=""
                 onExecute={handleExecute}
-                onFavoritesChange={setFavorites}
+                groupTitle="★ Favorites"
               />
             )}
             {results.length > 0 && (
@@ -1384,30 +1406,59 @@ export default function App() {
                 we're waiting on the backend (no stale results to show). */}
             {results.length === 0 && searching && query.trim() !== "" && (
               <div
+                className="results"
                 aria-live="polite"
+                aria-busy="true"
+                style={{ padding: "8px 0" }}
+              >
+                {[0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className="result-item"
+                    style={{ cursor: "default", animation: "none" }}
+                  >
+                    <span
+                      className="skeleton"
+                      style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0 }}
+                    />
+                    <div className="result-item__content">
+                      <span
+                        className="skeleton"
+                        style={{
+                          display: "block",
+                          height: 12,
+                          width: `${70 - i * 12}%`,
+                          marginBottom: 6,
+                        }}
+                      />
+                      <span
+                        className="skeleton"
+                        style={{ display: "block", height: 10, width: `${50 - i * 8}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Error state — backend search call rejected. */}
+            {results.length === 0 && !searching && searchError && query.trim() !== "" && (
+              <div
+                role="alert"
                 style={{
-                  padding: "12px 16px",
+                  padding: "16px",
                   fontSize: 13,
-                  color: "var(--sub)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
+                  color: "var(--error)",
+                  lineHeight: 1.55,
                 }}
               >
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: "50%",
-                    background: "var(--accent)",
-                    animation: "omni-dot-pulse 1.2s ease-in-out infinite",
-                  }}
-                />
-                Searching…
+                <div>⚠ Search failed: {searchError}</div>
+                <div style={{ marginTop: 6, fontSize: 12, color: "var(--sub)" }}>
+                  Edit your query to try again.
+                </div>
               </div>
             )}
             {/* Empty state — query typed, search finished, nothing matched. */}
-            {results.length === 0 && !searching && query.trim() !== "" &&
+            {results.length === 0 && !searching && !searchError && query.trim() !== "" &&
               !isHelpQuery(query) && !isHelpHintQuery(query) &&
               !isAiPrefix(query) && !isConversationResetCommand(query) && (
               <div
