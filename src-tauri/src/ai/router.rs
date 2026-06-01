@@ -303,6 +303,12 @@ impl Router {
         let mut recent_fingerprints: std::collections::VecDeque<String> =
             std::collections::VecDeque::with_capacity(3);
 
+        // Guard against the model announcing a next step in plain text without
+        // actually emitting a tool call. Each such "preamble" earns a nudge to
+        // continue, bounded so a stubborn model can't loop forever.
+        let mut continuation_nudges: usize = 0;
+        const MAX_CONTINUATION_NUDGES: usize = 3;
+
         for _iteration in 0..10 {
             // ── Context compression (sliding window) ──────────────────────────
             local_ctx.compress_if_needed();
@@ -324,12 +330,48 @@ impl Router {
                 .await
             {
                 Ok(resp) => {
-                    if let Some(tool_calls) = resp.tool_calls {
-                        if tool_calls.is_empty() {
-                            final_content = resp.content.unwrap_or_default();
-                            break;
+                    let has_tool_calls = resp
+                        .tool_calls
+                        .as_ref()
+                        .map(|tcs| !tcs.is_empty())
+                        .unwrap_or(false);
+
+                    if !has_tool_calls {
+                        let content = resp.content.unwrap_or_default();
+
+                        // ── Preamble guard ─────────────────────────────────────
+                        // The model sometimes narrates its next step (e.g. "Now let
+                        // me find any parent groups that contain these:") but emits
+                        // it as plain text with NO tool call. Treating that as the
+                        // final answer makes the agent stop mid-task. Ask the model
+                        // itself to classify whether the message is a final answer
+                        // or just a preamble — this is language-agnostic and avoids
+                        // brittle hardcoded phrase lists.
+                        if continuation_nudges < MAX_CONTINUATION_NUDGES
+                            && is_continuation_preamble(ai_client, &content).await
+                        {
+                            continuation_nudges += 1;
+                            let assistant_msg = Message::assistant(&content);
+                            local_ctx.messages.push(assistant_msg.clone());
+                            loop_messages.push(assistant_msg);
+                            let nudge = Message::user(
+                                "You described the next step but did not actually call any tool. \
+                                 Invoke the appropriate tool now to carry out that step. \
+                                 If you already have everything required, produce the final answer instead.",
+                            );
+                            local_ctx.messages.push(nudge.clone());
+                            loop_messages.push(nudge);
+                            continue;
                         }
 
+                        // Genuine final text response.
+                        final_content = content;
+                        break;
+                    }
+
+                    let tool_calls = resp.tool_calls.clone().unwrap_or_default();
+
+                    {
                         // ── Loop detection ─────────────────────────────────────
                         let fingerprint = tool_calls
                             .iter()
@@ -398,10 +440,6 @@ impl Router {
                         }
 
                         // Continue to next iteration
-                    } else {
-                        // No tool calls: final text response
-                        final_content = resp.content.unwrap_or_default();
-                        break;
                     }
                 }
                 Err(e) => {
@@ -1384,6 +1422,54 @@ fn needs_output_formatting(content: &str) -> bool {
     }
 
     false
+}
+
+/// Detect an assistant message that *announces* a next action but returns no
+/// tool call — e.g. "Now let me find any parent groups that contain these:".
+///
+/// Such "preambles" should NOT be treated as the final answer: the agent
+/// intended to keep working but forgot to emit the tool call. When this returns
+/// `true`, the agentic loop nudges the model to actually invoke a tool.
+///
+/// Rather than matching a hardcoded list of English phrases (brittle and
+/// language-specific), this asks the model itself to classify the message.
+/// On any error the function returns `false` so the loop ends safely instead
+/// of spinning.
+async fn is_continuation_preamble(ai_client: &AiClient, content: &str) -> bool {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Fast path: messages with structured content (tables, code blocks, bullet
+    // lists) are real answers — skip the extra model call entirely.
+    let has_structure = trimmed.contains('|')
+        || trimmed.contains("```")
+        || trimmed.lines().any(|l| {
+            let s = l.trim_start();
+            s.starts_with("- ") || s.starts_with("* ") || s.starts_with("• ")
+        });
+    if has_structure {
+        return false;
+    }
+
+    let classifier_msgs = vec![
+        Message::system(
+            "You classify a single assistant message taken from a multi-step, tool-using agent. \
+             Decide whether the message is the FINAL answer to the user, or merely a PREAMBLE that \
+             announces an action the agent still intends to perform (but for which it has not yet \
+             called a tool). Consider any language. Reply with exactly one word: FINAL or CONTINUE.",
+        ),
+        Message::user(&format!(
+            "--- ASSISTANT MESSAGE ---\n{}\n--- END ---\n\nAnswer with one word: FINAL or CONTINUE.",
+            trimmed
+        )),
+    ];
+
+    match ai_client.chat(classifier_msgs).await {
+        Ok(reply) => reply.trim().to_uppercase().contains("CONTINUE"),
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]
