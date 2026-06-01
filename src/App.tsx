@@ -1017,6 +1017,10 @@ export default function App() {
   const launcherHasContent =
     results.length > 0 || showPluginManager || showSkillManager;
   const isCompactMode = !isAiMode && !launcherHasContent;
+  // In launcher (non-AI) mode, once there are results to show we lift the
+  // search bar to the top and render the answer in a card below it.
+  const launcherResultsMode =
+    !isAiMode && !showPluginManager && !showSkillManager && results.length > 0;
   const isPanelMode = showPluginManager || showSkillManager;
   const screenHeight = typeof window !== "undefined" ? window.screen.height : 1080;
   const compactHeight = Math.max(320, Math.round(screenHeight * 0.3));
@@ -1401,7 +1405,20 @@ export default function App() {
               />
             )}
             {results.length > 0 && (
-              <ResultList results={results} query={query} onExecute={handleExecute} />
+              <div
+                style={{
+                  margin: "0 12px 8px",
+                  background: "color-mix(in srgb, var(--surface) 60%, transparent)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "12px",
+                  overflow: "hidden",
+                  backdropFilter: "blur(10px)",
+                  WebkitBackdropFilter: "blur(10px)",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                }}
+              >
+                <ResultList results={results} query={query} onExecute={handleExecute} />
+              </div>
             )}
             {/* Loading skeleton — only when the user has typed something and
                 we're waiting on the backend (no stale results to show). */}
@@ -1508,6 +1525,10 @@ export default function App() {
           style={{
             flexShrink: 0,
             paddingBottom: "2px",
+            paddingTop: launcherResultsMode ? "10px" : undefined,
+            paddingLeft: launcherResultsMode ? "12px" : undefined,
+            paddingRight: launcherResultsMode ? "12px" : undefined,
+            order: launcherResultsMode ? -1 : undefined,
             transform: isCompactMode ? "translateY(-18px)" : undefined,
           }}
         >

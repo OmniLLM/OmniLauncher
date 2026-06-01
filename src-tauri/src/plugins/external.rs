@@ -444,6 +444,16 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
         }
     }
 
+    // Likewise refresh the Flow.Launcher shim (`flow-shim.cjs`) for any
+    // already-installed Flow plugins. Synthesis is idempotent and overwrites
+    // the shim, so fixes bundled with the binary (e.g. PYTHONPATH for the
+    // plugin's bundled `lib/` deps) propagate without a manual re-install.
+    for base in &dirs {
+        if base.exists() {
+            let _ = super::flow::synthesize_flow_plugins_in(base);
+        }
+    }
+
     let mut plugins: Vec<ExternalPlugin> = vec![];
 
     for base in &dirs {

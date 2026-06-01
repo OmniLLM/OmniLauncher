@@ -203,12 +203,21 @@ impl PluginManager {
         // Run all eligible plugin queries concurrently so a slow plugin (e.g.
         // an external script doing a network call) does not block the others.
         //
-        // Each plugin gets a hard 1200ms budget — anything slower is dropped
+        // Each plugin gets a hard time budget — anything slower is dropped
         // from THIS query (it can still appear on a later keystroke when its
         // cache is warm). Without this cap one slow disk read or HTTP call
         // would stall the entire result list and feel "frozen" in launcher
         // mode.
-        const PLUGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200);
+        //
+        // Built-ins are in-process and fast, so they keep a tight 1200ms cap.
+        // External plugins spawn a child process (Node/Python) and frequently
+        // perform a network call (currency rates, web APIs, etc). Cold spawn
+        // overhead alone can approach a second, so a 1200ms cap would drop them
+        // before their own 3s internal query timeout ever fires — making
+        // external plugins appear dead in launcher (non-AI) mode. Give them a
+        // budget that comfortably covers their internal timeout.
+        const BUILTIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200);
+        const EXTERNAL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(3500);
         let q_ref = &q;
         let futures = self
             .plugins
@@ -223,8 +232,13 @@ impl PluginManager {
             })
             .map(|p| {
                 let plugin_name = p.name().to_string();
+                let plugin_timeout = if p.is_external() {
+                    EXTERNAL_TIMEOUT
+                } else {
+                    BUILTIN_TIMEOUT
+                };
                 async move {
-                    match tokio::time::timeout(PLUGIN_TIMEOUT, p.query(q_ref)).await {
+                    match tokio::time::timeout(plugin_timeout, p.query(q_ref)).await {
                         Ok(mut v) => {
                             // Stamp the plugin name onto every result so the
                             // launcher UI can group by source. Plugins that
@@ -242,7 +256,7 @@ impl PluginManager {
                             log::warn!(
                                 "plugin '{}' exceeded {}ms budget for query {:?} — dropped",
                                 plugin_name,
-                                PLUGIN_TIMEOUT.as_millis(),
+                                plugin_timeout.as_millis(),
                                 raw
                             );
                             Vec::new()

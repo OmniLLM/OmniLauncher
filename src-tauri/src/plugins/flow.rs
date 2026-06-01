@@ -209,7 +209,7 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
     // truth and we don't overwrite it.
     let original_path = dir.join("plugin.json");
     let original_is_flow = std::fs::read_to_string(&original_path)
-        .map(|s| s.contains("ExecuteFileName"))
+        .map(|s| s.contains("ExecuteFileName") && !s.contains(SHIM_FILENAME))
         .unwrap_or(false);
     if original_is_flow {
         let original = std::fs::read(&original_path)
@@ -274,7 +274,30 @@ pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
             entry_windows: SHIM_FILENAME,
             tool_schema: Some(build_tool_schema(&function_name, &name, &manifest)),
         };
-        let json = serde_json::to_string_pretty(&synthetic)
+        let mut json_value = serde_json::to_value(&synthetic)
+            .map_err(|e| format!("Failed to serialize plugin.json: {e}"))?;
+
+        // Merge the original Flow.Launcher manifest's PascalCase fields
+        // (Name, ID, Author, Version, ActionKeyword, IcoPath, …) into the
+        // OmniLauncher manifest. The popular `flox` helper library reads
+        // `plugin.json` directly and expects those Flow fields; without them
+        // every flox-based Python plugin raises KeyError('Name') and returns
+        // no results. OmniLauncher's own serde parser ignores unknown keys,
+        // so the merged manifest satisfies both consumers. OmniLauncher's
+        // lowercase keys win on any collision.
+        if let Some(obj) = json_value.as_object_mut() {
+            if let Ok(raw) = std::fs::read_to_string(dir.join(FLOW_MANIFEST_FILENAME)) {
+                if let Ok(serde_json::Value::Object(flow_obj)) =
+                    serde_json::from_str::<serde_json::Value>(raw.trim_start_matches('\u{feff}'))
+                {
+                    for (k, v) in flow_obj {
+                        obj.entry(k).or_insert(v);
+                    }
+                }
+            }
+        }
+
+        let json = serde_json::to_string_pretty(&json_value)
             .map_err(|e| format!("Failed to serialize plugin.json: {e}"))?;
         std::fs::write(&plugin_json_path, json)
             .map_err(|e| format!("Failed to write plugin.json: {e}"))?;

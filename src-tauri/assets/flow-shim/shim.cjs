@@ -39,6 +39,60 @@ function reply(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
+// ─── flox / Flow.Launcher appdata shim ───────────────────────────────────────
+
+// The popular `flox` helper library (bundled by most Python Flow plugins)
+// resolves the Flow.Launcher install directory at *import time* by listing
+// `%LOCALAPPDATA%\FlowLauncher` for `app-X.Y.Z` folders. On a machine where
+// the real Flow.Launcher is not installed (i.e. every OmniLauncher user) that
+// directory is absent, so `os.listdir(...)` raises FileNotFoundError and the
+// plugin crashes before it can answer a single query.
+//
+// Create a minimal stub (`FlowLauncher/app-1.0.0/Images`) so flox's discovery
+// succeeds. The icon files underneath are only referenced lazily, so an empty
+// Images folder is enough to get past import. Idempotent and best-effort.
+function ensureFlowAppDataStub() {
+  try {
+    const localAppData =
+      process.env.LOCALAPPDATA ||
+      (process.env.USERPROFILE
+        ? path.join(process.env.USERPROFILE, "AppData", "Local")
+        : "");
+    if (!localAppData) return;
+    const imagesDir = path.join(
+      localAppData,
+      "FlowLauncher",
+      "app-1.0.0",
+      "Images"
+    );
+    fs.mkdirSync(imagesDir, { recursive: true });
+  } catch {
+    // Non-fatal — plugins that don't use flox are unaffected.
+  }
+
+  // flox also resolves the Flow "appdata" directory as two levels up from the
+  // plugin directory (i.e. `<extDir>/../..`) and reads
+  // `<appdata>/Settings/Settings.json` plus `<appdata>/Settings/Plugins/`.
+  // Provide empty stubs so flox's `app_settings` / `settings` properties don't
+  // crash with FileNotFoundError. We only create them when missing so genuine
+  // user settings are never clobbered.
+  try {
+    const appdata = path.dirname(path.dirname(extDir));
+    const settingsDir = path.join(appdata, "Settings");
+    const pluginsDir = path.join(settingsDir, "Plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const settingsJson = path.join(settingsDir, "Settings.json");
+    if (!fs.existsSync(settingsJson)) {
+      fs.writeFileSync(
+        settingsJson,
+        JSON.stringify({ PluginSettings: { Plugins: {} } })
+      );
+    }
+  } catch {
+    // Non-fatal.
+  }
+}
+
 // ─── Interpreter resolution ──────────────────────────────────────────────────
 
 function pythonExecutable() {
@@ -106,6 +160,7 @@ function callDotnetHost(op, payload, timeoutMs) {
       cwd: extDir,
       timeout: timeoutMs,
       encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
       env: process.env,
     }
   );
@@ -144,14 +199,37 @@ function callFlowPlugin(rpcRequest, timeoutMs) {
     return { error: `Unsupported Flow.Launcher language: '${language}'` };
   }
 
+  // Python Flow plugins commonly depend on `flox`, which needs the Flow
+  // appdata directory to exist before it will import. Create the stub lazily.
+  if (language === "python" || spawn.cmd === pythonExecutable()) {
+    ensureFlowAppDataStub();
+  }
+
   const result = spawnSync(spawn.cmd, spawn.args, {
     cwd: spawn.cwd || extDir,
     timeout: timeoutMs,
     encoding: "utf8",
+    // Some Flow plugins (e.g. Browser-History) emit large result sets that
+    // overflow spawnSync's default 1 MB buffer and fail with ENOBUFS, which
+    // surfaces as an empty result list. Raise the cap generously.
+    maxBuffer: 64 * 1024 * 1024,
     env: {
       ...process.env,
       PYTHONIOENCODING: "utf-8",
       PYTHONUTF8: "1",
+      // Flow.Launcher plugins bundle their pip dependencies in a `lib/`
+      // directory next to the entry script and rely on it being importable.
+      // Flow itself injects this onto sys.path; replicate that by prepending
+      // <extDir>/lib (and <extDir>) to PYTHONPATH so `import flox`, `requests`,
+      // etc. resolve. Without this every Python Flow plugin fails with
+      // ModuleNotFoundError and returns no results.
+      PYTHONPATH: [
+        path.join(extDir, "lib"),
+        extDir,
+        process.env.PYTHONPATH || "",
+      ]
+        .filter(Boolean)
+        .join(path.delimiter),
     },
   });
 
