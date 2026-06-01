@@ -2175,9 +2175,8 @@ mark {
   font-size: 12px;
   color: var(--sub);
   margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .plugin-row__action {
   flex-shrink: 0;
