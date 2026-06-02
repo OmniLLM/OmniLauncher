@@ -1401,12 +1401,22 @@ async fn install_skill(
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
     log::debug!("install_skill invoked with source={source}");
-    let mut mgr = state.skill_manager.lock().await;
-    if source.starts_with("http://") || source.starts_with("https://") {
-        mgr.install_from_url(&source)
-    } else {
-        mgr.install_from_path(&source)
-    }
+    // Installing shells out to git/gh/curl and may clone an entire repo, which
+    // can take many seconds. Doing that directly on the async runtime thread
+    // (while holding the lock) stalls IPC and makes the whole UI freeze / show
+    // a black window. Run it on a dedicated blocking thread instead so the
+    // runtime stays responsive.
+    let mgr = state.skill_manager.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut mgr = mgr.blocking_lock();
+        if source.starts_with("http://") || source.starts_with("https://") {
+            mgr.install_from_url(&source)
+        } else {
+            mgr.install_from_path(&source)
+        }
+    })
+    .await
+    .map_err(|e| format!("install task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -1419,8 +1429,15 @@ async fn delete_skill(name: String, state: tauri::State<'_, AppState>) -> Result
 #[tauri::command]
 async fn update_skill(name: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
     log::debug!("update_skill invoked with name={name}");
-    let mut mgr = state.skill_manager.lock().await;
-    mgr.update_skill(&name)
+    // Like install, updating re-fetches over the network (git/gh/curl). Keep it
+    // off the async runtime so the UI stays responsive during the clone.
+    let mgr = state.skill_manager.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut mgr = mgr.blocking_lock();
+        mgr.update_skill(&name)
+    })
+    .await
+    .map_err(|e| format!("update task failed: {e}"))?
 }
 
 // ─── External plugin management commands ──────────────────────────────────────

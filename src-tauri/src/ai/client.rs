@@ -153,6 +153,13 @@ impl AiClient {
                     .wrapping_mul(0x9e3779b97f4a7c15)
                     .wrapping_add(attempt as u64)
                     % 1_000;
+                log::debug!(
+                    "AI retry attempt {}/{} after {} ms (model={})",
+                    attempt + 1,
+                    MAX_ATTEMPTS,
+                    backoff_ms + jitter_ms,
+                    self.model
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(backoff_ms + jitter_ms)).await;
             }
 
@@ -234,24 +241,63 @@ impl AiClient {
             self.base_url.trim_end_matches('/')
         );
 
+        log::debug!(
+            "AI request → endpoint={} model={} messages={} tools={} auth={}",
+            url,
+            self.model,
+            api_messages.len(),
+            tools.len(),
+            if self.api_key.is_empty() { "none" } else { "bearer" }
+        );
+
         let mut req = client.post(&url).json(&body);
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
 
+        let started = std::time::Instant::now();
         let response = req.send().await.map_err(|e| {
             if e.is_timeout() {
+                log::warn!(
+                    "AI request timed out after {} ms (endpoint={} model={})",
+                    started.elapsed().as_millis(),
+                    url,
+                    self.model
+                );
                 AiError::Timeout
             } else {
+                log::warn!(
+                    "AI request transport error (endpoint={} model={}): {}",
+                    url,
+                    self.model,
+                    e
+                );
                 AiError::Transport(e.to_string())
             }
         })?;
 
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
+        let status = response.status();
+        let elapsed_ms = started.elapsed().as_millis();
+        if !status.is_success() {
+            let status = status.as_u16();
             let body = response.text().await.unwrap_or_default();
+            log::warn!(
+                "AI response ← status={} in {} ms (endpoint={} model={}): {}",
+                status,
+                elapsed_ms,
+                url,
+                self.model,
+                body.chars().take(500).collect::<String>()
+            );
             return Err(AiError::Api { status, body });
         }
+
+        log::debug!(
+            "AI response ← status={} in {} ms (model={})",
+            status.as_u16(),
+            elapsed_ms,
+            self.model
+        );
 
         let json: serde_json::Value = response
             .json()
@@ -304,6 +350,14 @@ impl AiClient {
         let url = format!(
             "{}/v1/chat/completions",
             self.base_url.trim_end_matches('/')
+        );
+
+        log::debug!(
+            "AI stream request → endpoint={} model={} messages={} auth={}",
+            url,
+            self.model,
+            messages.len(),
+            if self.api_key.is_empty() { "none" } else { "bearer" }
         );
 
         let mut req = client.post(&url).json(&body);
