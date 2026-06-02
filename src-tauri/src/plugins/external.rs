@@ -454,8 +454,14 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
         }
     }
 
-    let mut plugins: Vec<ExternalPlugin> = vec![];
+    // Collect candidate sub-directories first (cheap), then run
+    // `discover_plugins_in_repo` (which does manifest read + JSON parse +
+    // entry-file existence check) in parallel via rayon. Discovery is
+    // independent per dir, so this is a clean fan-out that scales with the
+    // number of installed plugins.
+    use rayon::prelude::*;
 
+    let mut candidate_dirs: Vec<PathBuf> = Vec::new();
     for base in &dirs {
         if !base.exists() {
             continue;
@@ -465,14 +471,7 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.is_dir() {
-                        for (plugin_dir, manifest) in discover_plugins_in_repo(&path) {
-                            log::info!(
-                                "Discovered external plugin '{}' from {}",
-                                manifest.name,
-                                plugin_dir.display()
-                            );
-                            plugins.push(ExternalPlugin::new(plugin_dir, manifest));
-                        }
+                        candidate_dirs.push(path);
                     }
                 }
             }
@@ -481,6 +480,24 @@ pub fn load_external_plugins_from(extra_dirs: &[String]) -> Vec<ExternalPlugin> 
             }
         }
     }
+
+    let plugins: Vec<ExternalPlugin> = candidate_dirs
+        .par_iter()
+        .flat_map_iter(|path| {
+            discover_plugins_in_repo(path)
+                .into_iter()
+                .map(|(plugin_dir, manifest)| {
+                    log::info!(
+                        "Discovered external plugin '{}' from {}",
+                        manifest.name,
+                        plugin_dir.display()
+                    );
+                    ExternalPlugin::new(plugin_dir, manifest)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
     plugins
 }
 

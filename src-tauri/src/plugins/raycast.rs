@@ -202,6 +202,38 @@ pub fn is_raycast_extension(dir: &Path) -> bool {
     has_commands && has_api
 }
 
+/// Returns Some(name) if every synthesized output file already exists
+/// and is newer than package.json — i.e. nothing has changed since the
+/// last synthesis. The returned name comes from the cached plugin.json
+/// (whose `name` field equals package.json's `name` at synth time).
+fn cached_synthesis_name(dir: &Path) -> Option<String> {
+    let pkg_json = dir.join("package.json");
+    let pkg_mtime = std::fs::metadata(&pkg_json).ok()?.modified().ok()?;
+    let plugin_json_path = dir.join("plugin.json");
+    let outputs = [
+        plugin_json_path.clone(),
+        dir.join(SHIM_FILENAME),
+        dir.join(API_SHIM_FILENAME),
+        dir.join(SOURCE_LOADER_FILENAME),
+    ];
+    for out in &outputs {
+        let m = std::fs::metadata(out).ok()?.modified().ok()?;
+        if m < pkg_mtime {
+            return None;
+        }
+    }
+    // Confirm plugin.json is one we synthesized (targets our shim).
+    let body = std::fs::read_to_string(&plugin_json_path).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let entry = val.get("entry").and_then(|v| v.as_str()).unwrap_or("");
+    if !entry.contains(SHIM_FILENAME) {
+        return None;
+    }
+    val.get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
 /// Write the shim files and a synthesized `plugin.json` for the Raycast
 /// extension at `dir`. Idempotent: re-running on an already-synthesized
 /// extension overwrites the shims (so updates pick up shim improvements)
@@ -209,6 +241,18 @@ pub fn is_raycast_extension(dir: &Path) -> bool {
 /// (i.e. doesn't reference our shim).
 pub fn synthesize_plugin_files(dir: &Path) -> Result<String, String> {
     log::debug!("raycast::synthesize_plugin_files: dir={}", dir.display());
+    // Fast-path: if all four output files exist AND every one of them is
+    // newer than package.json, the cached synthesis is still valid and we
+    // can skip the (expensive) JSON parse + 4 disk writes. Cuts repeat
+    // cold-start cost for stable extensions to a single stat() per file.
+    if let Some(name) = cached_synthesis_name(dir) {
+        log::debug!(
+            "raycast::synthesize_plugin_files: cache hit (mtime gate) for {}",
+            dir.display()
+        );
+        return Ok(name);
+    }
+
     let pkg = read_package(dir)
         .ok_or_else(|| format!("{} has no readable package.json", dir.display()))?;
 

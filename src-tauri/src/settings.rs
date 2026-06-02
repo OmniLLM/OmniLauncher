@@ -180,12 +180,72 @@ pub fn load_settings() -> AppSettings {
 
 /// Discover GitHub hostnames the user is authenticated to.
 ///
-/// Priority:
+/// First checks an on-disk cache at `<data_dir>/cache/gh_hosts.json` —
+/// `gh auth status` shells out to a child process and adds 100–500ms to
+/// every cold start, so we cache its result for 24h. Pass through to the
+/// live discovery path on cache miss / expiry / parse error.
+///
+/// Priority on cache miss:
 ///   1. `gh auth status` output (reads BOTH stdout and stderr — gh ≥2.40 writes
 ///      to stdout, older versions write to stderr).
 ///   2. Parse hostnames from `~/.config/gh/hosts.yml` (or `%APPDATA%\GitHub CLI\hosts.yml`
 ///      on Windows) — useful when `gh` isn't on PATH for the launched app.
 pub fn detect_gh_hosts() -> Vec<GitHubServer> {
+    if let Some(cached) = read_gh_hosts_cache() {
+        return cached;
+    }
+    let fresh = detect_gh_hosts_uncached();
+    write_gh_hosts_cache(&fresh);
+    fresh
+}
+
+const GH_HOSTS_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+
+fn gh_hosts_cache_path() -> std::path::PathBuf {
+    crate::path_config::data_dir()
+        .join("cache")
+        .join("gh_hosts.json")
+}
+
+fn read_gh_hosts_cache() -> Option<Vec<GitHubServer>> {
+    let path = gh_hosts_cache_path();
+    let meta = std::fs::metadata(&path).ok()?;
+    let modified = meta.modified().ok()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
+        .ok()?;
+    if age.as_secs() > GH_HOSTS_CACHE_TTL_SECS {
+        return None;
+    }
+    let body = std::fs::read_to_string(&path).ok()?;
+    let hostnames: Vec<String> = serde_json::from_str(&body).ok()?;
+    Some(
+        hostnames
+            .into_iter()
+            .map(|hostname| GitHubServer {
+                hostname,
+                api_base: String::new(),
+                token: String::new(),
+                orgs: vec![],
+            })
+            .collect(),
+    )
+}
+
+fn write_gh_hosts_cache(servers: &[GitHubServer]) {
+    let path = gh_hosts_cache_path();
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let hostnames: Vec<&str> = servers.iter().map(|s| s.hostname.as_str()).collect();
+    if let Ok(json) = serde_json::to_string(&hostnames) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+fn detect_gh_hosts_uncached() -> Vec<GitHubServer> {
     let mut hostnames: Vec<String> = Vec::new();
 
     if let Ok(output) = std::process::Command::new("gh")

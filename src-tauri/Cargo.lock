@@ -2312,6 +2312,7 @@ dependencies = [
  "futures-util",
  "glob",
  "log",
+ "rayon",
  "regex",
  "reqwest 0.12.28",
  "rusqlite",

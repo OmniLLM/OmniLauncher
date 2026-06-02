@@ -12,6 +12,7 @@ name = "omnilauncher"
 path = "src/main.rs"
 
 [dependencies]
+rayon = "1"
 async-trait = "0.1"
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
