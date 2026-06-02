@@ -860,9 +860,17 @@ async fn ai_cancel(
     window: tauri::WebviewWindow,
 ) -> Result<bool, String> {
     log::debug!("ai_cancel invoked");
-    let mut slot = state.current_ai_task.lock().await;
-    if let Some(handle) = slot.take() {
+    let handle = {
+        let mut slot = state.current_ai_task.lock().await;
+        slot.take()
+    };
+    if let Some(handle) = handle {
         handle.abort();
+        // Wait for the aborted task to fully unwind so its semaphore permit
+        // (`_permit`, held inside the task) is dropped before we return. Without
+        // this, a follow-up `ai_query` can observe the permit as still held and
+        // fail with "AI response is still in progress".
+        let _ = handle.await;
         let _ = window.emit("omnilauncher://ai-error", "Cancelled by user".to_string());
         Ok(true)
     } else {
