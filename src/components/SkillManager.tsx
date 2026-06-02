@@ -11,6 +11,27 @@ interface SkillInfo {
   path: string;
 }
 
+type SkillState = "Active" | "Stale" | "Archived";
+
+interface SkillUsage {
+  uses: number;
+  last_used: number;
+  first_seen: number;
+  state: SkillState;
+  pinned: boolean;
+}
+
+interface UsageStore {
+  skills: Record<string, SkillUsage>;
+}
+
+interface CuratorReport {
+  marked_stale: string[];
+  marked_archived: string[];
+  seen_new: string[];
+  total_tracked: number;
+}
+
 interface SkillManagerProps {
   onClose: () => void;
 }
@@ -21,17 +42,34 @@ type Status =
   | { type: "success"; message: string }
   | { type: "error"; message: string };
 
+function formatRelative(unixSecs: number): string {
+  if (!unixSecs) return "never";
+  const diff = Math.floor(Date.now() / 1000) - unixSecs;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
 export default function SkillManager({ onClose }: SkillManagerProps) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [usage, setUsage] = useState<Record<string, SkillUsage>>({});
   const [expandedSkills, setExpandedSkills] = useState<Record<string, boolean>>({});
   const [source, setSource] = useState("");
   const [status, setStatus] = useState<Status>({ type: "idle", message: "" });
+
+  const refreshUsage = useCallback(() => {
+    invoke<UsageStore>("list_skill_usage")
+      .then((store) => setUsage(store.skills ?? {}))
+      .catch(() => setUsage({}));
+  }, []);
 
   const refresh = useCallback(() => {
     invoke<SkillInfo[]>("list_skills")
       .then((list) => setSkills(list))
       .catch(() => setSkills([]));
-  }, []);
+    refreshUsage();
+  }, [refreshUsage]);
 
   useEffect(() => {
     setExpandedSkills((current) => {
@@ -85,6 +123,34 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
     }
   };
 
+  const handlePin = async (name: string, pinned: boolean) => {
+    try {
+      await invoke<boolean>("pin_skill", { name, pinned });
+      refreshUsage();
+    } catch (e) {
+      setStatus({ type: "error", message: `✗ ${e}` });
+    }
+  };
+
+  const handleRunCurator = async () => {
+    setStatus({ type: "loading", message: "Running curator…" });
+    try {
+      const r = await invoke<CuratorReport>("run_curator_now");
+      const parts: string[] = [];
+      if (r.seen_new.length) parts.push(`${r.seen_new.length} new`);
+      if (r.marked_stale.length) parts.push(`${r.marked_stale.length} stale`);
+      if (r.marked_archived.length) parts.push(`${r.marked_archived.length} archived`);
+      const summary = parts.length ? parts.join(" · ") : "no changes";
+      setStatus({
+        type: "success",
+        message: `✓ Curator: ${summary} (${r.total_tracked} tracked)`,
+      });
+      refreshUsage();
+    } catch (e) {
+      setStatus({ type: "error", message: `✗ ${e}` });
+    }
+  };
+
   const toggleSkill = (name: string) => {
     setExpandedSkills((current) => ({
       ...current,
@@ -104,14 +170,25 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
             {skills.length} skill{skills.length === 1 ? "" : "s"}
           </span>
         </span>
-        <button
-          className="omni-titlebar__close"
-          onClick={onClose}
-          title="Close"
-          aria-label="Close"
-        >
-          ×
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            type="button"
+            className="omni-btn omni-btn--sm"
+            onClick={handleRunCurator}
+            disabled={status.type === "loading"}
+            title="Re-evaluate skill usage and lifecycle states now"
+          >
+            ↻ Run curator
+          </button>
+          <button
+            className="omni-titlebar__close"
+            onClick={onClose}
+            title="Close"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       {/* ── Install row ── */}
@@ -165,6 +242,11 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
         ) : (
           skills.map((skill) => {
             const expanded = expandedSkills[skill.name] ?? false;
+            const u = usage[skill.name];
+            const state: SkillState = u?.state ?? "Active";
+            const pinned = u?.pinned ?? false;
+            const stateColor =
+              state === "Archived" ? "#a36363" : state === "Stale" ? "#b08a45" : "#5e8a5e";
             return (
               <div key={skill.name} className="skill-card">
                 {/* ── Card header row ── */}
@@ -172,7 +254,6 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                   className="skill-card__head"
                   onClick={() => toggleSkill(skill.name)}
                 >
-                  {/* Expand toggle — pill shaped */}
                   <button
                     type="button"
                     className={
@@ -190,7 +271,6 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                     {expanded ? "▾" : "▸"}
                   </button>
 
-                  {/* Name + badges */}
                   <div className="skill-card__main">
                     <div className="skill-card__title-row">
                       <span className="skill-card__kind">SKILL</span>
@@ -198,7 +278,22 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                       {skill.version && (
                         <span className="skill-card__version">v{skill.version}</span>
                       )}
-                      {skill.tags.slice(0, 3).map((tag) => (
+                      <span
+                        className="skill-card__tag"
+                        style={{ color: stateColor, borderColor: stateColor }}
+                        title={`Lifecycle state: ${state.toLowerCase()}`}
+                      >
+                        {state.toLowerCase()}
+                      </span>
+                      {u && (
+                        <span
+                          className="skill-card__tag"
+                          title={`Last used ${formatRelative(u.last_used)}`}
+                        >
+                          {u.uses} use{u.uses === 1 ? "" : "s"} · {formatRelative(u.last_used)}
+                        </span>
+                      )}
+                      {skill.tags.slice(0, 2).map((tag) => (
                         <span key={tag} className="skill-card__tag">
                           {tag}
                         </span>
@@ -209,8 +304,24 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                     )}
                   </div>
 
-                  {/* Action buttons */}
                   <div className="skill-card__actions" style={{ display: "contents" }}>
+                    <button
+                      type="button"
+                      className={
+                        "omni-btn omni-btn--xs" + (pinned ? " omni-btn--primary" : "")
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePin(skill.name, !pinned);
+                      }}
+                      title={
+                        pinned
+                          ? "Unpin (allow auto-archive)"
+                          : "Pin (exempt from auto-stale / auto-archive)"
+                      }
+                    >
+                      {pinned ? "📌 Pinned" : "📌 Pin"}
+                    </button>
                     <button
                       type="button"
                       className="omni-btn omni-btn--sm"
@@ -267,6 +378,34 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                                 {t}
                               </span>
                             ))}
+                          </div>
+                        </>
+                      )}
+
+                      {u && (
+                        <>
+                          <div className="skill-card__meta-label">Usage</div>
+                          <div className="skill-card__chip-row">
+                            <span className="skill-card__chip">
+                              {u.uses} use{u.uses === 1 ? "" : "s"}
+                            </span>
+                            <span className="skill-card__chip">
+                              last: {formatRelative(u.last_used)}
+                            </span>
+                            <span className="skill-card__chip">
+                              first seen: {formatRelative(u.first_seen)}
+                            </span>
+                            <span
+                              className="skill-card__chip"
+                              style={{ color: stateColor, borderColor: stateColor }}
+                            >
+                              state: {state.toLowerCase()}
+                            </span>
+                            {pinned && (
+                              <span className="skill-card__chip skill-card__chip--accent">
+                                pinned
+                              </span>
+                            )}
                           </div>
                         </>
                       )}
