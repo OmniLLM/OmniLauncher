@@ -3,7 +3,7 @@ use omnilauncher_lib::{
         client::AiClient,
         router::{ConversationContext, Router},
     },
-    create_plugin_manager,
+    create_plugin_manager_builtin_only,
     live_server::{LiveResponse, LiveServer},
     load_settings, save_settings, AppSettings, QueryResult, SkillInfo, SkillManager,
 };
@@ -344,8 +344,14 @@ pub fn run() {
         live_server_task.serve(live_server_port).await;
     });
 
+    // Bring up the launcher with built-in plugins only — external plugin
+    // discovery (manifest reads, JSON parses, raycast/flow shim refresh)
+    // runs in a background task spawned from `setup` below. This shaves
+    // a noticeable chunk off cold-start; the `cheap_prefix_match` gate in
+    // PluginManager protects against early keystrokes hitting an
+    // un-loaded plugin.
     let state = AppState {
-        plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
+        plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
         ai_client: Arc::new(Mutex::new(ai_client)),
         settings: Arc::new(Mutex::new(settings)),
         conversation: Arc::new(Mutex::new({
@@ -384,6 +390,28 @@ pub fn run() {
             // Start background scheduler (must be inside setup — tokio runtime is live here)
             omnilauncher_lib::plugins::scheduler::migrate_inline_commands_to_files();
             omnilauncher_lib::plugins::scheduler::start_scheduler();
+
+            // Defer external plugin discovery off the cold-start hot path.
+            // The launcher window comes up with built-in plugins only;
+            // externals (manifest reads, Raycast/Flow shim refresh, parallel
+            // discovery) load in the background. PluginManager's
+            // `cheap_prefix_match` keeps early keystrokes safe — they just
+            // see built-ins until this finishes (typically <1s).
+            {
+                use tauri::Manager;
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let started = std::time::Instant::now();
+                    let state = app_handle.state::<AppState>();
+                    let settings = omnilauncher_lib::load_settings();
+                    let mut pm = state.plugin_manager.lock().await;
+                    pm.reload_external_plugins(&settings.plugin_dirs);
+                    log::info!(
+                        "Deferred external plugin load complete in {:?}",
+                        started.elapsed()
+                    );
+                });
+            }
 
             let window = app.get_webview_window("main").unwrap();
 
@@ -2002,7 +2030,7 @@ mod tests {
     async fn rejects_second_ai_request_while_one_is_in_progress() {
         let sem = Arc::new(Semaphore::new(1));
         let state = AppState {
-            plugin_manager: Arc::new(Mutex::new(create_plugin_manager())),
+            plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
             ai_client: Arc::new(Mutex::new(AiClient::new(
                 String::new(),
                 String::new(),

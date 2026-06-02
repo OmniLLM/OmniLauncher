@@ -2,17 +2,18 @@ use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use walkdir::WalkDir;
 
 pub struct FileSearchPlugin;
 
 /// In-memory file index for `f `/`open `/`* ` lookups.
 ///
-/// Built ONCE in a background `spawn_blocking` job on first activation, then
-/// served from RAM. Refreshed asynchronously after `INDEX_TTL` — during a
-/// refresh, queries continue to be served from the stale index so the user
-/// never blocks.
+/// On first activation, the snapshot path on disk is loaded synchronously
+/// (cheap — just a read of newline-separated paths) so even cold starts
+/// serve from a pre-warmed index. A background `spawn_blocking` rebuild
+/// kicks off after `INDEX_TTL`. During a refresh, queries continue to be
+/// served from the stale index so the user never blocks.
 struct FileIndex {
     paths: Vec<PathBuf>,
     built_at: Instant,
@@ -21,6 +22,10 @@ struct FileIndex {
 const INDEX_TTL: Duration = Duration::from_secs(60);
 const MAX_INDEX_DEPTH: usize = 5;
 const MAX_RESULTS: usize = 10;
+/// Disk snapshot is considered usable for up to this long. Keeps stale
+/// entries from haunting users for weeks if they don't rebuild — but
+/// long enough that subsequent cold starts feel instant.
+const DISK_INDEX_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 fn index_cell() -> &'static OnceLock<Mutex<Option<FileIndex>>> {
     static CELL: OnceLock<Mutex<Option<FileIndex>>> = OnceLock::new();
@@ -31,6 +36,47 @@ fn index_cell() -> &'static OnceLock<Mutex<Option<FileIndex>>> {
 fn refresh_inflight() -> &'static std::sync::atomic::AtomicBool {
     static FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     &FLAG
+}
+
+fn disk_snapshot_path() -> PathBuf {
+    crate::path_config::data_dir()
+        .join("cache")
+        .join("file_index.txt")
+}
+
+fn load_disk_snapshot() -> Option<Vec<PathBuf>> {
+    let path = disk_snapshot_path();
+    let meta = std::fs::metadata(&path).ok()?;
+    let modified = meta.modified().ok()?;
+    let age = SystemTime::now().duration_since(modified).ok()?;
+    if age > DISK_INDEX_MAX_AGE {
+        return None;
+    }
+    let body = std::fs::read_to_string(&path).ok()?;
+    Some(
+        body.lines()
+            .filter(|l| !l.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+    )
+}
+
+fn save_disk_snapshot(paths: &[PathBuf]) {
+    let path = disk_snapshot_path();
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    // Best-effort write — never block / panic the indexing path.
+    let mut buf = String::with_capacity(paths.len() * 64);
+    for p in paths {
+        if let Some(s) = p.to_str() {
+            buf.push_str(s);
+            buf.push('\n');
+        }
+    }
+    let _ = std::fs::write(&path, buf);
 }
 
 fn build_index_sync() -> Vec<PathBuf> {
@@ -58,6 +104,7 @@ fn kick_off_refresh() {
     }
     tokio::task::spawn_blocking(|| {
         let paths = build_index_sync();
+        save_disk_snapshot(&paths);
         let cell = index_cell().get_or_init(|| Mutex::new(None));
         if let Ok(mut guard) = cell.lock() {
             *guard = Some(FileIndex {
@@ -91,6 +138,28 @@ fn snapshot_index() -> IndexSnapshot {
     };
     match snap {
         None => {
+            // First call this process: try to seed from disk so the
+            // very first `f ` query returns hits instead of "indexing…".
+            // We mark the seeded entry as already past its TTL, so the
+            // standard Ready-but-stale path kicks off a background
+            // refresh on the next call.
+            if let Some(paths) = load_disk_snapshot() {
+                if let Ok(mut guard) = cell.lock() {
+                    if guard.is_none() {
+                        *guard = Some(FileIndex {
+                            paths: paths.clone(),
+                            // Pretend the snapshot is already past its TTL so a
+                            // refresh is scheduled on next query — but this call
+                            // returns Ready immediately.
+                            built_at: Instant::now()
+                                .checked_sub(INDEX_TTL + Duration::from_secs(1))
+                                .unwrap_or_else(Instant::now),
+                        });
+                    }
+                }
+                kick_off_refresh();
+                return IndexSnapshot::Ready(paths);
+            }
             kick_off_refresh();
             IndexSnapshot::Cold
         }

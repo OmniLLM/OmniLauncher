@@ -15,6 +15,23 @@ pub use settings::{load_settings, save_settings, AppSettings};
 pub use skills::{SkillInfo, SkillManager};
 
 pub fn create_plugin_manager() -> PluginManager {
+    let mut pm = create_plugin_manager_builtin_only();
+
+    // Load external plugins: ~/.omnilauncher/plugins/ + any extra dirs from settings.plugin_dirs
+    // register_override() handles all conflicts: same name or same keyword → evict existing.
+    let settings = load_settings();
+    for plugin in plugins::external::load_external_plugins_from(&settings.plugin_dirs) {
+        pm.register_override(Box::new(plugin));
+    }
+
+    pm
+}
+
+/// Like `create_plugin_manager`, but skips the (potentially slow) external
+/// plugin discovery. Use this when you want to bring the launcher window up
+/// fast and load externals afterwards on a background task — see
+/// `reload_external_plugins` in `main.rs`.
+pub fn create_plugin_manager_builtin_only() -> PluginManager {
     let mut pm = PluginManager::new();
     pm.register(Box::new(plugins::agent_delegate::AgentDelegatePlugin));
     pm.register(Box::new(plugins::app_launcher::AppLauncherPlugin::new()));
@@ -59,13 +76,5 @@ pub fn create_plugin_manager() -> PluginManager {
     pm.register(Box::new(plugins::cron_explainer::CronExplainerPlugin));
     pm.register(Box::new(plugins::scheduler::SchedulerPlugin));
     pm.register(Box::new(plugins::vision_analyze::VisionAnalyzePlugin));
-
-    // Load external plugins: ~/.omnilauncher/plugins/ + any extra dirs from settings.plugin_dirs
-    // register_override() handles all conflicts: same name or same keyword → evict existing.
-    let settings = load_settings();
-    for plugin in plugins::external::load_external_plugins_from(&settings.plugin_dirs) {
-        pm.register_override(Box::new(plugin));
-    }
-
     pm
 }
