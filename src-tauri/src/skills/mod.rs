@@ -3,6 +3,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub mod curator;
+
 // ─── Data structures ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -555,11 +557,21 @@ impl SkillManager {
     }
 
     /// Find skills relevant to the query by matching triggers and name.
+    /// Skills marked `archived` by the curator are filtered out unless the
+    /// user explicitly named them (handled by the router via `get_by_name`).
     pub fn find_relevant(&self, query: &str) -> Vec<&Skill> {
         let query_lower = query.to_lowercase();
-        self.skills
+        let usage = curator::snapshot();
+        let hits: Vec<&Skill> = self
+            .skills
             .iter()
             .filter(|skill| {
+                // Hide archived skills from auto-pick.
+                if let Some(u) = usage.skills.get(&skill.meta.name) {
+                    if u.state == curator::SkillState::Archived && !u.pinned {
+                        return false;
+                    }
+                }
                 // Check triggers
                 let trigger_match = skill.meta.triggers.iter().any(|t| {
                     let t_lower = t.to_lowercase();
@@ -575,11 +587,31 @@ impl SkillManager {
                     .any(|t| query_lower.contains(&t.to_lowercase()));
                 trigger_match || name_match || tag_match
             })
-            .collect()
+            .collect();
+        for s in &hits {
+            curator::record_use(&s.meta.name);
+        }
+        hits
     }
 
     pub fn get_by_name(&self, name: &str) -> Option<&Skill> {
-        self.skills.iter().find(|s| s.meta.name == name)
+        let hit = self.skills.iter().find(|s| s.meta.name == name);
+        if hit.is_some() {
+            curator::record_use(name);
+        }
+        hit
+    }
+
+    /// Names of every currently-installed user skill (i.e. the ones whose
+    /// `path` is under the user data dir, not bundled assets). The curator
+    /// uses this to scope its lifecycle transitions.
+    pub fn user_skill_names(&self) -> Vec<String> {
+        let user_root = Self::skill_dir();
+        self.skills
+            .iter()
+            .filter(|s| s.meta.path.starts_with(&user_root))
+            .map(|s| s.meta.name.clone())
+            .collect()
     }
 
     /// Install one skill whose files are already staged on disk at
