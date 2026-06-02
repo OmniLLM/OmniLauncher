@@ -406,17 +406,13 @@ pub fn run() {
             }
 
             // ── System tray icon ──────────────────────────────────────────
-            let icon = Image::from_path(
-                app.path()
-                    .resource_dir()
-                    .unwrap_or_default()
-                    .join("icons/32x32.png"),
-            )
-            .or_else(|_| {
-                // Fallback: load from the src-tauri/icons directory during dev
-                Image::from_path("icons/32x32.png")
-            })
-            .ok();
+            // Embed the icon at compile time so it is always available
+            // regardless of the working directory or whether the build was
+            // bundled (e.g. `tauri build --no-bundle`). Falling back to a
+            // filesystem path breaks in prod, where the cwd is not src-tauri
+            // and the icon is not copied next to the binary.
+            const ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
+            let icon = Image::from_bytes(ICON_BYTES).ok();
 
             let mut tray_builder =
                 TrayIconBuilder::new().tooltip("OmniLauncher — Ctrl+Shift+O to toggle");
