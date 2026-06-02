@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub mod curator;
+pub mod consolidate;
 
 // ─── Data structures ──────────────────────────────────────────────────────────
 

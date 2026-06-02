@@ -608,6 +608,8 @@ pub fn run() {
             list_skill_usage,
             pin_skill,
             run_curator_now,
+            propose_skill_consolidation,
+            apply_skill_consolidation,
             set_window_geometry,
             install_plugin,
             update_plugin,
@@ -1553,6 +1555,41 @@ async fn run_curator_now(state: tauri::State<'_, AppState>) -> Result<serde_json
         "seen_new": report.seen_new,
         "total_tracked": report.total_tracked,
     }))
+}
+
+/// LLM-driven consolidation phase 2: ask the model for proposals (read-only;
+/// nothing on disk is touched). The frontend surfaces these for per-item
+/// approval; only `apply_skill_consolidation` mutates files.
+#[tauri::command]
+async fn propose_skill_consolidation(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<omnilauncher_lib::skills::consolidate::Proposal>, String> {
+    let skills_clone: Vec<omnilauncher_lib::skills::Skill> = {
+        let mgr = state.skill_manager.lock().await;
+        // Only consider user-installed skills — bundled ones are
+        // canonical and not subject to user-initiated consolidation.
+        let user_names = mgr.user_skill_names();
+        mgr.list_meta()
+            .iter()
+            .filter(|m| user_names.iter().any(|n| n == &m.name))
+            .filter_map(|m| mgr.get_by_name(&m.name).cloned())
+            .collect()
+    };
+    let ai = state.ai_client.lock().await;
+    omnilauncher_lib::skills::consolidate::propose(&skills_clone, &ai)
+        .await
+        .map_err(|e| format!("LLM propose failed: {e}"))
+}
+
+/// Apply one user-approved consolidation proposal. Always backs up the
+/// affected SKILL.md(s) first; never deletes a primary skill.
+#[tauri::command]
+async fn apply_skill_consolidation(
+    state: tauri::State<'_, AppState>,
+    proposal: omnilauncher_lib::skills::consolidate::Proposal,
+) -> Result<omnilauncher_lib::skills::consolidate::ApplyOutcome, String> {
+    let mut mgr = state.skill_manager.lock().await;
+    omnilauncher_lib::skills::consolidate::apply(&proposal, &mut mgr)
 }
 
 // ─── External plugin management commands ──────────────────────────────────────

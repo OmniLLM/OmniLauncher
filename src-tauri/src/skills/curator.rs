@@ -165,6 +165,19 @@ pub fn snapshot() -> UsageStore {
     with_usage(|s| s.clone())
 }
 
+/// Force a skill's state to `Archived`. Used by the LLM-consolidation
+/// "Archive" proposal — the rule-based pass uses idle-time thresholds, but
+/// the LLM can suggest archiving for content reasons. Pinned skills are
+/// still respected (no-op).
+pub fn set_state_archived(name: &str) {
+    with_usage(|store| {
+        let entry = store.skills.entry(name.to_string()).or_default();
+        if !entry.pinned {
+            entry.state = SkillState::Archived;
+        }
+    });
+}
+
 /// Pin or unpin a skill. Pinned skills bypass auto-stale / auto-archive.
 pub fn set_pinned(name: &str, pinned: bool) {
     with_usage(|store| {
