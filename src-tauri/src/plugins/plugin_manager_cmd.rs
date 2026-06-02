@@ -155,12 +155,17 @@ fn dir_name_from_source(source: &str) -> String {
         .to_string()
 }
 
-/// Parsed components of a GitHub subdirectory URL (the kind GitHub shows
-/// when you click into a folder): `tree/<branch>/<subpath>` or
-/// `blob/<branch>/<subpath>`. Such URLs are not directly clone-able and
-/// must be translated into a sparse-checkout of `<subpath>`.
+/// Parsed components of a GitHub-style subdirectory URL (the kind GitHub and
+/// GitHub Enterprise show when you click into a folder):
+/// `<host>/<owner>/<repo>/tree/<branch>/<subpath>` or `.../blob/<branch>/...`.
+/// Such URLs are not directly clone-able and must be translated into a
+/// sparse-checkout of `<subpath>`. Works for `github.com` as well as
+/// self-hosted GitHub Enterprise instances (e.g. `ghe.example.com`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GithubSubdirUrl {
+    host: String,
+    owner: String,
+    repo: String,
     clone_url: String,
     branch: String,
     subpath: String,
@@ -169,24 +174,36 @@ struct GithubSubdirUrl {
 
 fn parse_github_subdir_url(source: &str) -> Option<GithubSubdirUrl> {
     let s = source.trim().trim_end_matches('/');
-    let rest = s
-        .strip_prefix("https://github.com/")
-        .or_else(|| s.strip_prefix("http://github.com/"))?;
+    let (scheme, rest) = if let Some(r) = s.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = s.strip_prefix("http://") {
+        ("http", r)
+    } else {
+        return None;
+    };
+    // host / owner / repo / kind / branch / subpath...
     let parts: Vec<&str> = rest.split('/').collect();
-    if parts.len() < 5 {
+    if parts.len() < 6 {
         return None;
     }
-    let owner = parts[0];
-    let repo = parts[1].trim_end_matches(".git");
-    let kind = parts[2];
-    if owner.is_empty() || repo.is_empty() {
+    let host = parts[0];
+    let owner = parts[1];
+    let repo = parts[2].trim_end_matches(".git");
+    let kind = parts[3];
+    if host.is_empty() || owner.is_empty() || repo.is_empty() {
         return None;
     }
     if kind != "tree" && kind != "blob" {
         return None;
     }
-    let branch = parts[3];
-    let subpath_parts = &parts[4..];
+    // GitLab and Bitbucket expose folder URLs under a `/-/tree/…` path, so a
+    // bare `/tree/…` on those forges is not a clone-able subdir URL.
+    let host_lower = host.to_lowercase();
+    if host_lower == "gitlab.com" || host_lower == "bitbucket.org" {
+        return None;
+    }
+    let branch = parts[4];
+    let subpath_parts = &parts[5..];
     if branch.is_empty() || subpath_parts.is_empty() {
         return None;
     }
@@ -198,16 +215,216 @@ fn parse_github_subdir_url(source: &str) -> Option<GithubSubdirUrl> {
         .trim_end_matches(".git")
         .to_string();
     Some(GithubSubdirUrl {
-        clone_url: format!("https://github.com/{owner}/{repo}.git"),
+        host: host.to_string(),
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        clone_url: format!("{scheme}://{host}/{owner}/{repo}.git"),
         branch: branch.to_string(),
         subpath,
         leaf_name,
     })
 }
 
+/// Extract `subdir.subpath` out of `subdir.clone_url@subdir.branch` into
+/// `dest`, trying installers in priority order: `git` sparse-checkout first,
+/// then `gh repo clone` (for private / GitHub Enterprise repos the user is
+/// authenticated against), then a `curl` archive download as a last resort.
+async fn sparse_checkout_subdir(subdir: &GithubSubdirUrl, dest: &PathBuf) -> Result<(), String> {
+    match git_sparse_checkout_subdir(subdir, dest).await {
+        Ok(()) => return Ok(()),
+        Err(e) => {
+            log::warn!("sparse_checkout_subdir: git failed: {e}; trying gh");
+            if dest.exists() {
+                let _ = force_remove_dir_all(dest);
+            }
+        }
+    }
+
+    match gh_checkout_subdir(subdir, dest).await {
+        Ok(()) => return Ok(()),
+        Err(e) => {
+            log::warn!("sparse_checkout_subdir: gh failed: {e}; trying curl");
+            if dest.exists() {
+                let _ = force_remove_dir_all(dest);
+            }
+        }
+    }
+
+    match curl_checkout_subdir(subdir, dest).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if dest.exists() {
+                let _ = force_remove_dir_all(dest);
+            }
+            Err(format!(
+                "Failed to fetch subdirectory '{}' from {}@{} (git, gh, and curl all failed): {e}",
+                subdir.subpath, subdir.clone_url, subdir.branch
+            ))
+        }
+    }
+}
+
+/// `gh repo clone` the full repo into a temp stage, then copy the requested
+/// subpath into `dest`. Only attempted when `gh` is on PATH.
+async fn gh_checkout_subdir(subdir: &GithubSubdirUrl, dest: &PathBuf) -> Result<(), String> {
+    if !gh_helper::is_gh_available() {
+        return Err("gh CLI not available".to_string());
+    }
+    let repo = gh_helper::GithubRepoRef {
+        host: subdir.host.clone(),
+        owner: subdir.owner.clone(),
+        repo: subdir.repo.clone(),
+    };
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let stage = std::env::temp_dir().join(format!(
+        "omnilauncher-ghsubdir-{}-{}-{}",
+        subdir.leaf_name,
+        std::process::id(),
+        ts
+    ));
+    if stage.exists() {
+        let _ = force_remove_dir_all(&stage);
+    }
+
+    gh_helper::gh_clone(&repo, &stage, &["--depth=1", "--branch", &subdir.branch]).await?;
+
+    let src = stage.join(&subdir.subpath);
+    if !src.is_dir() {
+        let _ = force_remove_dir_all(&stage);
+        return Err(format!(
+            "Subdirectory '{}' not found in {}@{}.",
+            subdir.subpath, subdir.clone_url, subdir.branch
+        ));
+    }
+    let copy_result = copy_dir_recursive(&src, dest);
+    let _ = force_remove_dir_all(&stage);
+    copy_result
+}
+
+/// `curl` the repo archive tarball for the branch, extract it, then copy the
+/// requested subpath into `dest`. Last-resort fallback when both git and gh
+/// are unavailable or fail.
+async fn curl_checkout_subdir(subdir: &GithubSubdirUrl, dest: &PathBuf) -> Result<(), String> {
+    let (stage, inner) = curl_fetch_archive(
+        &subdir.host,
+        &subdir.owner,
+        &subdir.repo,
+        Some(&subdir.branch),
+    )
+    .await?;
+    let src = inner.join(&subdir.subpath);
+    if !src.is_dir() {
+        let _ = force_remove_dir_all(&stage);
+        return Err(format!(
+            "Subdirectory '{}' not found in {}@{}.",
+            subdir.subpath, subdir.clone_url, subdir.branch
+        ));
+    }
+    let copy_result = copy_dir_recursive(&src, dest);
+    let _ = force_remove_dir_all(&stage);
+    copy_result
+}
+
+/// Download a GitHub archive tarball via `curl` and extract it. Tries `branch`
+/// when given, otherwise `main` then `master`. Requires `curl` and `tar` on
+/// PATH (both ship with Windows 10+, macOS, and most modern Linux distros).
+/// Returns `(stage_dir, extracted_repo_dir)`; the caller owns cleanup of
+/// `stage_dir` (which contains `extracted_repo_dir`).
+async fn curl_fetch_archive(
+    host: &str,
+    owner: &str,
+    repo: &str,
+    branch: Option<&str>,
+) -> Result<(PathBuf, PathBuf), String> {
+    let candidates: Vec<&str> = match branch {
+        Some(b) => vec![b],
+        None => vec!["main", "master"],
+    };
+
+    let mut last_err = String::new();
+    for b in candidates {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let stage = std::env::temp_dir().join(format!(
+            "omnilauncher-curl-{}-{}-{}-{}",
+            repo,
+            b.replace(['/', '\\'], "_"),
+            std::process::id(),
+            ts
+        ));
+        if stage.exists() {
+            let _ = force_remove_dir_all(&stage);
+        }
+        std::fs::create_dir_all(&stage)
+            .map_err(|e| format!("Failed to create curl stage dir: {e}"))?;
+
+        let tarball = stage.join("archive.tar.gz");
+        let tarball_str = tarball.to_string_lossy().into_owned();
+        let url = format!("https://{host}/{owner}/{repo}/archive/refs/heads/{b}.tar.gz");
+
+        log::info!("curl_fetch_archive: curl -fsSL {url} -> {tarball_str}");
+        let dl = tokio::process::Command::new("curl")
+            .args(["-fsSL", "-o", &tarball_str, &url])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to spawn curl: {e}"))?;
+        if !dl.status.success() {
+            last_err = format!(
+                "curl download failed (branch '{b}'): {}",
+                String::from_utf8_lossy(&dl.stderr).trim()
+            );
+            let _ = force_remove_dir_all(&stage);
+            continue;
+        }
+
+        let stage_str = stage.to_string_lossy().into_owned();
+        let extract = tokio::process::Command::new("tar")
+            .args(["-xzf", &tarball_str, "-C", &stage_str])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to spawn tar: {e}"))?;
+        if !extract.status.success() {
+            last_err = format!(
+                "tar extract failed: {}",
+                String::from_utf8_lossy(&extract.stderr).trim()
+            );
+            let _ = force_remove_dir_all(&stage);
+            continue;
+        }
+
+        // GitHub archives extract to a single `<repo>-<branch>` top-level dir.
+        let inner = std::fs::read_dir(&stage)
+            .map_err(|e| format!("Failed to read extracted archive: {e}"))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.is_dir());
+        match inner {
+            Some(p) => return Ok((stage, p)),
+            None => {
+                last_err = "extracted archive contained no directory".to_string();
+                let _ = force_remove_dir_all(&stage);
+            }
+        }
+    }
+
+    Err(if last_err.is_empty() {
+        "curl archive download failed".to_string()
+    } else {
+        last_err
+    })
+}
+
 /// Sparse-checkout `subdir.subpath` out of `subdir.clone_url@subdir.branch`
 /// into a temp stage, then copy that single folder's contents into `dest`.
-async fn sparse_checkout_subdir(subdir: &GithubSubdirUrl, dest: &PathBuf) -> Result<(), String> {
+async fn git_sparse_checkout_subdir(
+    subdir: &GithubSubdirUrl,
+    dest: &PathBuf,
+) -> Result<(), String> {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -245,6 +462,7 @@ async fn sparse_checkout_subdir(subdir: &GithubSubdirUrl, dest: &PathBuf) -> Res
             &subdir.clone_url,
             &stage_str,
         ])
+        .envs(gh_helper::gh_token_for_host(&subdir.host).map(|t| gh_helper::git_auth_env(&subdir.host, &t)).unwrap_or_default())
         .output()
         .await
         .map_err(|e| format!("Failed to spawn git: {e}"))?;
@@ -473,11 +691,12 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
         );
         sparse_checkout_subdir(&subdir, &dest).await?;
     } else if is_remote {
-        // Priority: git → gh (→ curl, for raw single-file paths handled
-        // elsewhere). Plain `git clone` works for all public repos with no
-        // extra dependencies, so try it first. Only fall back to `gh repo
-        // clone` when git fails — typically because the repo is private or on
-        // GitHub Enterprise and the user is authenticated via `gh auth login`.
+        // Priority: git → gh → curl. Plain `git clone` works for all public
+        // repos with no extra dependencies, so try it first. Fall back to `gh
+        // repo clone` when git fails — typically because the repo is private or
+        // on GitHub Enterprise and the user is authenticated via `gh auth
+        // login`. As a last resort, download the repo archive tarball with
+        // `curl` (+ `tar`) for hosts where neither git nor gh is configured.
         let dest_str = dest.to_string_lossy().into_owned();
         let mut cloned = false;
         let mut git_err: Option<String> = None;
@@ -494,8 +713,18 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
             git_source,
             dest_str
         );
-        let output = tokio::process::Command::new("git")
-            .args(["clone", "--depth=1", &git_source, &dest_str])
+        let mut git_cmd = tokio::process::Command::new("git");
+        git_cmd.args(["clone", "--depth=1", &git_source, &dest_str]);
+        // When multiple gh accounts/hosts are configured, authenticate git as
+        // the account gh considers active for this host.
+        if let Some(repo) = gh_helper::parse_github_repo(&source) {
+            if let Some(token) = gh_helper::gh_token_for_host(&repo.host) {
+                for (k, v) in gh_helper::git_auth_env(&repo.host, &token) {
+                    git_cmd.env(k, v);
+                }
+            }
+        }
+        let output = git_cmd
             .output()
             .await
             .map_err(|e| format!("Failed to spawn git: {e}"))?;
@@ -524,6 +753,36 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
                             if dest.exists() {
                                 let _ = force_remove_dir_all(&dest);
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !cloned {
+            if let Some(repo) = gh_helper::parse_github_repo(&source) {
+                log::info!(
+                    "install_plugin: git and gh failed, trying curl archive download {}/{} -> {}",
+                    repo.owner, repo.repo, dest_str
+                );
+                match curl_fetch_archive(&repo.host, &repo.owner, &repo.repo, None).await {
+                    Ok((stage, inner)) => {
+                        let copy_result = copy_dir_recursive(&inner, &dest);
+                        let _ = force_remove_dir_all(&stage);
+                        match copy_result {
+                            Ok(()) => cloned = true,
+                            Err(e) => {
+                                log::warn!("install_plugin: curl copy failed: {e}");
+                                if dest.exists() {
+                                    let _ = force_remove_dir_all(&dest);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("install_plugin: curl fallback also failed: {e}");
+                        if dest.exists() {
+                            let _ = force_remove_dir_all(&dest);
                         }
                     }
                 }
@@ -686,8 +945,18 @@ pub async fn update_plugin_collection(
             git_source,
             stage_str
         );
-        let output = tokio::process::Command::new("git")
-            .args(["clone", "--depth=1", &git_source, &stage_str])
+        let mut git_cmd = tokio::process::Command::new("git");
+        git_cmd.args(["clone", "--depth=1", &git_source, &stage_str]);
+        // Authenticate as the gh account active for this host when several
+        // gh accounts/hosts are configured.
+        if let Some(repo) = gh_helper::parse_github_repo(&source) {
+            if let Some(token) = gh_helper::gh_token_for_host(&repo.host) {
+                for (k, v) in gh_helper::git_auth_env(&repo.host, &token) {
+                    git_cmd.env(k, v);
+                }
+            }
+        }
+        let output = git_cmd
             .output()
             .await
             .map_err(|e| format!("Failed to spawn git: {e}"))?;
@@ -1019,6 +1288,21 @@ mod tests {
         assert_eq!(p.subpath, "a/b");
         assert_eq!(p.leaf_name, "b");
         assert_eq!(p.branch, "develop");
+    }
+
+    #[test]
+    fn parse_github_subdir_url_handles_enterprise_host() {
+        let p = parse_github_subdir_url(
+            "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills/jira",
+        )
+        .expect("enterprise tree URL should parse");
+        assert_eq!(
+            p.clone_url,
+            "https://ghosthub.example.com/cloud-foundations/cloudbot.git"
+        );
+        assert_eq!(p.branch, "dev");
+        assert_eq!(p.subpath, "backend/skills/jira");
+        assert_eq!(p.leaf_name, "jira");
     }
 
     #[test]

@@ -45,8 +45,12 @@ pub fn gh_known_hosts() -> Vec<String> {
                 Ok(o) => o,
                 Err(_) => return vec!["github.com".to_string()],
             };
-            // `gh auth status` writes to stderr.
-            let text = String::from_utf8_lossy(&out.stderr);
+            // `gh auth status` historically wrote to stderr, but newer gh
+            // versions (≥ 2.x) print to stdout. Scan both so GHE hosts are
+            // detected regardless of gh version.
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            text.push('\n');
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
             let mut hosts: Vec<String> = text
                 .lines()
                 .filter_map(|line| {
@@ -77,6 +81,56 @@ pub fn gh_known_hosts() -> Vec<String> {
         })
         .clone()
     }
+
+/// Return the `gh` auth token for `host`, selecting the account `gh` considers
+/// active for that host. When the user has multiple accounts / hosts logged in
+/// (e.g. github.com plus a corporate GitHub Enterprise), this lets callers inject
+/// the *correct* host's token into `git` instead of relying on whatever ambient
+/// credential helper happens to answer first. Returns `None` when gh is missing,
+/// not authenticated for `host`, or the token is empty.
+pub fn gh_token_for_host(host: &str) -> Option<String> {
+    if !is_gh_available() {
+        return None;
+    }
+    let out = Command::new("gh")
+        .args(["auth", "token", "--hostname", host])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let token = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+/// Build the env-var triple that injects an `Authorization` header for `host`
+/// into a `git` invocation, using `token`. Returns
+/// `[(GIT_CONFIG_COUNT, "1"), (GIT_CONFIG_KEY_0, ...), (GIT_CONFIG_VALUE_0, ...)]`.
+///
+/// We pass the credential through `GIT_CONFIG_*` env vars rather than `-c` flags
+/// so the token never appears on the process command line. The header uses the
+/// `AUTHORIZATION: basic base64("x-access-token:<token>")` form that GitHub's
+/// smart-HTTP endpoint accepts (the same scheme `actions/checkout` uses).
+pub fn git_auth_env(host: &str, token: &str) -> Vec<(String, String)> {
+    use base64::Engine as _;
+    let basic = base64::engine::general_purpose::STANDARD
+        .encode(format!("x-access-token:{token}"));
+    vec![
+        ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
+        (
+            "GIT_CONFIG_KEY_0".to_string(),
+            format!("http.https://{host}/.extraHeader"),
+        ),
+        (
+            "GIT_CONFIG_VALUE_0".to_string(),
+            format!("AUTHORIZATION: basic {basic}"),
+        ),
+    ]
+}
 
 /// Parsed GitHub-style URL components.
 #[derive(Debug, Clone, PartialEq, Eq)]

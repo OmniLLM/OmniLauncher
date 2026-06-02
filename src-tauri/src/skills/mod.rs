@@ -223,6 +223,97 @@ fn parse_github_blob_or_tree(
     ))
 }
 
+/// Fetch a single `SKILL.md` via a shallow sparse `git clone`.
+///
+/// This is the first choice for installs because plain `git` works for every
+/// public repo with no extra dependencies and honours the user's existing git
+/// credential helpers (so it also covers many private / GitHub Enterprise
+/// repos transparently). Returns `None` when the URL isn't a recognisable
+/// GitHub blob/tree URL or when any git step fails, so the caller can fall back
+/// to `gh` / `curl`.
+fn git_fetch_skill(url: &str) -> Option<String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let (repo, branch, path_in_repo) = parse_github_blob_or_tree(url)?;
+    let clone_url = repo.clone_url();
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let stage = std::env::temp_dir().join(format!(
+        "omnilauncher-skill-{}-{}",
+        std::process::id(),
+        ts
+    ));
+    if stage.exists() {
+        let _ = std::fs::remove_dir_all(&stage);
+    }
+    let stage_str = stage.to_string_lossy().into_owned();
+
+    // Directory containing the SKILL.md (sparse-checkout works on dirs, not files).
+    let dir_in_repo = path_in_repo
+        .rsplit_once('/')
+        .map(|(dir, _)| dir.to_string())
+        .unwrap_or_default();
+
+    log::info!(
+        "install_from_url: git clone --depth=1 --filter=blob:none --no-checkout --branch {} {} {}",
+        branch, clone_url, stage_str
+    );
+
+    let mut clone_cmd = std::process::Command::new("git");
+    clone_cmd.args([
+        "clone",
+        "--depth=1",
+        "--filter=blob:none",
+        "--no-checkout",
+        "--branch",
+        &branch,
+        &clone_url,
+        &stage_str,
+    ]);
+    // When multiple gh accounts/hosts are configured, inject the token gh
+    // considers active for *this* host so git authenticates as the right
+    // account instead of relying on whatever ambient credential answers first.
+    if let Some(token) = crate::gh_helper::gh_token_for_host(&repo.host) {
+        for (k, v) in crate::gh_helper::git_auth_env(&repo.host, &token) {
+            clone_cmd.env(k, v);
+        }
+    }
+    let clone = clone_cmd.output().ok()?;
+    if !clone.status.success() {
+        log::warn!(
+            "install_from_url: git clone failed: {}",
+            String::from_utf8_lossy(&clone.stderr).trim()
+        );
+        let _ = std::fs::remove_dir_all(&stage);
+        return None;
+    }
+
+    let run_git = |args: &[&str]| -> bool {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&stage)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+
+    let sparse_ok = run_git(&["sparse-checkout", "init", "--cone"])
+        && (dir_in_repo.is_empty() || run_git(&["sparse-checkout", "set", &dir_in_repo]))
+        && run_git(&["checkout"]);
+    if !sparse_ok {
+        log::warn!("install_from_url: git sparse-checkout failed");
+        let _ = std::fs::remove_dir_all(&stage);
+        return None;
+    }
+
+    let content = std::fs::read_to_string(stage.join(&path_in_repo)).ok();
+    let _ = std::fs::remove_dir_all(&stage);
+    content
+}
+
 // ─── SkillManager ─────────────────────────────────────────────────────────────
 
 impl SkillManager {
@@ -304,54 +395,92 @@ impl SkillManager {
 
     /// Download and install a skill from a URL.
     ///
-    /// Priority: `curl` → `gh api`. We try plain `curl` against the raw
-    /// `raw.githubusercontent.com` form first because it has no extra
-    /// dependencies and works for all public skills. Only when curl fails
-    /// (e.g. 404 because the repo is private, or it's on GitHub Enterprise)
-    /// do we fall back to `gh api`, which transparently authenticates via
-    /// the user's `gh auth login` token.
+    /// Priority: `git` → `gh api` → `curl`, mirroring the PluginManager. Plain
+    /// `git` (shallow sparse clone) is tried first because it needs no extra
+    /// dependencies, works for all public repos, and honours the user's git
+    /// credential helpers. We fall back to `gh api` for private repos / GitHub
+    /// Enterprise authenticated via `gh auth login`, and finally to `curl`
+    /// against the raw URL for hosts where neither is configured.
     pub fn install_from_url(&mut self, url: &str) -> Result<String, String> {
         let download_url = normalize_skill_url(url);
 
-        // First: try curl against the raw URL.
+        // Helper: accept fetched content only when it parses as a real SKILL.md.
+        // Some hosts (SSO-protected GitHub Enterprise) answer an unauthenticated
+        // raw request with an HTML login page and HTTP 200, so a "successful"
+        // fetch can still return garbage. Validating here lets us fall through
+        // to the next strategy instead of failing outright.
+        let parses_as_skill =
+            |text: &str| parse_skill_file(text, PathBuf::from("/tmp/SKILL.md")).is_some();
+
         let mut content_opt: Option<String> = None;
-        let mut curl_err: Option<String> = None;
-        log::info!("install_from_url: curl -fsSL {}", download_url);
-        match std::process::Command::new("curl")
-            .args(["-fsSL", &download_url])
-            .output()
-        {
-            Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
-                Ok(text) => content_opt = Some(text),
-                Err(e) => curl_err = Some(format!("UTF-8 decode error: {e}")),
-            },
-            Ok(output) => {
-                curl_err = Some(format!(
-                    "Download failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ));
+        let mut last_err: Option<String> = None;
+
+        // 1) git: shallow sparse clone of the repo and read the SKILL.md.
+        if let Some(text) = git_fetch_skill(url) {
+            if parses_as_skill(&text) {
+                content_opt = Some(text);
+            } else {
+                log::warn!("install_from_url: git fetch returned invalid SKILL.md content");
+                last_err = Some(
+                    "git fetch did not return a valid SKILL.md (the host may require \
+                     authentication)."
+                        .to_string(),
+                );
             }
-            Err(e) => curl_err = Some(format!("curl failed: {e}")),
         }
 
-        // Fallback: gh api (handles private repos & GHE when authed).
+        // 2) gh api: handles private repos & GHE when authed.
         if content_opt.is_none() {
             if let Some((repo, branch, path_in_repo)) = parse_github_blob_or_tree(url) {
                 if crate::gh_helper::is_gh_available() {
                     log::info!(
-                        "install_from_url: curl failed, trying gh api {}/{}@{}:{}",
+                        "install_from_url: git unusable, trying gh api {}/{}@{}:{}",
                         repo.owner, repo.repo, branch, path_in_repo
                     );
                     match crate::gh_helper::gh_fetch_raw(&repo, &branch, &path_in_repo) {
-                        Ok(text) => content_opt = Some(text),
-                        Err(e) => log::warn!("install_from_url: gh fetch also failed: {e}"),
+                        Ok(text) if parses_as_skill(&text) => content_opt = Some(text),
+                        Ok(_) => log::warn!(
+                            "install_from_url: gh fetch returned invalid SKILL.md content"
+                        ),
+                        Err(e) => {
+                            log::warn!("install_from_url: gh fetch also failed: {e}");
+                            last_err = Some(e);
+                        }
                     }
                 }
             }
         }
 
+        // 3) curl: last resort against the raw URL.
+        if content_opt.is_none() {
+            log::info!("install_from_url: gh unusable, trying curl -fsSL {}", download_url);
+            match std::process::Command::new("curl")
+                .args(["-fsSL", &download_url])
+                .output()
+            {
+                Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
+                    Ok(text) if parses_as_skill(&text) => content_opt = Some(text),
+                    Ok(_) => {
+                        last_err = Some(
+                            "Download did not return a valid SKILL.md (the host may require \
+                             authentication). Try `gh auth login` for that host."
+                                .to_string(),
+                        );
+                    }
+                    Err(e) => last_err = Some(format!("UTF-8 decode error: {e}")),
+                },
+                Ok(output) => {
+                    last_err = Some(format!(
+                        "Download failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                Err(e) => last_err = Some(format!("curl failed: {e}")),
+            }
+        }
+
         let content = content_opt.ok_or_else(|| {
-            curl_err.unwrap_or_else(|| "Download failed: unknown error".to_string())
+            last_err.unwrap_or_else(|| "Download failed: unknown error".to_string())
         })?;
 
         // Parse to extract name
@@ -606,5 +735,25 @@ When the user asks to summarize a URL, do the following.
         let result2 = mgr.install_from_path(skill_path.to_str().unwrap());
         assert!(result2.is_ok());
         assert_eq!(mgr.list_meta().len(), 1); // No duplicates
+    }
+
+    /// Live install test against the internal GitHub Enterprise host. Requires
+    /// network access and `gh auth login` / git credentials for
+    /// `ghosthub.example.com`, so it's `#[ignore]`d by default. Run with:
+    ///   cargo test -p omnilauncher install_jira_from_enterprise -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn install_jira_from_enterprise() {
+        let url = "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills/jira";
+        let mut mgr = SkillManager::new();
+        let result = mgr.install_from_url(url);
+        assert!(result.is_ok(), "install_from_url failed: {:?}", result);
+        let msg = result.unwrap();
+        assert!(msg.contains("jira"), "unexpected message: {msg}");
+        assert!(mgr.get_by_name("jira").is_some(), "jira skill not loaded");
+
+        // Verify it was written to disk where the app expects it.
+        let installed = SkillManager::skill_dir().join("jira").join("SKILL.md");
+        assert!(installed.exists(), "SKILL.md not written to {installed:?}");
     }
 }
