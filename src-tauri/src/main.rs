@@ -431,9 +431,17 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        if tray_window.is_visible().unwrap_or(false) {
+                        // FIX (Windows): a *minimized* window still reports
+                        // `is_visible() == true`, and `show()` does NOT restore
+                        // a minimized window. Treat "minimized" as not-visible
+                        // and always `unminimize()` before showing so the UI
+                        // actually appears instead of only the taskbar icon.
+                        let shown = tray_window.is_visible().unwrap_or(false)
+                            && !tray_window.is_minimized().unwrap_or(false);
+                        if shown {
                             let _ = tray_window.hide();
                         } else {
+                            let _ = tray_window.unminimize();
                             let _ = tray_window.show();
                             let _ = tray_window.set_focus();
                             // FIX: emit a String payload so the frontend
@@ -458,7 +466,14 @@ pub fn run() {
                 global_shortcut.on_shortcut(shortcut, move |_app, _shortcut, event| {
                     if let tauri_plugin_global_shortcut::ShortcutState::Pressed = event.state() {
                         log::trace!("Global shortcut pressed; toggling main window visibility");
-                        if shortcut_window.is_visible().unwrap_or(false) {
+                        // FIX (Windows): a *minimized* window still reports
+                        // `is_visible() == true`, and `show()` does NOT restore
+                        // a minimized window. Treat "minimized" as not-visible
+                        // so the toggle restores the UI instead of only the
+                        // taskbar icon.
+                        let shown = shortcut_window.is_visible().unwrap_or(false)
+                            && !shortcut_window.is_minimized().unwrap_or(false);
+                        if shown {
                             let _ = shortcut_window.hide();
                             return;
                         }
@@ -470,6 +485,7 @@ pub fn run() {
                         // and show the window immediately so the launcher
                         // appears instantly; the selection is delivered as a
                         // follow-up event when ready.
+                        let _ = shortcut_window.unminimize();
                         let _ = shortcut_window.show();
                         let _ = shortcut_window.set_focus();
                         let _ = shortcut_window.emit("omnilauncher://shown", String::new());
