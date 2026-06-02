@@ -413,6 +413,41 @@ pub fn run() {
                 });
             }
 
+            // Skill curator background tick (Hermes-style self-improvement).
+            // Sleeps 10 minutes after launch to stay off the cold-start path,
+            // then wakes once an hour and runs `evaluate` only when ≥7 days
+            // have passed since the last pass. Pure rule-based, no LLM calls.
+            // Idempotent: a missed tick just runs at the next wakeup.
+            {
+                use tauri::Manager;
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                    loop {
+                        let state = app_handle.state::<AppState>();
+                        let mgr = state.skill_manager.lock().await;
+                        let names = mgr.user_skill_names();
+                        drop(mgr);
+                        if let Some(report) = tokio::task::spawn_blocking(move || {
+                            omnilauncher_lib::skills::curator::run_if_due(&names)
+                        })
+                        .await
+                        .ok()
+                        .flatten()
+                        {
+                            log::info!(
+                                "skill curator: tracked={} new={} stale={} archived={}",
+                                report.total_tracked,
+                                report.seen_new.len(),
+                                report.marked_stale.len(),
+                                report.marked_archived.len(),
+                            );
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    }
+                });
+            }
+
             let window = app.get_webview_window("main").unwrap();
 
             // Center the initial window before the frontend performs its first resize.
@@ -570,6 +605,11 @@ pub fn run() {
             install_skill,
             delete_skill,
             update_skill,
+            list_skill_usage,
+            pin_skill,
+            run_curator_now,
+            propose_skill_consolidation,
+            apply_skill_consolidation,
             set_window_geometry,
             install_plugin,
             update_plugin,
@@ -1482,6 +1522,74 @@ async fn update_skill(name: String, state: tauri::State<'_, AppState>) -> Result
     })
     .await
     .map_err(|e| format!("update task failed: {e}"))?
+}
+
+// ─── Curator commands ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn list_skill_usage() -> Result<omnilauncher_lib::skills::curator::UsageStore, String> {
+    Ok(omnilauncher_lib::skills::curator::snapshot())
+}
+
+#[tauri::command]
+async fn pin_skill(name: String, pinned: bool) -> Result<bool, String> {
+    omnilauncher_lib::skills::curator::set_pinned(&name, pinned);
+    Ok(true)
+}
+
+/// Force the curator to run now (UI "Run curator" action). Returns counts of
+/// transitions so the UI can surface a toast.
+#[tauri::command]
+async fn run_curator_now(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let mgr = state.skill_manager.lock().await;
+    let names = mgr.user_skill_names();
+    drop(mgr);
+    let report = tokio::task::spawn_blocking(move || {
+        omnilauncher_lib::skills::curator::evaluate(&names)
+    })
+    .await
+    .map_err(|e| format!("curator task failed: {e}"))?;
+    Ok(serde_json::json!({
+        "marked_stale": report.marked_stale,
+        "marked_archived": report.marked_archived,
+        "seen_new": report.seen_new,
+        "total_tracked": report.total_tracked,
+    }))
+}
+
+/// LLM-driven consolidation phase 2: ask the model for proposals (read-only;
+/// nothing on disk is touched). The frontend surfaces these for per-item
+/// approval; only `apply_skill_consolidation` mutates files.
+#[tauri::command]
+async fn propose_skill_consolidation(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<omnilauncher_lib::skills::consolidate::Proposal>, String> {
+    let skills_clone: Vec<omnilauncher_lib::skills::Skill> = {
+        let mgr = state.skill_manager.lock().await;
+        // Only consider user-installed skills — bundled ones are
+        // canonical and not subject to user-initiated consolidation.
+        let user_names = mgr.user_skill_names();
+        mgr.list_meta()
+            .iter()
+            .filter(|m| user_names.iter().any(|n| n == &m.name))
+            .filter_map(|m| mgr.get_by_name(&m.name).cloned())
+            .collect()
+    };
+    let ai = state.ai_client.lock().await;
+    omnilauncher_lib::skills::consolidate::propose(&skills_clone, &ai)
+        .await
+        .map_err(|e| format!("LLM propose failed: {e}"))
+}
+
+/// Apply one user-approved consolidation proposal. Always backs up the
+/// affected SKILL.md(s) first; never deletes a primary skill.
+#[tauri::command]
+async fn apply_skill_consolidation(
+    state: tauri::State<'_, AppState>,
+    proposal: omnilauncher_lib::skills::consolidate::Proposal,
+) -> Result<omnilauncher_lib::skills::consolidate::ApplyOutcome, String> {
+    let mut mgr = state.skill_manager.lock().await;
+    omnilauncher_lib::skills::consolidate::apply(&proposal, &mut mgr)
 }
 
 // ─── External plugin management commands ──────────────────────────────────────
