@@ -275,7 +275,9 @@ fn swap_body(original: &str, new_body: &str) -> Result<String, String> {
     // Skip past the opening `---` line.
     let after_open = match trimmed.find('\n') {
         Some(i) => &trimmed[i + 1..],
-        None => return Err("swap_body: malformed frontmatter (no newline after opening ---)".into()),
+        None => {
+            return Err("swap_body: malformed frontmatter (no newline after opening ---)".into())
+        }
     };
     // Find the closing `---` line.
     let close_rel = after_open

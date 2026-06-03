@@ -247,7 +247,11 @@ impl AiClient {
             self.model,
             api_messages.len(),
             tools.len(),
-            if self.api_key.is_empty() { "none" } else { "bearer" }
+            if self.api_key.is_empty() {
+                "none"
+            } else {
+                "bearer"
+            }
         );
 
         let mut req = client.post(&url).json(&body);
@@ -357,7 +361,11 @@ impl AiClient {
             url,
             self.model,
             messages.len(),
-            if self.api_key.is_empty() { "none" } else { "bearer" }
+            if self.api_key.is_empty() {
+                "none"
+            } else {
+                "bearer"
+            }
         );
 
         let mut req = client.post(&url).json(&body);

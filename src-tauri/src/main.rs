@@ -683,7 +683,6 @@ async fn set_window_size_centered(
     Ok(())
 }
 
-
 async fn sync_window_geometry(
     window: &tauri::WebviewWindow,
     height: f64,
@@ -1552,11 +1551,10 @@ async fn run_curator_now(state: tauri::State<'_, AppState>) -> Result<serde_json
     let mgr = state.skill_manager.lock().await;
     let names = mgr.user_skill_names();
     drop(mgr);
-    let report = tokio::task::spawn_blocking(move || {
-        omnilauncher_lib::skills::curator::evaluate(&names)
-    })
-    .await
-    .map_err(|e| format!("curator task failed: {e}"))?;
+    let report =
+        tokio::task::spawn_blocking(move || omnilauncher_lib::skills::curator::evaluate(&names))
+            .await
+            .map_err(|e| format!("curator task failed: {e}"))?;
     Ok(serde_json::json!({
         "marked_stale": report.marked_stale,
         "marked_archived": report.marked_archived,

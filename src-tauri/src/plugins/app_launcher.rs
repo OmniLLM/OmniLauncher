@@ -220,10 +220,7 @@ impl Plugin for AppLauncherPlugin {
     fn cheap_prefix_match(&self, raw: &str) -> bool {
         // Mirrors the early-exit in `query`: skip on empty input or queries
         // owned by other plugins (calculator, bash, system_commands).
-        !(raw.is_empty()
-            || raw.starts_with('=')
-            || raw.starts_with('>')
-            || raw.starts_with("sys "))
+        !(raw.is_empty() || raw.starts_with('=') || raw.starts_with('>') || raw.starts_with("sys "))
     }
 
     async fn query(&self, q: &Query) -> Vec<QueryResult> {

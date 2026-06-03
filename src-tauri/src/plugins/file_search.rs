@@ -215,7 +215,9 @@ impl Plugin for FileSearchPlugin {
                 vec![QueryResult {
                     id: "file_search:indexing".to_string(),
                     title: "Indexing files…".to_string(),
-                    subtitle: Some("First-time scan of your home folder. Try again in a moment.".to_string()),
+                    subtitle: Some(
+                        "First-time scan of your home folder. Try again in a moment.".to_string(),
+                    ),
                     icon: Some("⏳".to_string()),
                     score: 10,
                     action_type: "none".to_string(),

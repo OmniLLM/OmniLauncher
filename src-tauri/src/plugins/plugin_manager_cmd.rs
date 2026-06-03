@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::gh_helper;
 use super::external::{discover_plugins_in_repo, ext_plugins_dir, load_manifest};
+use crate::gh_helper;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -462,7 +462,11 @@ async fn git_sparse_checkout_subdir(
             &subdir.clone_url,
             &stage_str,
         ])
-        .envs(gh_helper::gh_token_for_host(&subdir.host).map(|t| gh_helper::git_auth_env(&subdir.host, &t)).unwrap_or_default())
+        .envs(
+            gh_helper::gh_token_for_host(&subdir.host)
+                .map(|t| gh_helper::git_auth_env(&subdir.host, &t))
+                .unwrap_or_default(),
+        )
         .output()
         .await
         .map_err(|e| format!("Failed to spawn git: {e}"))?;
@@ -744,7 +748,10 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
                 if gh_helper::is_gh_available() {
                     log::info!(
                         "install_plugin: git failed, trying gh repo clone {}/{} -> {} (host={})",
-                        repo.owner, repo.repo, dest_str, repo.host
+                        repo.owner,
+                        repo.repo,
+                        dest_str,
+                        repo.host
                     );
                     match gh_helper::gh_clone(&repo, &dest, &["--depth=1"]).await {
                         Ok(()) => cloned = true,
@@ -763,7 +770,9 @@ pub async fn install_plugin(source: String, target_dir: Option<String>) -> Resul
             if let Some(repo) = gh_helper::parse_github_repo(&source) {
                 log::info!(
                     "install_plugin: git and gh failed, trying curl archive download {}/{} -> {}",
-                    repo.owner, repo.repo, dest_str
+                    repo.owner,
+                    repo.repo,
+                    dest_str
                 );
                 match curl_fetch_archive(&repo.host, &repo.owner, &repo.repo, None).await {
                     Ok((stage, inner)) => {
@@ -975,14 +984,14 @@ pub async fn update_plugin_collection(
                 if gh_helper::is_gh_available() {
                     log::info!(
                         "update_plugin_collection: git failed, trying gh repo clone {}/{} -> {}",
-                        repo.owner, repo.repo, stage_str
+                        repo.owner,
+                        repo.repo,
+                        stage_str
                     );
                     match gh_helper::gh_clone(&repo, &stage, &["--depth=1"]).await {
                         Ok(()) => cloned = true,
                         Err(e) => {
-                            log::warn!(
-                                "update_plugin_collection: gh clone also failed: {e}"
-                            );
+                            log::warn!("update_plugin_collection: gh clone also failed: {e}");
                             if stage.exists() {
                                 let _ = force_remove_dir_all(&stage);
                             }

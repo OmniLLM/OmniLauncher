@@ -209,7 +209,7 @@ pub fn gh_known_hosts() -> Vec<String> {
             hosts
         })
         .clone()
-    }
+}
 
 /// Return the `gh` auth token for `host`, selecting the account `gh` considers
 /// active for that host. When the user has multiple accounts / hosts logged in
@@ -252,8 +252,7 @@ pub fn gh_token_for_host(host: &str) -> Option<String> {
 /// smart-HTTP endpoint accepts (the same scheme `actions/checkout` uses).
 pub fn git_auth_env(host: &str, token: &str) -> Vec<(String, String)> {
     use base64::Engine as _;
-    let basic = base64::engine::general_purpose::STANDARD
-        .encode(format!("x-access-token:{token}"));
+    let basic = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
     vec![
         ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
         (
@@ -443,14 +442,13 @@ pub fn gh_fetch_raw(
         cmd.args(["--hostname", &repo.host]);
     }
     cmd.args(["-H", "Accept: application/vnd.github.raw", &endpoint]);
+    cmd.env_remove("GITHUB_TOKEN").env_remove("GH_TOKEN");
 
-    log::info!(
-        "gh_helper: gh api {} (host={})",
-        endpoint,
-        repo.host
-    );
+    log::info!("gh_helper: gh api {} (host={})", endpoint, repo.host);
 
-    let output = cmd.output().map_err(|e| format!("Failed to spawn gh: {e}"))?;
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to spawn gh: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -484,7 +482,11 @@ pub fn gh_default_branch(repo: &GithubRepoRef) -> Option<String> {
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_TOKEN");
 
-    log::info!("gh_helper: gh api {} --jq .default_branch (host={})", endpoint, repo.host);
+    log::info!(
+        "gh_helper: gh api {} --jq .default_branch (host={})",
+        endpoint,
+        repo.host
+    );
 
     let output = cmd.output().ok()?;
     if !output.status.success() {

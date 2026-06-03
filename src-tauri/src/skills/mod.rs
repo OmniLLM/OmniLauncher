@@ -3,8 +3,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub mod curator;
 pub mod consolidate;
+pub mod curator;
 
 // ─── Data structures ──────────────────────────────────────────────────────────
 
@@ -256,11 +256,8 @@ fn git_fetch_skill(url: &str) -> Option<GitFetchedSkill> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let stage = std::env::temp_dir().join(format!(
-        "omnilauncher-skill-{}-{}",
-        std::process::id(),
-        ts
-    ));
+    let stage =
+        std::env::temp_dir().join(format!("omnilauncher-skill-{}-{}", std::process::id(), ts));
     if stage.exists() {
         let _ = std::fs::remove_dir_all(&stage);
     }
@@ -274,7 +271,9 @@ fn git_fetch_skill(url: &str) -> Option<GitFetchedSkill> {
 
     log::info!(
         "install_from_url: git clone --depth=1 --filter=blob:none --no-checkout --branch {} {} {}",
-        branch, clone_url, stage_str
+        branch,
+        clone_url,
+        stage_str
     );
 
     let mut clone_cmd = std::process::Command::new("git");
@@ -293,10 +292,11 @@ fn git_fetch_skill(url: &str) -> Option<GitFetchedSkill> {
     // When multiple gh accounts/hosts are configured, inject the token gh
     // considers active for *this* host so git authenticates as the right
     // account instead of relying on whatever ambient credential answers first.
-    if let Some(token) = crate::gh_helper::gh_token_for_host(&repo.host) {
-        for (k, v) in crate::gh_helper::git_auth_env(&repo.host, &token) {
-            clone_cmd.env(k, v);
-        }
+    let git_auth_env = crate::gh_helper::gh_token_for_host(&repo.host)
+        .map(|token| crate::gh_helper::git_auth_env(&repo.host, &token))
+        .unwrap_or_default();
+    for (k, v) in &git_auth_env {
+        clone_cmd.env(k, v);
     }
     let clone = clone_cmd.output().ok()?;
     if !clone.status.success() {
@@ -309,12 +309,12 @@ fn git_fetch_skill(url: &str) -> Option<GitFetchedSkill> {
     }
 
     let run_git = |args: &[&str]| -> bool {
-        std::process::Command::new("git")
-            .args(args)
-            .current_dir(&stage)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args).current_dir(&stage);
+        for (k, v) in &git_auth_env {
+            cmd.env(k, v);
+        }
+        cmd.output().map(|o| o.status.success()).unwrap_or(false)
     };
 
     let sparse_ok = run_git(&["sparse-checkout", "init", "--cone"])
@@ -373,9 +373,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// appending `SKILL.md`. Used to install a *directory* of skills (a folder that
 /// contains multiple `<name>/SKILL.md` entries). Returns `None` for `blob` URLs,
 /// for tree URLs that already point at a `SKILL.md`, or for non-GitHub hosts.
-fn parse_github_tree_dir(
-    url: &str,
-) -> Option<(crate::gh_helper::GithubRepoRef, String, String)> {
+fn parse_github_tree_dir(url: &str) -> Option<(crate::gh_helper::GithubRepoRef, String, String)> {
     let trimmed = url.trim();
     if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
         return None;
@@ -443,7 +441,10 @@ fn resolve_default_branch(repo: &crate::gh_helper::GithubRepoRef) -> Option<Stri
             cmd.env(k, v);
         }
     }
-    log::info!("resolve_default_branch: git ls-remote --symref {} HEAD", clone_url);
+    log::info!(
+        "resolve_default_branch: git ls-remote --symref {} HEAD",
+        clone_url
+    );
     let git_branch = cmd.output().ok().and_then(|out| {
         if !out.status.success() {
             log::warn!(
@@ -514,14 +515,17 @@ fn git_sparse_clone_dir(
         &clone_url,
         &stage_str,
     ]);
-    if let Some(token) = crate::gh_helper::gh_token_for_host(&repo.host) {
-        for (k, v) in crate::gh_helper::git_auth_env(&repo.host, &token) {
-            clone_cmd.env(k, v);
-        }
+    let git_auth_env = crate::gh_helper::gh_token_for_host(&repo.host)
+        .map(|token| crate::gh_helper::git_auth_env(&repo.host, &token))
+        .unwrap_or_default();
+    for (k, v) in &git_auth_env {
+        clone_cmd.env(k, v);
     }
     log::info!(
         "git_sparse_clone_dir: git clone --depth=1 --filter=blob:none --branch {} {} {}",
-        branch, clone_url, stage_str
+        branch,
+        clone_url,
+        stage_str
     );
     let clone = clone_cmd.output().ok()?;
     if !clone.status.success() {
@@ -547,12 +551,12 @@ fn git_sparse_clone_dir(
     }
 
     let run_git = |args: &[&str]| -> bool {
-        std::process::Command::new("git")
-            .args(args)
-            .current_dir(&stage)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args).current_dir(&stage);
+        for (k, v) in &git_auth_env {
+            cmd.env(k, v);
+        }
+        cmd.output().map(|o| o.status.success()).unwrap_or(false)
     };
 
     let sparse_ok = run_git(&["sparse-checkout", "init", "--cone"])
@@ -561,12 +565,20 @@ fn git_sparse_clone_dir(
     if !sparse_ok {
         log::warn!("git_sparse_clone_dir: git sparse-checkout failed");
         let _ = std::fs::remove_dir_all(&stage);
-        return None;
+
+        log::info!("git_sparse_clone_dir: sparse checkout unusable, trying gh repo clone");
+        match crate::gh_helper::gh_clone_sync(repo, &stage, &["--branch", branch, "--depth=1"]) {
+            Ok(()) => return Some(stage),
+            Err(e) => {
+                log::warn!("git_sparse_clone_dir: gh repo clone also failed: {e}");
+                let _ = std::fs::remove_dir_all(&stage);
+                return None;
+            }
+        }
     }
 
     Some(stage)
 }
-
 
 // ─── SkillManager ─────────────────────────────────────────────────────────────
 
@@ -913,7 +925,10 @@ impl SkillManager {
                 if crate::gh_helper::is_gh_available() {
                     log::info!(
                         "install_from_url: git unusable, trying gh api {}/{}@{}:{}",
-                        repo.owner, repo.repo, branch, path_in_repo
+                        repo.owner,
+                        repo.repo,
+                        branch,
+                        path_in_repo
                     );
                     match crate::gh_helper::gh_fetch_raw(&repo, &branch, &path_in_repo) {
                         Ok(text) if parses_as_skill(&text) => content_opt = Some(text),
@@ -931,7 +946,10 @@ impl SkillManager {
 
         // 3) curl: last resort against the raw URL.
         if content_opt.is_none() {
-            log::info!("install_from_url: gh unusable, trying curl -fsSL {}", download_url);
+            log::info!(
+                "install_from_url: gh unusable, trying curl -fsSL {}",
+                download_url
+            );
             match std::process::Command::new("curl")
                 .args(["-fsSL", &download_url])
                 .output()
@@ -1204,7 +1222,8 @@ When the user asks to summarize a URL, do the following.
 
     #[test]
     fn test_parse_github_tree_dir_directory() {
-        let url = "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills";
+        let url =
+            "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills";
         let (repo, branch, dir) = parse_github_tree_dir(url).expect("should parse tree dir");
         assert_eq!(repo.host, "ghosthub.example.com");
         assert_eq!(repo.owner, "cloud-foundations");
@@ -1304,7 +1323,8 @@ When the user asks to summarize a URL, do the following.
     #[test]
     #[ignore]
     fn install_skill_dir_from_enterprise() {
-        let url = "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills";
+        let url =
+            "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills";
         let mut mgr = SkillManager::new();
         let result = mgr.install_from_url(url);
         assert!(result.is_ok(), "install_from_url failed: {:?}", result);

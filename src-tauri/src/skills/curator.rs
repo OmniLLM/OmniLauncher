@@ -388,7 +388,11 @@ mod tests {
             );
         });
 
-        let installed = vec!["fresh".to_string(), "old".to_string(), "ancient".to_string()];
+        let installed = vec![
+            "fresh".to_string(),
+            "old".to_string(),
+            "ancient".to_string(),
+        ];
         let report = evaluate(&installed);
         assert!(report.marked_stale.contains(&"old".to_string()));
         assert!(report.marked_archived.contains(&"ancient".to_string()));
@@ -453,7 +457,10 @@ mod tests {
         let report = evaluate(&["brand-new".to_string()]);
         assert!(report.seen_new.contains(&"brand-new".to_string()));
         let snap = snapshot();
-        assert_eq!(snap.skills.get("brand-new").unwrap().state, SkillState::Active);
+        assert_eq!(
+            snap.skills.get("brand-new").unwrap().state,
+            SkillState::Active
+        );
         assert!(snap.skills.get("brand-new").unwrap().first_seen > 0);
     }
 }

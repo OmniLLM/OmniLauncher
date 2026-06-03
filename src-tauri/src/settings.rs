@@ -213,9 +213,7 @@ fn read_gh_hosts_cache() -> Option<Vec<GitHubServer>> {
     let path = gh_hosts_cache_path();
     let meta = std::fs::metadata(&path).ok()?;
     let modified = meta.modified().ok()?;
-    let age = std::time::SystemTime::now()
-        .duration_since(modified)
-        .ok()?;
+    let age = std::time::SystemTime::now().duration_since(modified).ok()?;
     if age.as_secs() > GH_HOSTS_CACHE_TTL_SECS {
         return None;
     }

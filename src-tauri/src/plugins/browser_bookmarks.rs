@@ -144,7 +144,12 @@ impl BrowserBookmarksPlugin {
 
         let current_mtimes: Vec<(PathBuf, Option<SystemTime>)> = sources
             .iter()
-            .map(|p| (p.clone(), std::fs::metadata(p).and_then(|m| m.modified()).ok()))
+            .map(|p| {
+                (
+                    p.clone(),
+                    std::fs::metadata(p).and_then(|m| m.modified()).ok(),
+                )
+            })
             .collect();
 
         // Fast path: cache still warm AND no source file has changed mtime —
@@ -153,9 +158,7 @@ impl BrowserBookmarksPlugin {
             let guard = bookmarks_cache().lock().ok();
             if let Some(guard) = guard {
                 if let Some(c) = &*guard {
-                    if c.built_at.elapsed() < BOOKMARKS_TTL
-                        && c.source_mtimes == current_mtimes
-                    {
+                    if c.built_at.elapsed() < BOOKMARKS_TTL && c.source_mtimes == current_mtimes {
                         return c.entries.clone();
                     }
                 }
