@@ -15,45 +15,166 @@
 //!    error, repo not accessible), bubble back so the caller can fall back to
 //!    plain `git clone` / `curl`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// Whether the `gh` binary is available on PATH. Cached for the lifetime of the
-/// process — gh getting installed mid-run is rare enough that we don't need to
-/// re-probe on every install.
-pub fn is_gh_available() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        Command::new("gh")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
+/// Can `program` be spawned and does `gh --version` succeed? Used both to probe
+/// PATH and to validate a candidate absolute path before we commit to it.
+fn gh_runs(program: &str) -> bool {
+    Command::new(program)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
-/// Hosts that `gh` is authenticated against. Parsed from `gh auth status`
-/// (which writes to **stderr**). Returns at minimum `["github.com"]` if gh is
-/// available, even when `auth status` parsing fails — `gh repo clone` on a
-/// public repo doesn't strictly need auth.
+/// Resolve the `gh` executable to use for every gh invocation in the app.
+///
+/// GUI processes (launched from the macOS Dock/Finder, the Windows shell, or a
+/// VS Code session started before `gh` was installed / added to PATH) routinely
+/// inherit a minimal `PATH` that omits the directory holding `gh`. Probing the
+/// bare name therefore reports "not found" even though `gh` works fine in the
+/// user's terminal. To be robust across platforms we:
+///
+/// 1. honour an explicit override (`OMNILAUNCHER_GH` / `GH_PATH`),
+/// 2. try the bare `gh` resolved via the inherited `PATH`, then
+/// 3. fall back to the well-known per-platform install locations
+///    (Program Files / winget / scoop / choco on Windows; Homebrew, system
+///    bins, `~/.local/bin`, snap on macOS & Linux).
+///
+/// The resolved value (an absolute path, or the bare name `"gh"` when nothing
+/// validated) is cached for the process lifetime.
+pub fn gh_program() -> String {
+    static GH_PATH: OnceLock<String> = OnceLock::new();
+    GH_PATH.get_or_init(resolve_gh_program).clone()
+}
+
+fn resolve_gh_program() -> String {
+    // 1) Explicit override wins, so users can point at a non-standard install.
+    for var in ["OMNILAUNCHER_GH", "GH_PATH"] {
+        if let Ok(p) = std::env::var(var) {
+            let p = p.trim().to_string();
+            if !p.is_empty() && gh_runs(&p) {
+                log::info!("gh_helper: using gh from {var}={p}");
+                return p;
+            }
+        }
+    }
+
+    // 2) Bare name resolved through the inherited PATH.
+    if gh_runs("gh") {
+        return "gh".to_string();
+    }
+
+    // 3) Well-known install locations the inherited PATH may have dropped.
+    for candidate in gh_well_known_paths() {
+        if candidate.is_file() {
+            let s = candidate.to_string_lossy().into_owned();
+            if gh_runs(&s) {
+                log::info!("gh_helper: resolved gh at {s}");
+                return s;
+            }
+        }
+    }
+
+    // Give up: return the bare name so callers still attempt a spawn and fail
+    // with a clear OS error rather than silently doing nothing.
+    "gh".to_string()
+}
+
+/// Per-platform list of likely `gh` install paths, ordered most-specific first.
+fn gh_well_known_paths() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        let exe = "gh.exe";
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Ok(dir) = std::env::var(var) {
+                out.push(PathBuf::from(dir).join("GitHub CLI").join(exe));
+            }
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            // winget shim directory.
+            out.push(
+                PathBuf::from(&local)
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Links")
+                    .join(exe),
+            );
+            out.push(PathBuf::from(&local).join("GitHub CLI").join(exe));
+        }
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            // scoop shim directory.
+            out.push(
+                PathBuf::from(&userprofile)
+                    .join("scoop")
+                    .join("shims")
+                    .join(exe),
+            );
+        }
+        // chocolatey shim.
+        out.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin").join(exe));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let exe = "gh";
+        for dir in [
+            "/opt/homebrew/bin",              // Apple Silicon Homebrew
+            "/usr/local/bin",                 // Intel Homebrew / manual installs
+            "/home/linuxbrew/.linuxbrew/bin", // Linuxbrew
+            "/usr/bin",
+            "/bin",
+            "/snap/bin", // snap
+        ] {
+            out.push(PathBuf::from(dir).join(exe));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            out.push(PathBuf::from(&home).join(".local").join("bin").join(exe));
+            out.push(PathBuf::from(&home).join("bin").join(exe));
+        }
+    }
+
+    out
+}
+
+/// Whether a usable `gh` binary was found (on PATH or a well-known location).
+/// Cached for the lifetime of the process — gh getting installed mid-run is
+/// rare enough that we don't need to re-probe on every install.
+pub fn is_gh_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| gh_runs(&gh_program()))
+}
+
+/// Hosts that `gh` is authenticated against. Combines two sources so a host is
+/// recognised even when one of them is unavailable:
+///
+///   1. `gh auth status` output (covers keyring-stored tokens, but needs `gh`
+///      on PATH and parses human-readable text), and
+///   2. the top-level hostname keys in gh's `hosts.yml` config file (works even
+///      when `gh` isn't reachable from the GUI process, and is stable across gh
+///      versions — the keys are present regardless of whether the token lives in
+///      the file or the OS keyring).
+///
+/// Always includes `github.com` so `gh repo clone` on a public repo works even
+/// when nothing else is configured.
 pub fn gh_known_hosts() -> Vec<String> {
     static HOSTS: OnceLock<Vec<String>> = OnceLock::new();
     HOSTS
         .get_or_init(|| {
-            let out = match Command::new("gh").args(["auth", "status"]).output() {
-                Ok(o) => o,
-                Err(_) => return vec!["github.com".to_string()],
-            };
-            // `gh auth status` historically wrote to stderr, but newer gh
-            // versions (≥ 2.x) print to stdout. Scan both so GHE hosts are
-            // detected regardless of gh version.
-            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-            text.push('\n');
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            let mut hosts: Vec<String> = text
-                .lines()
-                .filter_map(|line| {
+            let mut hosts: Vec<String> = Vec::new();
+
+            // Source 1: `gh auth status`. Historically wrote to stderr, but
+            // newer gh versions (≥ 2.x) print to stdout. Scan both so GHE hosts
+            // are detected regardless of gh version.
+            if let Ok(out) = Command::new(gh_program()).args(["auth", "status"]).output() {
+                let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+                text.push('\n');
+                text.push_str(&String::from_utf8_lossy(&out.stderr));
+                for line in text.lines() {
                     let trimmed = line.trim_end();
                     // Hostname lines are un-indented and contain no spaces, e.g.
                     //   "github.com"
@@ -62,16 +183,24 @@ pub fn gh_known_hosts() -> Vec<String> {
                         || trimmed.starts_with(char::is_whitespace)
                         || trimmed.contains(' ')
                     {
-                        return None;
+                        continue;
                     }
                     let candidate = trimmed.trim_end_matches(':');
-                    if candidate.contains('.') {
-                        Some(candidate.to_string())
-                    } else {
-                        None
+                    if candidate.contains('.') && !hosts.iter().any(|h| h == candidate) {
+                        hosts.push(candidate.to_string());
                     }
-                })
-                .collect();
+                }
+            }
+
+            // Source 2: gh's hosts.yml. Reading the file directly does not
+            // depend on `gh` being launchable from this process, so it rescues
+            // the common GUI case where the app inherits a stripped PATH.
+            for entry in crate::settings::read_gh_hosts_yml() {
+                if !entry.hostname.is_empty() && !hosts.iter().any(|h| h == &entry.hostname) {
+                    hosts.push(entry.hostname);
+                }
+            }
+
             if !hosts.iter().any(|h| h == "github.com") {
                 hosts.push("github.com".to_string());
             }
@@ -92,8 +221,14 @@ pub fn gh_token_for_host(host: &str) -> Option<String> {
     if !is_gh_available() {
         return None;
     }
-    let out = Command::new("gh")
+    // Strip `GITHUB_TOKEN` / `GH_TOKEN` from the child env so `gh` reads from its
+    // own credential store (keyring / hosts.yml) for `host` instead of just
+    // echoing back an ambient env var — which may belong to a *different* host
+    // and would otherwise be injected as the wrong host's credential.
+    let out = Command::new(gh_program())
         .args(["auth", "token", "--hostname", host])
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN")
         .output()
         .ok()?;
     if !out.status.success() {
@@ -222,16 +357,17 @@ pub fn is_known_github_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("github.com") {
         return true;
     }
-    // Treat GHE-style hostnames as candidates if gh knows them, OR if the
-    // hostname starts with "github." / contains "ghe" (best-effort, used only
-    // to *attempt* gh; on failure we fall back to git/curl).
-    if is_gh_available() {
-        for known in gh_known_hosts() {
-            if known.eq_ignore_ascii_case(host) {
-                return true;
-            }
+    // A host the user has actually authenticated against (via `gh auth status`
+    // or gh's hosts.yml) is authoritative — accept it regardless of whether the
+    // hostname looks GitHub-ish. `gh_known_hosts()` reads hosts.yml directly, so
+    // this works even when `gh` can't be launched from this (GUI) process.
+    for known in gh_known_hosts() {
+        if known.eq_ignore_ascii_case(host) {
+            return true;
         }
     }
+    // Best-effort name heuristic for hosts we have no config for; used only to
+    // *attempt* gh/git, with a fall back to curl on failure.
     let lower = host.to_lowercase();
     lower.starts_with("github.") || lower.contains(".github.") || lower.contains("ghe.")
 }
@@ -265,7 +401,7 @@ pub async fn gh_clone(
     }
 
     log::info!("gh_helper: gh {}", args.join(" "));
-    let output = tokio::process::Command::new("gh")
+    let output = tokio::process::Command::new(gh_program())
         .args(&args)
         .output()
         .await
@@ -301,7 +437,7 @@ pub fn gh_fetch_raw(
         repo.owner, repo.repo, path_in_repo, branch
     );
 
-    let mut cmd = Command::new("gh");
+    let mut cmd = Command::new(gh_program());
     cmd.arg("api");
     if !repo.host.eq_ignore_ascii_case("github.com") {
         cmd.args(["--hostname", &repo.host]);

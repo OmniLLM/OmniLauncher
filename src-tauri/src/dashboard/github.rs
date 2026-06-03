@@ -145,7 +145,7 @@ async fn fetch_default_owners(server: &GitHubServer) -> (Vec<String>, Option<Str
 /// including SAML-protected enterprise orgs that the REST `/user/orgs`
 /// endpoint may omit.
 fn fetch_orgs_via_gh_cli(hostname: &str) -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("gh")
+    let output = std::process::Command::new(crate::gh_helper::gh_program())
         .args(["org", "list", "--hostname", hostname])
         .output()
         .map_err(|e| format!("spawn gh failed: {e}"))?;

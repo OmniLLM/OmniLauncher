@@ -49,8 +49,10 @@ impl GitHubServer {
         } else {
             self.hostname.as_str()
         };
-        if let Ok(output) = std::process::Command::new("gh")
+        if let Ok(output) = std::process::Command::new(crate::gh_helper::gh_program())
             .args(["auth", "token", "--hostname", hostname])
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_TOKEN")
             .output()
         {
             if output.status.success() {
@@ -248,7 +250,7 @@ fn write_gh_hosts_cache(servers: &[GitHubServer]) {
 fn detect_gh_hosts_uncached() -> Vec<GitHubServer> {
     let mut hostnames: Vec<String> = Vec::new();
 
-    if let Ok(output) = std::process::Command::new("gh")
+    if let Ok(output) = std::process::Command::new(crate::gh_helper::gh_program())
         .args(["auth", "status"])
         .output()
     {
