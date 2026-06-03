@@ -411,6 +411,55 @@ fn parse_github_tree_dir(
     ))
 }
 
+/// Parse a plain GitHub repo URL (`https://host/owner/repo[.git][/ ]`) into a
+/// repo ref. Rejects `blob/` and `tree/` URLs because those are handled by
+/// the single-file / directory parsers above.
+fn parse_github_repo_root(url: &str) -> Option<crate::gh_helper::GithubRepoRef> {
+    let trimmed = url.trim().trim_end_matches('/');
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return None;
+    }
+
+    let parts: Vec<&str> = trimmed.split('/').collect();
+    if parts.len() != 5 {
+        return None;
+    }
+    if parts[3].is_empty() || parts[4].is_empty() {
+        return None;
+    }
+    crate::gh_helper::parse_github_repo(trimmed)
+}
+
+/// Resolve the repository's default branch (`main`, `master`, etc.) using
+/// `git ls-remote --symref <url> HEAD`.
+fn resolve_default_branch(repo: &crate::gh_helper::GithubRepoRef) -> Option<String> {
+    let clone_url = repo.clone_url();
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["ls-remote", "--symref", &clone_url, "HEAD"]);
+    if let Some(token) = crate::gh_helper::gh_token_for_host(&repo.host) {
+        for (k, v) in crate::gh_helper::git_auth_env(&repo.host, &token) {
+            cmd.env(k, v);
+        }
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("ref: refs/heads/") {
+            if let Some((branch, head)) = rest.split_once('\t') {
+                if head == "HEAD" && !branch.is_empty() {
+                    return Some(branch.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Shallow sparse `git clone` of a single directory inside a repo. Returns the
 /// temp clone root on success (the caller owns it and must delete it). Mirrors
 /// `git_fetch_skill`'s per-host token injection so private/GHE repos work.
@@ -659,6 +708,7 @@ impl SkillManager {
     /// against the raw URL for hosts where neither is configured.
     pub fn install_from_url(&mut self, url: &str) -> Result<String, String> {
         let download_url = normalize_skill_url(url);
+        let trimmed_url = url.trim().trim_end_matches('/');
 
         // 0) Directory-of-skills: a `tree` URL may point at a *folder* that
         //    contains several `<name>/SKILL.md` entries (e.g. a repo's
@@ -713,6 +763,81 @@ impl SkillManager {
                     // Nothing installed — fall through to single-skill logic.
                 } else {
                     let _ = std::fs::remove_dir_all(&clone_root);
+                }
+            }
+        }
+
+        // 0b) Plain repo URL: install from repository root/default branch.
+        // This allows inputs like `https://host/org/repo` to work (common for
+        // skill collections) instead of falling through to `curl` on an HTML
+        // page that can't parse as SKILL.md.
+        if let Some(repo) = parse_github_repo_root(url) {
+            if let Some(branch) = resolve_default_branch(&repo) {
+                if let Some(clone_root) = git_sparse_clone_dir(&repo, &branch, "") {
+                    let base = clone_root.clone();
+
+                    // Single-skill repo at root.
+                    if base.join("SKILL.md").is_file() {
+                        let source_url = format!("{}/blob/{}/SKILL.md", trimmed_url, branch);
+                        let result = self.install_skill_from_staged_dir(&base, &source_url);
+                        let _ = std::fs::remove_dir_all(&clone_root);
+                        if result.is_ok() {
+                            return result;
+                        }
+                    }
+
+                    // Collection repo: support both `<repo>/<skill>/SKILL.md`
+                    // and `<repo>/skills/<skill>/SKILL.md` layouts.
+                    let mut installed: Vec<String> = Vec::new();
+                    let mut errors: Vec<String> = Vec::new();
+                    let mut candidates: Vec<(std::path::PathBuf, String)> = Vec::new();
+
+                    if let Ok(entries) = std::fs::read_dir(&base) {
+                        let mut direct: Vec<_> = entries
+                            .flatten()
+                            .filter(|e| e.path().join("SKILL.md").is_file())
+                            .collect();
+                        direct.sort_by_key(|e| e.file_name());
+                        for entry in direct {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            candidates.push((entry.path(), name));
+                        }
+                    }
+                    if candidates.is_empty() {
+                        let skills_dir = base.join("skills");
+                        if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+                            let mut nested: Vec<_> = entries
+                                .flatten()
+                                .filter(|e| e.path().join("SKILL.md").is_file())
+                                .collect();
+                            nested.sort_by_key(|e| e.file_name());
+                            for entry in nested {
+                                let name = entry.file_name().to_string_lossy().to_string();
+                                candidates.push((entry.path(), format!("skills/{name}")));
+                            }
+                        }
+                    }
+
+                    for (path, rel) in candidates {
+                        let sub_url = format!("{}/tree/{}/{}", trimmed_url, branch, rel);
+                        match self.install_skill_from_staged_dir(&path, &sub_url) {
+                            Ok(name) => installed.push(name),
+                            Err(e) => errors.push(e),
+                        }
+                    }
+
+                    let _ = std::fs::remove_dir_all(&clone_root);
+                    if !installed.is_empty() {
+                        let mut msg = format!(
+                            "Installed {} skill(s): {}",
+                            installed.len(),
+                            installed.join(", ")
+                        );
+                        if !errors.is_empty() {
+                            msg.push_str(&format!(" ({} failed)", errors.len()));
+                        }
+                        return Ok(msg);
+                    }
                 }
             }
         }
@@ -1075,6 +1200,21 @@ When the user asks to summarize a URL, do the following.
             "https://github.com/anthropics/skills/tree/main/skills/foo/SKILL.md"
         )
         .is_none());
+    }
+
+    #[test]
+    fn test_parse_github_repo_root_accepts_plain_repo() {
+        let url = "https://ghosthub.example.com/jzhu/omnilauncher-skills-int";
+        let repo = parse_github_repo_root(url).expect("should parse repo root");
+        assert_eq!(repo.host, "ghosthub.example.com");
+        assert_eq!(repo.owner, "jzhu");
+        assert_eq!(repo.repo, "omnilauncher-skills-int");
+    }
+
+    #[test]
+    fn test_parse_github_repo_root_rejects_tree_and_blob() {
+        assert!(parse_github_repo_root("https://github.com/o/r/tree/main/skills").is_none());
+        assert!(parse_github_repo_root("https://github.com/o/r/blob/main/SKILL.md").is_none());
     }
 
     #[test]
