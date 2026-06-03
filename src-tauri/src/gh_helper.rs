@@ -462,6 +462,89 @@ pub fn gh_fetch_raw(
     String::from_utf8(output.stdout).map_err(|e| format!("UTF-8 decode error: {e}"))
 }
 
+/// Resolve a repo's default branch via `gh api repos/<owner>/<repo>`.
+///
+/// Synchronous counterpart to the `git ls-remote --symref` probe. Used as a
+/// fallback when plain `git` can't authenticate to a private / GHE repo from a
+/// GUI process: `gh` carries its own per-host credentials (keyring or
+/// hosts.yml) and reliably reaches hosts the inherited git credential helper
+/// cannot. Returns `None` when gh is missing, not authed for the host, or the
+/// response has no `default_branch`.
+pub fn gh_default_branch(repo: &GithubRepoRef) -> Option<String> {
+    if !is_gh_available() {
+        return None;
+    }
+    let endpoint = format!("repos/{}/{}", repo.owner, repo.repo);
+    let mut cmd = Command::new(gh_program());
+    cmd.arg("api");
+    if !repo.host.eq_ignore_ascii_case("github.com") {
+        cmd.args(["--hostname", &repo.host]);
+    }
+    cmd.args(["--jq", ".default_branch", &endpoint])
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN");
+
+    log::info!("gh_helper: gh api {} --jq .default_branch (host={})", endpoint, repo.host);
+
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        log::warn!(
+            "gh_helper: gh api default_branch failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return None;
+    }
+    let branch = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if branch.is_empty() || branch == "null" {
+        None
+    } else {
+        Some(branch)
+    }
+}
+
+/// Synchronous `gh repo clone <https-url> <dest> -- <extra_git_args>`.
+///
+/// Fallback for when plain `git clone` can't authenticate to a private / GHE
+/// repo from a GUI process. `gh` injects the correct per-host credential itself,
+/// so this succeeds for hosts the inherited git credential helper can't reach.
+/// Returns Ok on success, Err with stderr otherwise.
+pub fn gh_clone_sync(
+    repo: &GithubRepoRef,
+    dest: &Path,
+    extra_git_args: &[&str],
+) -> Result<(), String> {
+    if !is_gh_available() {
+        return Err("gh CLI not available".to_string());
+    }
+    let dest_str = dest.to_string_lossy().into_owned();
+    let url = format!("https://{}/{}/{}", repo.host, repo.owner, repo.repo);
+
+    let mut args: Vec<String> = vec!["repo".into(), "clone".into(), url, dest_str];
+    if !extra_git_args.is_empty() {
+        args.push("--".into());
+        for a in extra_git_args {
+            args.push((*a).to_string());
+        }
+    }
+
+    log::info!("gh_helper: gh {}", args.join(" "));
+    let output = Command::new(gh_program())
+        .args(&args)
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN")
+        .output()
+        .map_err(|e| format!("Failed to spawn gh: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("gh repo clone failed (exit {:?})", output.status.code())
+        } else {
+            format!("gh repo clone failed: {stderr}")
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -431,7 +431,9 @@ fn parse_github_repo_root(url: &str) -> Option<crate::gh_helper::GithubRepoRef> 
 }
 
 /// Resolve the repository's default branch (`main`, `master`, etc.) using
-/// `git ls-remote --symref <url> HEAD`.
+/// `git ls-remote --symref <url> HEAD`. Falls back to `gh api` when plain git
+/// can't authenticate to the host (common for private / GHE repos from a GUI
+/// process whose inherited git credential helper can't reach the host).
 fn resolve_default_branch(repo: &crate::gh_helper::GithubRepoRef) -> Option<String> {
     let clone_url = repo.clone_url();
     let mut cmd = std::process::Command::new("git");
@@ -441,23 +443,37 @@ fn resolve_default_branch(repo: &crate::gh_helper::GithubRepoRef) -> Option<Stri
             cmd.env(k, v);
         }
     }
-    let out = cmd.output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("ref: refs/heads/") {
-            if let Some((branch, head)) = rest.split_once('\t') {
-                if head == "HEAD" && !branch.is_empty() {
-                    return Some(branch.to_string());
+    log::info!("resolve_default_branch: git ls-remote --symref {} HEAD", clone_url);
+    let git_branch = cmd.output().ok().and_then(|out| {
+        if !out.status.success() {
+            log::warn!(
+                "resolve_default_branch: git ls-remote failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("ref: refs/heads/") {
+                if let Some((branch, head)) = rest.split_once('\t') {
+                    if head == "HEAD" && !branch.is_empty() {
+                        return Some(branch.to_string());
+                    }
                 }
             }
         }
+        None
+    });
+    if let Some(branch) = git_branch {
+        return Some(branch);
     }
-    None
+
+    // git couldn't resolve it (often an auth failure on private/GHE hosts that
+    // git's credential helper can't reach from a GUI process). gh carries its
+    // own per-host credentials, so try it before giving up.
+    log::info!("resolve_default_branch: git unusable, trying gh api default_branch");
+    crate::gh_helper::gh_default_branch(repo)
 }
 
 /// Shallow sparse `git clone` of a single directory inside a repo. Returns the
@@ -503,6 +519,10 @@ fn git_sparse_clone_dir(
             clone_cmd.env(k, v);
         }
     }
+    log::info!(
+        "git_sparse_clone_dir: git clone --depth=1 --filter=blob:none --branch {} {} {}",
+        branch, clone_url, stage_str
+    );
     let clone = clone_cmd.output().ok()?;
     if !clone.status.success() {
         log::warn!(
@@ -510,7 +530,20 @@ fn git_sparse_clone_dir(
             String::from_utf8_lossy(&clone.stderr).trim()
         );
         let _ = std::fs::remove_dir_all(&stage);
-        return None;
+
+        // git couldn't clone (commonly an auth failure on private/GHE hosts the
+        // inherited git credential helper can't reach from a GUI process). gh
+        // carries its own per-host credentials — fall back to a full
+        // `gh repo clone` of the branch and skip sparse-checkout.
+        log::info!("git_sparse_clone_dir: git unusable, trying gh repo clone");
+        match crate::gh_helper::gh_clone_sync(repo, &stage, &["--branch", branch, "--depth=1"]) {
+            Ok(()) => return Some(stage),
+            Err(e) => {
+                log::warn!("git_sparse_clone_dir: gh repo clone also failed: {e}");
+                let _ = std::fs::remove_dir_all(&stage);
+                return None;
+            }
+        }
     }
 
     let run_git = |args: &[&str]| -> bool {
