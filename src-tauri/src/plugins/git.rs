@@ -1,4 +1,4 @@
-use crate::plugins::{Plugin, Query, QueryResult};
+use crate::plugins::{truncate_on_char_boundary, Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::process::Command;
 
@@ -87,7 +87,7 @@ impl Plugin for GitPlugin {
                     result = format!("{}\n{}", result, stderr);
                 }
                 if result.len() > 6000 {
-                    format!("{}\n... (truncated)", &result[..6000])
+                    format!("{}\n... (truncated)", truncate_on_char_boundary(&result, 6000))
                 } else if result.is_empty() {
                     format!("git {} completed (no output)", subcommand)
                 } else {

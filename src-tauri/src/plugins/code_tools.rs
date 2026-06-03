@@ -1,5 +1,5 @@
 use crate::guardrails::{GuardrailAction, Guardrails};
-use crate::plugins::{Plugin, Query, QueryResult};
+use crate::plugins::{truncate_on_char_boundary, Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::process::Command;
 
@@ -189,7 +189,7 @@ impl Plugin for CodeExecPlugin {
 
         let _ = std::fs::remove_file(&temp_file);
         if result.len() > 4000 {
-            format!("{}\n... (truncated)", &result[..4000])
+            format!("{}\n... (truncated)", truncate_on_char_boundary(&result, 4000))
         } else {
             result
         }

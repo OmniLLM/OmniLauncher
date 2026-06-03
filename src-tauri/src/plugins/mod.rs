@@ -84,6 +84,37 @@ fn keyword_matches(raw: &str, keyword: &str) -> bool {
     }
 }
 
+pub(crate) fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+
+    let mut idx = max_bytes;
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    &s[..idx]
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_on_char_boundary;
+
+    #[test]
+    fn ascii_truncates_exactly() {
+        let s = "x".repeat(100);
+        assert_eq!(truncate_on_char_boundary(&s, 60).len(), 60);
+    }
+
+    #[test]
+    fn multibyte_truncates_to_previous_boundary() {
+        let s = format!("{}{}", "x".repeat(5998), "\u{fffd}");
+        let out = truncate_on_char_boundary(&s, 6000);
+        assert_eq!(out.len(), 5998);
+        assert!(out.is_char_boundary(out.len()));
+    }
+}
+
 /// Extract the OpenAI-style `function.name` from a plugin's tool schema, if any.
 fn tool_schema_function_name(p: &dyn Plugin) -> Option<String> {
     p.tool_schema()

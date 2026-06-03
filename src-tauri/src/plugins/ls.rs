@@ -1,4 +1,4 @@
-use crate::plugins::{Plugin, Query, QueryResult};
+use crate::plugins::{truncate_on_char_boundary, Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::process::Command;
 
@@ -75,7 +75,7 @@ impl Plugin for LsPlugin {
                 Ok(o) => {
                     let text = String::from_utf8_lossy(&o.stdout);
                     if text.len() > 6000 {
-                        format!("{}\n... (truncated)", &text[..6000])
+                        format!("{}\n... (truncated)", truncate_on_char_boundary(&text, 6000))
                     } else {
                         text.to_string()
                     }
