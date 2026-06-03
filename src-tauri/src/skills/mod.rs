@@ -559,9 +559,13 @@ fn git_sparse_clone_dir(
         cmd.output().map(|o| o.status.success()).unwrap_or(false)
     };
 
-    let sparse_ok = run_git(&["sparse-checkout", "init", "--cone"])
-        && (dir_in_repo.is_empty() || run_git(&["sparse-checkout", "set", dir_in_repo]))
-        && run_git(&["checkout"]);
+    let sparse_ok = if dir_in_repo.is_empty() {
+        run_git(&["checkout"])
+    } else {
+        run_git(&["sparse-checkout", "init", "--cone"])
+            && run_git(&["sparse-checkout", "set", dir_in_repo])
+            && run_git(&["checkout"])
+    };
     if !sparse_ok {
         log::warn!("git_sparse_clone_dir: git sparse-checkout failed");
         let _ = std::fs::remove_dir_all(&stage);
