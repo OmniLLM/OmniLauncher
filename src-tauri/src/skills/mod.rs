@@ -584,6 +584,58 @@ fn git_sparse_clone_dir(
     Some(stage)
 }
 
+// ─── Marketplace (.claude-plugin) support ────────────────────────────────────
+//
+// A "marketplace" is a Claude Code plugin bundle: a repo (or subtree) that
+// contains a top-level `.claude-plugin/marketplace.json` listing one or more
+// plugins. Each plugin's `source` is a relative path to a directory inside the
+// repo, and that directory is itself a Claude plugin whose skills live under
+// `skills/<name>/SKILL.md`. When the user installs such a URL we walk every
+// plugin and install every skill we find, so a single paste pulls down the
+// whole bundle.
+
+#[derive(Debug, Deserialize)]
+struct MarketplacePlugin {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    source: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MarketplaceManifest {
+    #[serde(default)]
+    plugins: Vec<MarketplacePlugin>,
+}
+
+/// Read and parse `.claude-plugin/marketplace.json` under `base` if present.
+fn read_marketplace_manifest(base: &Path) -> Option<MarketplaceManifest> {
+    let manifest_path = base.join(".claude-plugin").join("marketplace.json");
+    let text = std::fs::read_to_string(&manifest_path).ok()?;
+    serde_json::from_str::<MarketplaceManifest>(&text).ok()
+}
+
+/// Resolve a marketplace plugin's `source` (e.g. `./ldap`) to an absolute path
+/// under `base`. Returns `None` for sources that escape the marketplace root or
+/// reference a non-existent directory — we don't want a malformed manifest to
+/// reach into arbitrary parts of the temp clone.
+fn resolve_plugin_source(base: &Path, source: &str) -> Option<PathBuf> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return Some(base.to_path_buf());
+    }
+    if trimmed.starts_with('/') || trimmed.starts_with('\\') || trimmed.contains("..") {
+        return None;
+    }
+    let rel = trimmed.trim_start_matches("./").trim_start_matches(".\\");
+    let candidate = base.join(rel);
+    if candidate.is_dir() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
 // ─── SkillManager ─────────────────────────────────────────────────────────────
 
 impl SkillManager {
@@ -713,6 +765,98 @@ impl SkillManager {
             .collect()
     }
 
+    /// Install every skill listed by a `.claude-plugin/marketplace.json` at
+    /// `base`. For each plugin in the manifest we resolve its `source` dir and
+    /// install every `<name>/SKILL.md` found under that plugin's `skills/`
+    /// folder (the canonical Claude Code plugin layout), or directly under the
+    /// plugin folder when no `skills/` subdir exists.
+    fn install_marketplace_from_dir(
+        &mut self,
+        base: &Path,
+        source_url_base: &str,
+        branch: Option<&str>,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        let manifest = read_marketplace_manifest(base)?;
+        let mut installed: Vec<String> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+
+        for plugin in &manifest.plugins {
+            let plugin_dir = match resolve_plugin_source(base, &plugin.source) {
+                Some(p) => p,
+                None => {
+                    errors.push(format!(
+                        "marketplace plugin '{}': invalid source '{}'",
+                        plugin.name, plugin.source
+                    ));
+                    continue;
+                }
+            };
+
+            let mut skill_dirs: Vec<PathBuf> = Vec::new();
+            let skills_subdir = plugin_dir.join("skills");
+            if skills_subdir.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&skills_subdir) {
+                    let mut subs: Vec<_> = entries
+                        .flatten()
+                        .filter(|e| e.path().join("SKILL.md").is_file())
+                        .collect();
+                    subs.sort_by_key(|e| e.file_name());
+                    for e in subs {
+                        skill_dirs.push(e.path());
+                    }
+                }
+            }
+            if skill_dirs.is_empty() {
+                if let Ok(entries) = std::fs::read_dir(&plugin_dir) {
+                    let mut subs: Vec<_> = entries
+                        .flatten()
+                        .filter(|e| e.path().join("SKILL.md").is_file())
+                        .collect();
+                    subs.sort_by_key(|e| e.file_name());
+                    for e in subs {
+                        skill_dirs.push(e.path());
+                    }
+                }
+            }
+            if skill_dirs.is_empty() && plugin_dir.join("SKILL.md").is_file() {
+                skill_dirs.push(plugin_dir.clone());
+            }
+
+            if skill_dirs.is_empty() {
+                errors.push(format!(
+                    "marketplace plugin '{}': no SKILL.md found under '{}'",
+                    plugin.name, plugin.source
+                ));
+                continue;
+            }
+
+            for sd in skill_dirs {
+                let rel = sd.strip_prefix(base).unwrap_or(&sd);
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let sub_url = match branch {
+                    Some(b)
+                        if !source_url_base.contains("/tree/")
+                            && !source_url_base.contains("/blob/") =>
+                    {
+                        format!(
+                            "{}/tree/{}/{}",
+                            source_url_base.trim_end_matches('/'),
+                            b,
+                            rel_str
+                        )
+                    }
+                    _ => format!("{}/{}", source_url_base.trim_end_matches('/'), rel_str),
+                };
+                match self.install_skill_from_staged_dir(&sd, &sub_url) {
+                    Ok(name) => installed.push(name),
+                    Err(e) => errors.push(e),
+                }
+            }
+        }
+
+        Some((installed, errors))
+    }
+
     /// Install one skill whose files are already staged on disk at
     /// `staged_skill_dir` (must contain a `SKILL.md`). Copies the whole folder
     /// into the user skills dir, records `source_url` in `.source` for updates,
@@ -766,12 +910,42 @@ impl SkillManager {
         //    skill (has its own SKILL.md) or nothing is found, fall through to
         //    the single-skill logic below.
         if let Some((repo, branch, dir_in_repo)) = parse_github_tree_dir(url) {
-            if let Some(clone_root) = git_sparse_clone_dir(&repo, &branch, &dir_in_repo) {
-                let base = if dir_in_repo.is_empty() {
+            // A `tree/<branch>/.claude-plugin` URL is a marketplace: the
+            // sibling plugin dirs (`./ldap`, `./openstack`, …) live OUTSIDE
+            // `.claude-plugin/`, so a sparse clone of just that subdir would
+            // miss them. Redirect to a whole-repo clone.
+            let dir_norm = dir_in_repo.trim_end_matches('/');
+            let is_marketplace_dir = dir_norm.ends_with(".claude-plugin");
+            let clone_dir = if is_marketplace_dir { "" } else { &dir_in_repo };
+            if let Some(clone_root) = git_sparse_clone_dir(&repo, &branch, clone_dir) {
+                let base = if is_marketplace_dir || dir_in_repo.is_empty() {
                     clone_root.clone()
                 } else {
                     clone_root.join(&dir_in_repo)
                 };
+
+                // Marketplace bundle: `.claude-plugin/marketplace.json` lists
+                // multiple plugins, each with its own `skills/` tree. Install
+                // them all in one shot.
+                if let Some((installed, errors)) =
+                    self.install_marketplace_from_dir(&base, url, Some(&branch))
+                {
+                    let _ = std::fs::remove_dir_all(&clone_root);
+                    if !installed.is_empty() {
+                        let mut msg = format!(
+                            "Installed {} skill(s) from marketplace: {}",
+                            installed.len(),
+                            installed.join(", ")
+                        );
+                        if !errors.is_empty() {
+                            msg.push_str(&format!(" ({} failed)", errors.len()));
+                        }
+                        return Ok(msg);
+                    }
+                    if !errors.is_empty() {
+                        return Err(errors.join("; "));
+                    }
+                }
 
                 // Only treat as a collection when the folder itself is NOT a
                 // skill but contains immediate subfolders that are.
@@ -824,6 +998,25 @@ impl SkillManager {
             if let Some(branch) = resolve_default_branch(&repo) {
                 if let Some(clone_root) = git_sparse_clone_dir(&repo, &branch, "") {
                     let base = clone_root.clone();
+
+                    // Marketplace bundle: `.claude-plugin/marketplace.json`
+                    // lists multiple plugins in this repo. Install them all.
+                    if let Some((installed, errors)) =
+                        self.install_marketplace_from_dir(&base, trimmed_url, Some(&branch))
+                    {
+                        if !installed.is_empty() {
+                            let _ = std::fs::remove_dir_all(&clone_root);
+                            let mut msg = format!(
+                                "Installed {} skill(s) from marketplace: {}",
+                                installed.len(),
+                                installed.join(", ")
+                            );
+                            if !errors.is_empty() {
+                                msg.push_str(&format!(" ({} failed)", errors.len()));
+                            }
+                            return Ok(msg);
+                        }
+                    }
 
                     // Single-skill repo at root.
                     if base.join("SKILL.md").is_file() {
@@ -1339,5 +1532,78 @@ When the user asks to summarize a URL, do the following.
         );
         // The folder holds several skills; expect jira among them.
         assert!(mgr.get_by_name("jira").is_some(), "jira skill not loaded");
+    }
+
+    #[test]
+    fn test_read_marketplace_manifest() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let claude_plugin = dir.path().join(".claude-plugin");
+        std::fs::create_dir_all(&claude_plugin).unwrap();
+        let manifest = r#"{
+            "name": "skills",
+            "plugins": [
+                { "name": "ldap", "source": "./ldap" },
+                { "name": "openstack", "source": "./openstack" }
+            ]
+        }"#;
+        std::fs::write(claude_plugin.join("marketplace.json"), manifest).unwrap();
+
+        let m = read_marketplace_manifest(dir.path()).expect("manifest parses");
+        assert_eq!(m.plugins.len(), 2);
+        assert_eq!(m.plugins[0].name, "ldap");
+        assert_eq!(m.plugins[0].source, "./ldap");
+    }
+
+    #[test]
+    fn test_resolve_plugin_source_rejects_traversal() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        std::fs::create_dir_all(dir.path().join("ldap")).unwrap();
+        assert!(resolve_plugin_source(dir.path(), "./ldap").is_some());
+        assert!(resolve_plugin_source(dir.path(), "ldap").is_some());
+        assert!(resolve_plugin_source(dir.path(), "../etc").is_none());
+        assert!(resolve_plugin_source(dir.path(), "/etc").is_none());
+        assert!(resolve_plugin_source(dir.path(), "missing").is_none());
+    }
+
+    /// Live install of a `.claude-plugin` marketplace from the internal GitHub
+    /// Enterprise host. Requires network + `gh auth login`. Run with:
+    ///   cargo test -p omnilauncher install_marketplace_from_enterprise -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn install_marketplace_from_enterprise() {
+        // Redirect installs to an isolated tmp dir so we don't pollute the
+        // real user data dir, and can assert on what actually landed on disk.
+        let install_root = tempfile::tempdir().expect("install root");
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", install_root.path());
+
+        let url = "https://ghosthub.example.com/jzhu/skills/tree/master/.claude-plugin";
+        let mut mgr = SkillManager::new();
+        let result = mgr.install_from_url(url);
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+
+        let result = result.expect("install_from_url failed");
+        eprintln!("install message: {result}");
+        assert!(
+            result.to_lowercase().contains("marketplace"),
+            "unexpected message: {result}"
+        );
+
+        for expected in &["ldap", "openstack", "inventory"] {
+            assert!(
+                mgr.get_by_name(expected).is_some(),
+                "{} skill not loaded; loaded={:?}",
+                expected,
+                mgr.list_meta()
+                    .iter()
+                    .map(|m| m.name.clone())
+                    .collect::<Vec<_>>()
+            );
+            let on_disk = install_root
+                .path()
+                .join("skills")
+                .join(expected)
+                .join("SKILL.md");
+            assert!(on_disk.is_file(), "SKILL.md not written to {on_disk:?}");
+        }
     }
 }

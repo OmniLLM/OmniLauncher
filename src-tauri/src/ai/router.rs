@@ -380,9 +380,11 @@ impl Router {
             Some(Message::user(&format!(
                     "The following content comes from skill files the user has installed. \
                      Treat each skill's documented procedure as AUTHORITATIVE guidance for \
-                     this request: when a skill describes scripts, commands, or tools to run \
-                     (e.g. `python3 <script> <args>`), you SHOULD run them via shell_exec / \
-                     code_execute to fulfil the request. \
+                     this request: when a skill describes scripts, commands, or tools to run, you SHOULD run them. \
+                     If a skill documents a `run.py` entrypoint that reads stdin JSON, prefer the `execute_skill` tool \
+                     instead of shell_exec/code_execute; pass structured JSON as tool arguments rather than writing \
+                     shell-escaped JSON strings. Only use shell_exec/code_execute when the skill has no structured \
+                     runner available. \
                      A skill's files (scripts, references) live under the absolute directory in \
                      its `dir=\"...\"` attribute. When the skill cites a path like \
                      `skills/<name>/scripts/foo.py` or `references/BAR.md`, strip any leading \
@@ -541,8 +543,10 @@ impl Router {
                                          <<<END SKILL>>>\n\nFollow this skill's procedure. Its \
                                          files live under `{dir}`; when it cites a path like \
                                          `skills/{name}/...`, strip the `skills/{name}/` prefix \
-                                         and resolve the rest against `{dir}`. Run any documented \
-                                         scripts via shell_exec / code_execute."
+                                         and resolve the rest against `{dir}`. If the skill documents a `run.py` \
+                                         entrypoint that reads stdin JSON, call `execute_skill` with structured \
+                                         arguments instead of constructing a shell command. Use shell_exec / \
+                                         code_execute only for skills that require an actual shell command."
                                     ),
                                     None => {
                                         let available = skill_snapshot
@@ -1494,6 +1498,7 @@ fn build_system_prompt(
           Example: use `ip_info` for IP lookups, NOT `http_request`.\n\
         - For each task, mentally scan the full tool list and pick the most targeted one.\n\
         - Chain tools when needed: e.g. use `web_search` to find info, then `web_fetch` to read it.\n\
+        - If an installed skill has a `run.py` entrypoint and expects stdin JSON, use `execute_skill` rather than `shell_exec`; pass JSON as structured tool arguments, never as a shell-escaped string.\n\
         - Fall back to `shell_exec` or `code_execute` only when no dedicated tool fits.\n\
         \n\
         OUTPUT FORMATTING — MANDATORY, applies to EVERY response:\n\

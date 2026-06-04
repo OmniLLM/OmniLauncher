@@ -57,6 +57,7 @@ pub fn create_plugin_manager_builtin_only() -> PluginManager {
     pm.register(Box::new(plugins::network::NetworkPlugin));
     pm.register(Box::new(plugins::process_manager::ProcessManagerPlugin));
     pm.register(Box::new(plugins::shell_plugin::ShellPlugin));
+    pm.register(Box::new(plugins::skill_runner::SkillRunnerPlugin));
     pm.register(Box::new(plugins::snippets::SnippetsPlugin));
     pm.register(Box::new(plugins::sys_info::SysInfoPlugin));
     pm.register(Box::new(plugins::system_commands::SystemCommandsPlugin));

@@ -72,10 +72,8 @@ install-deps:
 	npm install
 	cd src-tauri && cargo fetch
 
-clean:
-	if (Test-Path dist) { Remove-Item -Recurse -Force dist }
-	if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
-	if (Test-Path src-tauri/target) { Remove-Item -Recurse -Force src-tauri/target }
+clean: stop-running
+	@pwsh -NoProfile -Command "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue dist, node_modules, src-tauri/target; exit 0"
 
 lint:
 	cd src-tauri && cargo clippy -- -D warnings
