@@ -151,10 +151,10 @@ impl Router {
     /// web search, clipboard) completely free of AI latency. Users who want
     /// AI assistance opt in explicitly.
     pub fn decide(input: &str) -> RouteDecision {
-        let trimmed = input.trim();
-
-        // Explicit AI prefix triggers
-        if trimmed.starts_with('?') || trimmed.to_lowercase().starts_with("ai ") {
+        // Authority for AI-routing prefixes lives in `launcher_config::AI_PREFIXES`
+        // so the router, the `get_launcher_config` command, and the frontend all
+        // agree on the same rule.
+        if crate::launcher_config::has_ai_prefix(input) {
             return RouteDecision::Ai;
         }
 

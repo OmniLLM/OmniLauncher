@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, RefObject } from "react";
-import { isAiPrefix } from "../utils/aiPrefix";
+import { isAiPrefix } from "../launcherConfig";
 
 interface Props {
   value: string;

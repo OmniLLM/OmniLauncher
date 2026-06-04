@@ -34,6 +34,7 @@ impl Plugin for KeywordOnlyPlugin {
             score: 100,
             action_type: "none".to_string(),
             action_data: String::new(),
+            source: None,
         }]
     }
 }

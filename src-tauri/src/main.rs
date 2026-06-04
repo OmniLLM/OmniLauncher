@@ -592,6 +592,10 @@ pub fn run() {
             execute_result,
             slash_preview,
             get_settings,
+            get_launcher_config,
+            list_favorites,
+            add_favorite,
+            remove_favorite,
             save_settings_cmd,
             clear_conversation,
             list_ai_sessions,
@@ -614,6 +618,9 @@ pub fn run() {
             install_plugin,
             update_plugin,
             update_plugin_collection,
+            list_plugin_collections,
+            update_plugin_collection_all,
+            remove_plugin_collection,
             list_plugins,
             remove_plugin,
             vision_analyze,
@@ -1446,6 +1453,35 @@ async fn get_settings(state: tauri::State<'_, AppState>) -> Result<AppSettings, 
     Ok(settings.clone())
 }
 
+/// Returns the launcher input rule-set (AI prefixes, slash-command catalog,
+/// navigation aliases) so the frontend can evaluate which UI chrome to show
+/// synchronously without re-implementing the rules. Single source of truth lives
+/// in `omnilauncher_lib::launcher_config`.
+#[tauri::command]
+fn get_launcher_config() -> omnilauncher_lib::launcher_config::LauncherConfig {
+    omnilauncher_lib::launcher_config::LauncherConfig::current()
+}
+
+// ─── Favorites commands ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn list_favorites() -> Vec<QueryResult> {
+    log::trace!("list_favorites invoked");
+    omnilauncher_lib::db::favorites::list_favorites()
+}
+
+#[tauri::command]
+fn add_favorite(result: QueryResult) -> Result<(), String> {
+    log::debug!("add_favorite invoked id={}", result.id);
+    omnilauncher_lib::db::favorites::add_favorite(&result)
+}
+
+#[tauri::command]
+fn remove_favorite(id: String) -> Result<(), String> {
+    log::debug!("remove_favorite invoked id={id}");
+    omnilauncher_lib::db::favorites::remove_favorite(&id)
+}
+
 #[tauri::command]
 async fn save_settings_cmd(
     settings: AppSettings,
@@ -1644,6 +1680,51 @@ async fn update_plugin_collection(
         plugin_dirs,
     )
     .await?;
+    reload_external_plugins(&state).await;
+    Ok(result)
+}
+
+/// List installed plugins grouped into collections, ready for the UI to render.
+/// Grouping (git-remote normalization, collection keying) is done in the
+/// backend so the frontend no longer reshapes raw plugin JSON.
+#[tauri::command]
+fn list_plugin_collections(
+) -> Vec<omnilauncher_lib::plugins::plugin_manager_cmd::PluginCollectionInfo> {
+    log::trace!("list_plugin_collections invoked");
+    omnilauncher_lib::plugins::plugin_manager_cmd::list_plugin_collections()
+}
+
+/// Update every git-backed repo in a collection (or a source-based collection),
+/// returning a single summary result. Replaces the per-repo update loop that
+/// used to live in the frontend.
+#[tauri::command]
+async fn update_plugin_collection_all(
+    collection_source: Option<String>,
+    repo_dirs: Vec<String>,
+    git_repo_dirs: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<omnilauncher_lib::plugins::plugin_manager_cmd::CollectionOpResult, String> {
+    log::debug!("update_plugin_collection_all invoked ({} git repos)", git_repo_dirs.len());
+    let result = omnilauncher_lib::plugins::plugin_manager_cmd::update_plugin_collection_all(
+        collection_source,
+        repo_dirs,
+        git_repo_dirs,
+    )
+    .await?;
+    reload_external_plugins(&state).await;
+    Ok(result)
+}
+
+/// Remove every repo in a collection, returning a single summary result.
+/// Replaces the per-repo remove loop that used to live in the frontend.
+#[tauri::command]
+async fn remove_plugin_collection(
+    repo_dirs: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<omnilauncher_lib::plugins::plugin_manager_cmd::CollectionOpResult, String> {
+    log::debug!("remove_plugin_collection invoked ({} repos)", repo_dirs.len());
+    let result =
+        omnilauncher_lib::plugins::plugin_manager_cmd::remove_plugin_collection(repo_dirs).await?;
     reload_external_plugins(&state).await;
     Ok(result)
 }

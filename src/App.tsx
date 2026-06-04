@@ -1,6 +1,16 @@
 import { useState, useEffect, useCallback, useRef, useMemo, memo, lazy, Suspense } from "react";
 import { renderMarkdown } from "./utils/markdown";
-import { isAiPrefix } from "./utils/aiPrefix";
+import {
+  loadLauncherConfig,
+  isAiPrefix,
+  isSlashPrefix,
+  isPluginManagerQuery,
+  isConversationResetCommand,
+  isHelpQuery,
+  isHelpHintQuery,
+  slashSuggestions,
+  helpResults,
+} from "./launcherConfig";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -79,17 +89,9 @@ function parseThemeMode(theme: string): ThemeMode {
 
 /**
  * Detect if the user typed an explicit AI prefix.
- * Mirrors Router::decide() in router.rs.
- *
- * Prefixes: `?`  or  `ai ` (case-insensitive)
- *
- * Everything else → local plugins (instant, no AI latency).
+ * Routing rules now come from the backend via `launcherConfig` — see that
+ * module for `isAiPrefix`, `isSlashPrefix`, `slashSuggestions`, etc.
  */
-/** Returns true when the query should trigger the Plugin Manager shortcut. */
-function isPluginManagerQuery(input: string): boolean {
-  const t = input.trim().toLowerCase();
-  return t === "plugins" || t === "pm" || t.startsWith("pm ");
-}
 
 /** Synthetic result that opens the Plugin Manager panel. */
 function pluginManagerResult(): QueryResult {
@@ -104,108 +106,13 @@ function pluginManagerResult(): QueryResult {
   };
 }
 
-/**
- * Returns true when the input looks like an in-progress slash command prefix
- * (starts with "/" but has no space yet — the user is still typing the name).
- */
-function isSlashPrefix(input: string): boolean {
-  return input.startsWith("/") && !input.includes(" ");
-}
-
-/** Convert matching SlashCommands to QueryResults for display in ResultList. */
-function slashSuggestions(query: string): QueryResult[] {
-  const lower = query.toLowerCase();
-  return SLASH_COMMANDS.filter(
-    (sc) =>
-      sc.cmd.toLowerCase().startsWith(lower) ||
-      (sc.shortcut && sc.shortcut.toLowerCase().startsWith(lower)),
-  ).map((sc) => ({
-    id: `slash-${sc.cmd}`,
-    title: sc.shortcut ? `${sc.cmd}  ${sc.shortcut}` : sc.cmd,
-    subtitle: `${sc.description} · ${sc.usage}`,
-    icon: "⌘",
-    score: 1,
-    action_type: "slash_complete",
-    action_data: sc.cmd + " ",
-  }));
-}
-
-function isConversationResetCommand(input: string): boolean {
-  const t = input.trim().toLowerCase();
-  return t === "/new" || t === "/clear";
-}
-
-function isHelpQuery(input: string): boolean {
-  const t = input.trim().toLowerCase();
-  return t === "/help" || t === "/?" || t === "help";
-}
-
-function isHelpHintQuery(input: string): boolean {
-  return input.trim().toLowerCase() === "help";
-}
-
 // Theme colors are defined in styles.css via [data-theme="dark"] / [data-theme="light"]
 // CSS variables. Components read them with var(--bg), var(--accent), etc.
-
-// ─── Slash commands ───────────────────────────────────────────────────────────
-
-interface SlashCommand {
-  cmd: string;
-  shortcut?: string;
-  description: string;
-  usage: string;
-  examples: string[];
-}
 
 /// Debounce window between keystroke and backend `query_all`. 150ms balances
 /// "feels instant" against "don't fire a query mid-burst" — every shaved ms
 /// here shows up directly as launcher latency.
 const SEARCH_DEBOUNCE_MS = 150;
-
-const SLASH_COMMANDS: SlashCommand[] = [
-  {
-    cmd: "/plugins",
-    shortcut: "/pm",
-    description: "Open external plugin manager",
-    usage: "/plugins",
-    examples: ["/plugins", "/pm"],
-  },
-  {
-    cmd: "/skills",
-    description: "Open skill manager (install, view, delete skills)",
-    usage: "/skills",
-    examples: ["/skills"],
-  },
-  {
-    cmd: "/new",
-    description: "Start a new AI conversation",
-    usage: "/new",
-    examples: ["/new"],
-  },
-  {
-    cmd: "/clear",
-    description: "Clear the current AI conversation",
-    usage: "/clear",
-    examples: ["/clear"],
-  },
-  {
-    cmd: "/help",
-    shortcut: "/?",
-    description: "Show all available commands",
-    usage: "/help",
-    examples: ["/help"],
-  },
-];
-
-const HELP_RESULTS: QueryResult[] = SLASH_COMMANDS.map((command) => ({
-  id: `help-${command.cmd}`,
-  title: command.shortcut ? `${command.cmd}  ${command.shortcut}` : command.cmd,
-  subtitle: `${command.description} · ${command.usage}`,
-  icon: "⌘",
-  score: 1,
-  action_type: "help_command",
-  action_data: `${command.cmd} `,
-}));
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
@@ -250,27 +157,44 @@ export default function App() {
   const [queueDepth, setQueueDepth] = useState(0);
   const [queuedPrompts, setQueuedPrompts] = useState<string[]>([]);
 
-  const [favorites, setFavorites] = useState<string[]>(() => {
-    try {
-      const stored = localStorage.getItem("omni-favorites");
-      return stored ? JSON.parse(stored) : [];
-    } catch { return []; }
-  });
+  // Favorites are persisted in the backend (SQLite). App owns the source of
+  // truth and passes it down to ResultList; the component only renders + calls
+  // the toggle callback.
+  const [favoriteItems, setFavoriteItems] = useState<QueryResult[]>([]);
+  const favorites = useMemo(
+    () => new Set(favoriteItems.map((f) => f.id)),
+    [favoriteItems],
+  );
 
-  // Resolve favorite ids → full QueryResult objects (persisted alongside ids).
-  // Recomputed whenever the favorites id list changes (add / remove).
-  const favoriteItems = useMemo<QueryResult[]>(() => {
-    if (favorites.length === 0) return [];
+  const refreshFavorites = useCallback(async () => {
     try {
-      const stored = localStorage.getItem("omni-favorite-items");
-      const all: QueryResult[] = stored ? JSON.parse(stored) : [];
-      return favorites
-        .map((id) => all.find((r) => r.id === id))
-        .filter(Boolean) as QueryResult[];
-    } catch {
-      return [];
+      const items = await invoke<QueryResult[]>("list_favorites");
+      setFavoriteItems(items || []);
+    } catch (e) {
+      console.error("list_favorites error:", e);
     }
-  }, [favorites]);
+  }, []);
+
+  const handleToggleFavorite = useCallback(
+    async (item: QueryResult) => {
+      const isFav = favorites.has(item.id);
+      // Optimistic update so the star flips instantly.
+      setFavoriteItems((prev) =>
+        isFav ? prev.filter((f) => f.id !== item.id) : [...prev, item],
+      );
+      try {
+        if (isFav) {
+          await invoke("remove_favorite", { id: item.id });
+        } else {
+          await invoke("add_favorite", { result: item });
+        }
+      } catch (e) {
+        console.error("toggle favorite error:", e);
+        refreshFavorites(); // reconcile on failure
+      }
+    },
+    [favorites, refreshFavorites],
+  );
   const [showCheatSheet, setShowCheatSheet] = useState(false);
   const [exportToast, setExportToast] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -312,6 +236,9 @@ export default function App() {
 
   // Load settings on mount
   useEffect(() => {
+    // Cache the launcher rule-set (AI prefixes, slash catalog) so per-keystroke
+    // predicates evaluate synchronously against backend-owned data.
+    loadLauncherConfig();
     invoke<AppSettings>("get_settings")
       .then((s) => {
         setSettings(s);
@@ -320,6 +247,39 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
+
+  // Hydrate favorites from the backend, running a one-time migration of any
+  // favorites that were previously stored in localStorage.
+  useEffect(() => {
+    (async () => {
+      try {
+        if (!localStorage.getItem("omni-favorites-migrated")) {
+          const ids: string[] = JSON.parse(
+            localStorage.getItem("omni-favorites") || "[]",
+          );
+          const items: QueryResult[] = JSON.parse(
+            localStorage.getItem("omni-favorite-items") || "[]",
+          );
+          for (const id of ids) {
+            const item = items.find((r) => r.id === id);
+            if (item) {
+              try {
+                await invoke("add_favorite", { result: item });
+              } catch (e) {
+                console.error("favorite migration error:", e);
+              }
+            }
+          }
+          localStorage.setItem("omni-favorites-migrated", "1");
+          localStorage.removeItem("omni-favorites");
+          localStorage.removeItem("omni-favorite-items");
+        }
+      } catch (e) {
+        console.error("favorite migration failed:", e);
+      }
+      refreshFavorites();
+    })();
+  }, [refreshFavorites]);
 
   // Load AI sessions on mount and rehydrate the active session's transcript.
   useEffect(() => {
@@ -378,7 +338,7 @@ export default function App() {
   const doSearch = useCallback(async (q: string) => {
     setSearchError(null);
     if (isHelpQuery(q)) {
-      setResults(HELP_RESULTS);
+      setResults(helpResults());
       setSearching(false);
       return;
     }
@@ -649,7 +609,7 @@ export default function App() {
       if (isHelpQuery(value)) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         setQuery(value);
-        setResults(HELP_RESULTS);
+        setResults(helpResults());
         return;
       }
 
@@ -767,7 +727,7 @@ export default function App() {
       }
 
       if (isHelpQuery(value)) {
-        setResults(HELP_RESULTS);
+        setResults(helpResults());
         return;
       }
 
@@ -1477,6 +1437,8 @@ export default function App() {
                 query=""
                 onExecute={handleExecute}
                 groupTitle="★ Favorites"
+                favorites={favorites}
+                onToggleFavorite={handleToggleFavorite}
               />
             )}
             {results.length > 0 && (
@@ -1492,7 +1454,7 @@ export default function App() {
                   boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
                 }}
               >
-                <ResultList results={results} query={query} onExecute={handleExecute} />
+                <ResultList results={results} query={query} onExecute={handleExecute} favorites={favorites} onToggleFavorite={handleToggleFavorite} />
               </div>
             )}
             {/* Loading skeleton — only when the user has typed something and
@@ -1593,6 +1555,8 @@ export default function App() {
             results={results}
             query={query}
             onExecute={handleExecute}
+            favorites={favorites}
+            onToggleFavorite={handleToggleFavorite}
           />
         )}
 

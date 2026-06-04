@@ -19,6 +19,10 @@ interface Props {
   onExecute: (r: QueryResult) => void;
   /** Optional group header rendered above the list (e.g. "★ Favorites"). */
   groupTitle?: string;
+  /** Set of favorited result ids (source of truth lives in App / backend). */
+  favorites?: Set<string>;
+  /** Toggle a result's favorite status. App persists it via the backend. */
+  onToggleFavorite?: (r: QueryResult) => void;
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -128,20 +132,17 @@ export default function ResultList({
   query,
   onExecute,
   groupTitle,
+  favorites,
+  onToggleFavorite,
 }: Props) {
   const [selected, setSelected] = useState(0);
   const [hovered, setHovered] = useState(-1);
   const [ctxMenu, setCtxMenu] = useState<
     { x: number; y: number; item: QueryResult } | null
   >(null);
-  const [favorites, setFavorites] = useState<Set<string>>(() => {
-    try {
-      const stored = localStorage.getItem("omni-favorites");
-      return new Set(stored ? JSON.parse(stored) : []);
-    } catch {
-      return new Set();
-    }
-  });
+  // Favorites are owned by App (backed by the SQLite store). Fall back to an
+  // empty set when this list isn't favorites-aware (e.g. slash suggestions).
+  const favoriteIds = favorites ?? new Set<string>();
 
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -150,29 +151,8 @@ export default function ResultList({
 
   const toggleFavorite = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setFavorites((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-        try {
-          const stored = localStorage.getItem("omni-favorite-items");
-          const all: QueryResult[] = stored ? JSON.parse(stored) : [];
-          const item = results.find((r) => r.id === id);
-          if (item && !all.find((r) => r.id === id)) {
-            localStorage.setItem(
-              "omni-favorite-items",
-              JSON.stringify([...all, item]),
-            );
-          }
-        } catch {}
-      }
-      try {
-        localStorage.setItem("omni-favorites", JSON.stringify([...next]));
-      } catch {}
-      return next;
-    });
+    const item = results.find((r) => r.id === id);
+    if (item) onToggleFavorite?.(item);
   };
 
   // Reset selection when result set changes.
@@ -283,7 +263,7 @@ export default function ResultList({
           const r = row.result;
           const isSelected = i === selected;
           const isHovered = i === hovered;
-          const isFav = favorites.has(r.id);
+          const isFav = favoriteIds.has(r.id);
           const kbd = kbdHint(i);
 
           return (
@@ -411,8 +391,8 @@ export default function ResultList({
                 }]
               : []),
             {
-              icon: favorites.has(ctxMenu.item.id) ? "★" : "☆",
-              label: favorites.has(ctxMenu.item.id)
+              icon: favoriteIds.has(ctxMenu.item.id) ? "★" : "☆",
+              label: favoriteIds.has(ctxMenu.item.id)
                 ? "Remove from favorites"
                 : "Add to favorites",
               action: () => {

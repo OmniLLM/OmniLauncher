@@ -1268,6 +1268,251 @@ fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Collection grouping (backend-owned) ───────────────────────────────────────
+//
+// These types and helpers were ported from the React frontend
+// (`src/components/PluginManager.tsx`), which previously re-shaped the raw
+// `list_plugins()` JSON into collections in the browser. The backend now owns
+// this domain logic and hands the UI ready-to-render `PluginCollectionInfo`s.
+
+use serde::Serialize;
+
+/// One plugin within a collection, tagged with the repo it came from.
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupedPluginInfo {
+    #[serde(flatten)]
+    pub manifest: serde_json::Value,
+    pub repo_dir_name: String,
+    pub repo_is_git_repo: bool,
+    pub repo_git_remote: Option<String>,
+}
+
+/// A collection groups one or more plugin repos that share an origin (git
+/// remote, or a multi-plugin repo / parent folder).
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginCollectionInfo {
+    pub key: String,
+    pub name: String,
+    pub has_git_repo: bool,
+    pub collection_source: Option<String>,
+    pub repos: Vec<serde_json::Value>,
+    pub plugins: Vec<GroupedPluginInfo>,
+}
+
+/// Result of a collection-wide update/remove: which repos succeeded, which
+/// failed, and a human-readable summary message for the UI to display.
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectionOpResult {
+    pub updated: Vec<String>,
+    pub failed: Vec<String>,
+    pub message: String,
+}
+
+/// Reduce a git remote URL to its `owner/repo` form. Handles SSH
+/// (`git@host:owner/repo.git`), HTTPS URLs, and bare paths. Mirrors the former
+/// `normalizeGitRemote` in PluginManager.tsx.
+pub fn normalize_git_remote(remote: Option<&str>) -> Option<String> {
+    let remote = remote?.trim();
+    // Strip a case-insensitive ".git" suffix.
+    let trimmed = if remote.to_ascii_lowercase().ends_with(".git") {
+        &remote[..remote.len() - 4]
+    } else {
+        remote
+    };
+
+    let last_two = |segments: &[&str]| -> Option<String> {
+        let segs: Vec<&str> = segments.iter().filter(|s| !s.is_empty()).copied().collect();
+        if segs.len() >= 2 {
+            Some(format!("{}/{}", segs[segs.len() - 2], segs[segs.len() - 1]))
+        } else {
+            None
+        }
+    };
+
+    // SSH form: git@host:owner/repo
+    if let Some(colon_idx) = trimmed.find(':') {
+        if trimmed[..colon_idx].contains('@') {
+            let path = &trimmed[colon_idx + 1..];
+            let segs: Vec<&str> = path.split('/').collect();
+            if let Some(r) = last_two(&segs) {
+                return Some(r);
+            }
+        }
+    }
+
+    // URL form
+    if let Some(scheme_idx) = trimmed.find("://") {
+        let after = &trimmed[scheme_idx + 3..];
+        if let Some(slash) = after.find('/') {
+            let path = &after[slash + 1..];
+            let segs: Vec<&str> = path.split('/').collect();
+            if let Some(r) = last_two(&segs) {
+                return Some(r);
+            }
+        }
+    }
+
+    // Bare path fallback
+    let segs: Vec<&str> = trimmed.split(['/', '\\']).collect();
+    last_two(&segs)
+}
+
+fn json_str(v: &serde_json::Value, key: &str) -> Option<String> {
+    v.get(key).and_then(|x| x.as_str()).map(|s| s.to_string())
+}
+
+fn json_bool(v: &serde_json::Value, key: &str) -> bool {
+    v.get(key).and_then(|x| x.as_bool()).unwrap_or(false)
+}
+
+/// Display name for a collection: normalized git remote, else collection name,
+/// else dir name. Mirrors `collectionDisplayName` in the frontend.
+fn collection_display_name(repo: &serde_json::Value) -> String {
+    normalize_git_remote(json_str(repo, "git_remote").as_deref())
+        .or_else(|| json_str(repo, "collection_name"))
+        .or_else(|| json_str(repo, "dir_name"))
+        .unwrap_or_default()
+}
+
+/// Grouping key for a collection: remote-first, else collection_key, else
+/// collection_name, else dir_name. Mirrors `collectionGroupKey`.
+fn collection_group_key(repo: &serde_json::Value) -> String {
+    if let Some(remote) = normalize_git_remote(json_str(repo, "git_remote").as_deref()) {
+        return format!("remote:{remote}");
+    }
+    json_str(repo, "collection_key")
+        .or_else(|| json_str(repo, "collection_name"))
+        .or_else(|| json_str(repo, "dir_name"))
+        .unwrap_or_default()
+}
+
+/// List installed plugins grouped into collections, ready for the UI to render.
+pub fn list_plugin_collections() -> Vec<PluginCollectionInfo> {
+    let repos = list_plugins();
+    let mut order: Vec<String> = Vec::new();
+    let mut grouped: std::collections::HashMap<String, PluginCollectionInfo> =
+        std::collections::HashMap::new();
+
+    for repo in repos {
+        let key = collection_group_key(&repo);
+        let name = collection_display_name(&repo);
+        let is_git = json_bool(&repo, "is_git_repo");
+        let source = json_str(&repo, "collection_source");
+        let dir_name = json_str(&repo, "dir_name").unwrap_or_default();
+        let git_remote = json_str(&repo, "git_remote");
+
+        let entry = grouped.entry(key.clone()).or_insert_with(|| {
+            order.push(key.clone());
+            PluginCollectionInfo {
+                key: key.clone(),
+                name,
+                has_git_repo: false,
+                collection_source: None,
+                repos: Vec::new(),
+                plugins: Vec::new(),
+            }
+        });
+
+        if entry.collection_source.is_none() {
+            entry.collection_source = source;
+        }
+        entry.has_git_repo = entry.has_git_repo || is_git;
+
+        if let Some(plugins) = repo.get("plugins").and_then(|p| p.as_array()) {
+            for plugin in plugins {
+                entry.plugins.push(GroupedPluginInfo {
+                    manifest: plugin.clone(),
+                    repo_dir_name: dir_name.clone(),
+                    repo_is_git_repo: is_git,
+                    repo_git_remote: git_remote.clone(),
+                });
+            }
+        }
+
+        entry.repos.push(repo);
+    }
+
+    order
+        .into_iter()
+        .filter_map(|k| grouped.remove(&k))
+        .collect()
+}
+
+/// Update every git-backed repo in a collection, or fall back to a
+/// source-based collection update. Absorbs the per-repo orchestration and
+/// partial-failure policy that previously lived in `handleUpdateCollection`.
+pub async fn update_plugin_collection_all(
+    collection_source: Option<String>,
+    repo_dirs: Vec<String>,
+    git_repo_dirs: Vec<String>,
+) -> Result<CollectionOpResult, String> {
+    // No git repos but a collection source → single source-based update.
+    if git_repo_dirs.is_empty() {
+        if let Some(source) = collection_source {
+            let message = update_plugin_collection(source, repo_dirs).await?;
+            return Ok(CollectionOpResult {
+                updated: vec![],
+                failed: vec![],
+                message,
+            });
+        }
+        return Err("This collection has no git repositories to update.".to_string());
+    }
+
+    let mut updated = Vec::new();
+    let mut failed = Vec::new();
+    for dir in git_repo_dirs {
+        match update_plugin(dir.clone()).await {
+            Ok(_) => updated.push(dir),
+            Err(_) => failed.push(dir),
+        }
+    }
+
+    let message = if failed.is_empty() {
+        format!("Updated {} repo(s).", updated.len())
+    } else {
+        format!(
+            "Updated {}, failed {} ({}).",
+            updated.len(),
+            failed.len(),
+            failed.join(", ")
+        )
+    };
+    Ok(CollectionOpResult {
+        updated,
+        failed,
+        message,
+    })
+}
+
+/// Remove every repo in a collection. Absorbs `handleRemoveCollection`.
+pub async fn remove_plugin_collection(repo_dirs: Vec<String>) -> Result<CollectionOpResult, String> {
+    let mut removed = Vec::new();
+    let mut failed = Vec::new();
+    for dir in repo_dirs {
+        match remove_plugin(dir.clone()).await {
+            Ok(_) => removed.push(dir),
+            Err(_) => failed.push(dir),
+        }
+    }
+
+    let message = if failed.is_empty() {
+        format!("Removed {} repo(s).", removed.len())
+    } else {
+        format!(
+            "Removed {}, failed {} ({}).",
+            removed.len(),
+            failed.len(),
+            failed.join(", ")
+        )
+    };
+    Ok(CollectionOpResult {
+        updated: removed,
+        failed,
+        message,
+    })
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1277,6 +1522,38 @@ mod tests {
     use tokio::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+    #[test]
+    fn normalize_git_remote_handles_ssh_https_and_path() {
+        // SSH form
+        assert_eq!(
+            normalize_git_remote(Some("git@github.com:OmniLLM/omnilauncher-plugins.git")),
+            Some("OmniLLM/omnilauncher-plugins".to_string())
+        );
+        // HTTPS form, with and without .git
+        assert_eq!(
+            normalize_git_remote(Some("https://github.com/raycast/extensions.git")),
+            Some("raycast/extensions".to_string())
+        );
+        assert_eq!(
+            normalize_git_remote(Some("https://github.com/raycast/extensions")),
+            Some("raycast/extensions".to_string())
+        );
+        // Enterprise host, deeper path → last two segments win
+        assert_eq!(
+            normalize_git_remote(Some("https://ghosthub.corp.net/team/repo.git")),
+            Some("team/repo".to_string())
+        );
+        // Bare path fallback
+        assert_eq!(
+            normalize_git_remote(Some("OmniLLM/omnilauncher-plugins")),
+            Some("OmniLLM/omnilauncher-plugins".to_string())
+        );
+        // None / unparseable
+        assert_eq!(normalize_git_remote(None), None);
+        assert_eq!(normalize_git_remote(Some("singletoken")), None);
+    }
+
 
     #[test]
     fn parse_github_subdir_url_handles_tree_with_trailing_slash() {

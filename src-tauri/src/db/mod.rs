@@ -10,6 +10,7 @@
 use rusqlite::{Connection, Result};
 
 pub mod conversation;
+pub mod favorites;
 
 /// A single migration: a version number and the SQL to execute.
 pub struct Migration {
@@ -44,6 +45,10 @@ pub fn migrations() -> Vec<Migration> {
         Migration {
             version: 6,
             sql: include_str!("../../migrations/006_conversation_sessions.sql"),
+        },
+        Migration {
+            version: 7,
+            sql: include_str!("../../migrations/007_favorites.sql"),
         },
     ]
 }

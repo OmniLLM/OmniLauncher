@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -10,81 +10,48 @@ interface PluginInfo {
   icon?: string;
   entry: string;
   dir_name: string;
-  is_git_repo?: boolean;
-  git_remote?: string;
-  git_branch?: string;
-  git_clean?: boolean;
-  git_ahead?: number;
-  git_behind?: number;
 }
 
-interface PluginRepo {
-  dir_name: string;
-  collection_name?: string;
-  collection_key?: string;
-  collection_source?: string;
-  plugins: PluginInfo[];
-  is_git_repo?: boolean;
-  git_remote?: string;
-  git_branch?: string;
-  git_clean?: boolean;
-  git_ahead?: number;
-  git_behind?: number;
-}
-
+/** A plugin tagged with the repo it belongs to (from the backend grouping). */
 interface GroupedPlugin extends PluginInfo {
   repo_dir_name: string;
   repo_is_git_repo?: boolean;
   repo_git_remote?: string;
 }
 
+/** Raw repo entry inside a collection (git metadata + dir_name). */
+interface PluginRepo {
+  dir_name: string;
+  collection_name?: string;
+  collection_key?: string;
+  collection_source?: string;
+  is_git_repo?: boolean;
+  git_remote?: string;
+  git_branch?: string;
+  git_clean?: boolean;
+  git_ahead?: number;
+  git_behind?: number;
+}
+
+/**
+ * A collection of plugin repos, as grouped by the backend
+ * (`list_plugin_collections`). Git-remote normalization and collection keying
+ * now live in Rust — the UI just renders this.
+ */
 interface PluginCollection {
   key: string;
   name: string;
+  has_git_repo: boolean;
+  collection_source?: string;
   repos: PluginRepo[];
   plugins: GroupedPlugin[];
-  hasGitRepo: boolean;
-  collectionSource?: string;
 }
 
-function normalizeGitRemote(remote?: string): string | undefined {
-  if (!remote) return undefined;
-
-  const trimmed = remote.trim().replace(/\.git$/i, "");
-  const sshMatch = trimmed.match(/^[^@]+@[^:]+:(.+)$/);
-  if (sshMatch) {
-    const segments = sshMatch[1].split("/").filter(Boolean);
-    if (segments.length >= 2) {
-      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
-    }
-  }
-
-  try {
-    const url = new URL(trimmed);
-    const segments = url.pathname.split("/").filter(Boolean);
-    if (segments.length >= 2) {
-      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
-    }
-  } catch {
-    const segments = trimmed.split(/[\\/]/).filter(Boolean);
-    if (segments.length >= 2) {
-      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
-    }
-  }
-
-  return undefined;
-}
-
-function collectionDisplayName(repo: PluginRepo): string {
-  return normalizeGitRemote(repo.git_remote) || repo.collection_name || repo.dir_name;
-}
-
-function collectionGroupKey(repo: PluginRepo): string {
-  const remoteName = normalizeGitRemote(repo.git_remote);
-  if (remoteName) {
-    return `remote:${remoteName}`;
-  }
-  return repo.collection_key || repo.collection_name || repo.dir_name;
+/** Result of a backend collection-wide update/remove operation. */
+interface CollectionOpResult {
+  updated: string[];
+  failed: string[];
+  message: string;
 }
 
 interface AppSettings {
@@ -114,7 +81,7 @@ interface PluginManagerProps {
 const DEFAULT_DIR = "~/.omnilauncher/plugins (default)";
 
 export default function PluginManager({ onClose }: PluginManagerProps) {
-  const [repos, setRepos] = useState<PluginRepo[]>([]);
+  const [collections, setCollections] = useState<PluginCollection[]>([]);
   const [expandedCollections, setExpandedCollections] = useState<Record<string, boolean>>({});
   const [source, setSource] = useState("");
   const [targetDir, setTargetDir] = useState<string>(""); // "" = default
@@ -127,10 +94,12 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
     message: string;
   }>({ type: "idle", message: "" });
 
+  // Collections are grouped by the backend (`list_plugin_collections`) — the UI
+  // no longer reshapes raw plugin JSON.
   const refresh = useCallback(() => {
-    invoke<PluginRepo[]>("list_plugins")
-      .then((list) => setRepos(list))
-      .catch(() => setRepos([]));
+    invoke<PluginCollection[]>("list_plugin_collections")
+      .then((list) => setCollections(list))
+      .catch(() => setCollections([]));
   }, []);
 
   const refreshRuntimeDeps = useCallback(() => {
@@ -138,42 +107,6 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
       .then((deps) => setRuntimeDeps(deps))
       .catch(() => setRuntimeDeps([]));
   }, []);
-
-  const collections = useMemo<PluginCollection[]>(() => {
-    const grouped = new Map<string, PluginCollection>();
-
-    for (const repo of repos) {
-      const key = collectionGroupKey(repo);
-      const name = collectionDisplayName(repo);
-
-      if (!grouped.has(key)) {
-        grouped.set(key, {
-          key,
-          name,
-          repos: [],
-          plugins: [],
-          hasGitRepo: false,
-          collectionSource: repo.collection_source,
-        });
-      }
-
-      const collection = grouped.get(key)!;
-      collection.collectionSource = collection.collectionSource || repo.collection_source;
-      collection.repos.push(repo);
-      collection.hasGitRepo = collection.hasGitRepo || !!repo.is_git_repo;
-
-      for (const plugin of repo.plugins) {
-        collection.plugins.push({
-          ...plugin,
-          repo_dir_name: repo.dir_name,
-          repo_is_git_repo: repo.is_git_repo,
-          repo_git_remote: repo.git_remote,
-        });
-      }
-    }
-
-    return Array.from(grouped.values());
-  }, [repos]);
 
   useEffect(() => {
     setExpandedCollections((current) => {
@@ -267,101 +200,49 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
   };
 
   const handleUpdateCollection = async (collection: PluginCollection) => {
-    const updatableRepos = collection.repos.filter((repo) => repo.is_git_repo);
-    if (updatableRepos.length === 0 && !collection.collectionSource) {
+    if (!collection.has_git_repo && !collection.collection_source) {
       setStatus({
         type: "error",
         message: `✗ Collection "${collection.name}" has no git repositories to update.`,
       });
       return;
     }
-
-    if (updatableRepos.length === 0 && collection.collectionSource) {
-      const pluginDirs = collection.plugins.map((plugin) => plugin.repo_dir_name);
-      setStatus({
-        type: "loading",
-        message: `Updating collection "${collection.name}"…`,
+    setStatus({ type: "loading", message: `Updating collection "${collection.name}"…` });
+    // The backend performs the per-repo update loop and partial-failure
+    // aggregation, returning a single summary result.
+    const gitRepoDirs = collection.repos
+      .filter((repo) => repo.is_git_repo)
+      .map((repo) => repo.dir_name);
+    const repoDirs = collection.repos.map((repo) => repo.dir_name);
+    try {
+      const result = await invoke<CollectionOpResult>("update_plugin_collection_all", {
+        collectionSource: collection.collection_source ?? null,
+        repoDirs,
+        gitRepoDirs,
       });
-      try {
-        const message = await invoke<string>("update_plugin_collection", {
-          source: collection.collectionSource,
-          pluginDirs,
-        });
-        setStatus({ type: "success", message: `✓ ${message}` });
-        refresh();
-      } catch (e) {
-        setStatus({ type: "error", message: `✗ ${e}` });
-      }
-      return;
-    }
-
-    if (updatableRepos.length === 1) {
-      await handleUpdateRepo(updatableRepos[0].dir_name);
-      return;
-    }
-
-    setStatus({
-      type: "loading",
-      message: `Updating collection "${collection.name}" (${updatableRepos.length} repos)…`,
-    });
-
-    const updated: string[] = [];
-    const failed: string[] = [];
-
-    for (const repo of updatableRepos) {
-      try {
-        await invoke<string>("update_plugin", { name: repo.dir_name });
-        updated.push(repo.dir_name);
-      } catch {
-        failed.push(repo.dir_name);
-      }
-    }
-
-    if (failed.length > 0) {
       setStatus({
-        type: "error",
-        message: `✗ Collection "${collection.name}": updated ${updated.length}, failed ${failed.length} (${failed.join(", ")})`,
+        type: result.failed.length > 0 ? "error" : "success",
+        message: `${result.failed.length > 0 ? "✗" : "✓"} Collection "${collection.name}": ${result.message}`,
       });
-    } else {
-      setStatus({
-        type: "success",
-        message: `✓ Collection "${collection.name}" updated (${updated.length} repos).`,
-      });
+      refresh();
+    } catch (e) {
+      setStatus({ type: "error", message: `✗ ${e}` });
     }
-
-    refresh();
   };
 
   const handleRemoveCollection = async (collection: PluginCollection) => {
-    setStatus({
-      type: "loading",
-      message: `Removing collection "${collection.name}"…`,
-    });
-
-    const removed: string[] = [];
-    const failed: string[] = [];
-    for (const repo of collection.repos) {
-      try {
-        await invoke("remove_plugin", { name: repo.dir_name });
-        removed.push(repo.dir_name);
-      } catch {
-        failed.push(repo.dir_name);
-      }
-    }
-
-    if (failed.length > 0) {
+    setStatus({ type: "loading", message: `Removing collection "${collection.name}"…` });
+    const repoDirs = collection.repos.map((repo) => repo.dir_name);
+    try {
+      const result = await invoke<CollectionOpResult>("remove_plugin_collection", { repoDirs });
       setStatus({
-        type: "error",
-        message: `✗ Collection "${collection.name}": removed ${removed.length}, failed ${failed.length} (${failed.join(", ")})`,
+        type: result.failed.length > 0 ? "error" : "success",
+        message: `${result.failed.length > 0 ? "✗" : "✓"} Collection "${collection.name}": ${result.message}`,
       });
-    } else {
-      setStatus({
-        type: "success",
-        message: `✓ Removed collection "${collection.name}"`,
-      });
+      refresh();
+    } catch (e) {
+      setStatus({ type: "error", message: `✗ ${e}` });
     }
-
-    refresh();
   };
 
   const toggleCollection = (collectionKey: string) => {
@@ -517,7 +398,7 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
             const pluginCount = collection.plugins.length;
             const repoCount = collection.repos.length;
             const updateDisabled =
-              status.type === "loading" || (!collection.hasGitRepo && !collection.collectionSource);
+              status.type === "loading" || (!collection.has_git_repo && !collection.collection_source);
             return (
               <div key={collection.key} className="collection-card">
                 <div
@@ -553,12 +434,12 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
                       {repoCount > 1 && (
                         <span className="collection-card__count">{repoCount} repos</span>
                       )}
-                      {collection.hasGitRepo && (
+                      {collection.has_git_repo && (
                         <span className="collection-card__git-badge">git</span>
                       )}
                     </div>
                     <div className="collection-card__subtitle">
-                      {normalizeGitRemote(collection.repos[0]?.git_remote)
+                      {collection.repos[0]?.git_remote
                         ? collection.repos[0]!.git_remote
                         : collection.repos.length === 1
                           ? "Local plugin collection"
@@ -576,7 +457,7 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
                     disabled={updateDisabled}
                     aria-disabled={updateDisabled}
                     title={
-                      collection.hasGitRepo || collection.collectionSource
+                      collection.has_git_repo || collection.collection_source
                         ? "Update this collection and all of its plugins"
                         : "This collection has no git repositories"
                     }
