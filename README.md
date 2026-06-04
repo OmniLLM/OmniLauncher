@@ -478,7 +478,6 @@ OmniLauncher
 │   ├── components/
 │   │   ├── SearchBar.tsx         Input bar + hint bar + mode indicator
 │   │   ├── ResultList.tsx        Keyboard-navigable result list
-│   │   ├── SettingsPanel.tsx     Inline settings (AI, theme, plugins, GitHub)
 │   │   ├── SettingsWindow.tsx    Standalone settings window
 │   │   ├── AIResponsePane.tsx    Chat-bubble pane
 │   │   ├── FormattedSubtitle.tsx Markdown-ish subtitle renderer
