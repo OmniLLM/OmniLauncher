@@ -4,7 +4,7 @@ use omnilauncher_lib::{
         router::{ConversationContext, Router},
     },
     create_plugin_manager_builtin_only,
-    live_server::{LiveResponse, LiveServer},
+    live_server::LiveServer,
     load_settings, save_settings, split_server, AppSettings, QueryResult, SkillInfo, SkillManager,
 };
 use simplelog::{ColorChoice, ConfigBuilder, LevelFilter, TermLogger, TerminalMode, WriteLogger};
@@ -279,84 +279,12 @@ pub fn run() {
 
     let live_server_port = 1421;
     let live_server = LiveServer::new();
-    let live_server_task = live_server.clone();
 
-    tauri::async_runtime::spawn(async move {
-        log::info!(
-            "registering live server routes on port {}",
-            live_server_port
-        );
-        live_server_task
-            .register_route("/dashboard", || async {
-                LiveResponse::html(omnilauncher_lib::dashboard::index_html())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/data", || async {
-                LiveResponse::json(omnilauncher_lib::dashboard::index_data_json())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/todos", || async {
-                LiveResponse::html(omnilauncher_lib::dashboard::todos_html())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/todos/data", || async {
-                LiveResponse::json(omnilauncher_lib::dashboard::todos_data_json())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/conversation", || async {
-                LiveResponse::html(omnilauncher_lib::dashboard::conversation_html())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/conversation/data", || async {
-                LiveResponse::json(omnilauncher_lib::dashboard::conversation_data_json())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/jobs", || async {
-                LiveResponse::html(omnilauncher_lib::dashboard::jobs_html())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/jobs/data", || async {
-                LiveResponse::json(omnilauncher_lib::dashboard::jobs_data_json())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/tables", || async {
-                LiveResponse::html(omnilauncher_lib::dashboard::tables_html())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/tables/data", || async {
-                LiveResponse::json(omnilauncher_lib::dashboard::tables_data_json())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/github", || async {
-                LiveResponse::html(omnilauncher_lib::dashboard::github_html())
-            })
-            .await;
-        live_server_task
-            .register_route("/dashboard/github/data", || async {
-                LiveResponse::json(omnilauncher_lib::dashboard::github_data_json().await)
-            })
-            .await;
-        live_server_task
-            .register_route_with_query("/dashboard/github/repo", |q| async move {
-                LiveResponse::json(omnilauncher_lib::dashboard::github_repo_detail_json(q).await)
-            })
-            .await;
-        log::info!(
-            "starting live server on http://127.0.0.1:{}",
-            live_server_port
-        );
-        live_server_task.serve(live_server_port).await;
-    });
+    // NOTE (backend/UI split): the desktop app is now a thin UI shell. It no
+    // longer serves the in-process dashboard live server — that responsibility
+    // moves to the separated backend. The `live_server` handle is retained only
+    // so the (now dormant, HTTP-routed) Tauri commands still type-check; nothing
+    // is served on port 1421 from the shell.
 
     // Bring up the launcher with built-in plugins only — external plugin
     // discovery (manifest reads, JSON parses, raycast/flow shim refresh)
@@ -401,68 +329,26 @@ pub fn run() {
         .setup(move |app| {
             log::debug!("Running Tauri setup");
 
-            // Start background scheduler (must be inside setup — tokio runtime is live here)
+            // Backend/UI split: the desktop shell no longer discovers external
+            // plugins, runs the skill curator, or serves a dashboard — all of
+            // that now lives in the separated backend. The shell keeps only
+            // window/hotkey/tray/selection concerns. We DO keep the local
+            // scheduler so OS-level scheduled jobs still fire on this machine.
             omnilauncher_lib::plugins::scheduler::migrate_inline_commands_to_files();
             omnilauncher_lib::plugins::scheduler::start_scheduler();
 
-            // Defer external plugin discovery off the cold-start hot path.
-            // The launcher window comes up with built-in plugins only;
-            // externals (manifest reads, Raycast/Flow shim refresh, parallel
-            // discovery) load in the background. PluginManager's
-            // `cheap_prefix_match` keeps early keystrokes safe — they just
-            // see built-ins until this finishes (typically <1s).
-            {
-                use tauri::Manager;
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let started = std::time::Instant::now();
-                    let state = app_handle.state::<AppState>();
-                    let settings = omnilauncher_lib::load_settings();
-                    let mut pm = state.plugin_manager.lock().await;
-                    pm.reload_external_plugins(&settings.plugin_dirs);
-                    log::info!(
-                        "Deferred external plugin load complete in {:?}",
-                        started.elapsed()
-                    );
-                });
-            }
-
-            // Skill curator background tick (Hermes-style self-improvement).
-            // Sleeps 10 minutes after launch to stay off the cold-start path,
-            // then wakes once an hour and runs `evaluate` only when ≥7 days
-            // have passed since the last pass. Pure rule-based, no LLM calls.
-            // Idempotent: a missed tick just runs at the next wakeup.
-            {
-                use tauri::Manager;
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(600)).await;
-                    loop {
-                        let state = app_handle.state::<AppState>();
-                        let mgr = state.skill_manager.lock().await;
-                        let names = mgr.user_skill_names();
-                        drop(mgr);
-                        if let Some(report) = tokio::task::spawn_blocking(move || {
-                            omnilauncher_lib::skills::curator::run_if_due(&names)
-                        })
-                        .await
-                        .ok()
-                        .flatten()
-                        {
-                            log::info!(
-                                "skill curator: tracked={} new={} stale={} archived={}",
-                                report.total_tracked,
-                                report.seen_new.len(),
-                                report.marked_stale.len(),
-                                report.marked_archived.len(),
-                            );
-                        }
-                        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-                    }
-                });
-            }
-
             let window = app.get_webview_window("main").unwrap();
+
+            // Inject the backend URL the frontend should talk to BEFORE it makes
+            // any request. `runtime.ts` reads `window.__OMNILAUNCHER_BACKEND_URL__`
+            // lazily (at first `invoke`), so this eval wins the race.
+            let settings_for_url = omnilauncher_lib::load_settings();
+            let backend_url = resolve_backend_url(&settings_for_url);
+            log::info!("desktop shell will use backend at {backend_url}");
+            let _ = window.eval(format!(
+                "window.__OMNILAUNCHER_BACKEND_URL__ = {};",
+                serde_json::to_string(&backend_url).unwrap_or_else(|_| "\"\"".to_string())
+            ));
 
             // Center the initial window before the frontend performs its first resize.
             let _ = window.center();
