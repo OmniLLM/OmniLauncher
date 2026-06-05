@@ -265,6 +265,7 @@ async fn handle_request(
     request: &str,
 ) -> LiveResponse {
     match (method, path) {
+        ("OPTIONS", _) => LiveResponse::text("204 No Content", String::new()),
         ("GET", "/health") => LiveResponse::json("{\"ok\":true}".to_string()),
         ("POST", "/api/search") => {
             let body = read_body(request).await;
@@ -403,8 +404,11 @@ async fn handle_request(
         // ─── Skills ─────────────────────────────────────────────────────────
         ("GET", "/api/skills") => {
             let mgr = state.skill_manager.lock().await;
-            let metas: Vec<crate::SkillInfo> =
-                mgr.list_meta().into_iter().map(crate::SkillInfo::from).collect();
+            let metas: Vec<crate::SkillInfo> = mgr
+                .list_meta()
+                .into_iter()
+                .map(crate::SkillInfo::from)
+                .collect();
             json_response(&metas)
         }
         ("GET", "/api/skills/usage") => json_response(&crate::skills::curator::snapshot()),
@@ -415,7 +419,9 @@ async fn handle_request(
                     let mgr = state.skill_manager.clone();
                     let res = tokio::task::spawn_blocking(move || {
                         let mut mgr = mgr.blocking_lock();
-                        if input.source.starts_with("http://") || input.source.starts_with("https://") {
+                        if input.source.starts_with("http://")
+                            || input.source.starts_with("https://")
+                        {
                             mgr.install_from_url(&input.source)
                         } else {
                             mgr.install_from_path(&input.source)
@@ -478,7 +484,9 @@ async fn handle_request(
                 let mgr = state.skill_manager.lock().await;
                 mgr.user_skill_names()
             };
-            match tokio::task::spawn_blocking(move || crate::skills::curator::evaluate(&names)).await {
+            match tokio::task::spawn_blocking(move || crate::skills::curator::evaluate(&names))
+                .await
+            {
                 Ok(report) => json_response(&serde_json::json!({
                     "marked_stale": report.marked_stale,
                     "marked_archived": report.marked_archived,
@@ -534,7 +542,12 @@ async fn handle_request(
             let body = read_body(request).await;
             match parse_json::<PluginInstallRequest>(&body) {
                 Ok(input) => {
-                    match crate::plugins::plugin_manager_cmd::install_plugin(input.source, input.target_dir).await {
+                    match crate::plugins::plugin_manager_cmd::install_plugin(
+                        input.source,
+                        input.target_dir,
+                    )
+                    .await
+                    {
                         Ok(msg) => {
                             reload_external_plugins_state(state).await;
                             json_response(&msg)
@@ -548,39 +561,47 @@ async fn handle_request(
         ("POST", "/api/plugins/update") => {
             let body = read_body(request).await;
             match parse_json::<PluginNameRequest>(&body) {
-                Ok(input) => match crate::plugins::plugin_manager_cmd::update_plugin(input.name).await {
-                    Ok(msg) => {
-                        reload_external_plugins_state(state).await;
-                        json_response(&msg)
+                Ok(input) => {
+                    match crate::plugins::plugin_manager_cmd::update_plugin(input.name).await {
+                        Ok(msg) => {
+                            reload_external_plugins_state(state).await;
+                            json_response(&msg)
+                        }
+                        Err(e) => LiveResponse::text("500 Internal Server Error", e),
                     }
-                    Err(e) => LiveResponse::text("500 Internal Server Error", e),
-                },
+                }
                 Err(error) => error,
             }
         }
         ("POST", "/api/plugins/collections/update") => {
             let body = read_body(request).await;
             match parse_json::<CollectionUpdateRequest>(&body) {
-                Ok(input) => match crate::plugins::plugin_manager_cmd::update_plugin_collection_all(
-                    input.collection_source,
-                    input.repo_dirs,
-                    input.git_repo_dirs,
-                )
-                .await
-                {
-                    Ok(res) => {
-                        reload_external_plugins_state(state).await;
-                        json_response(&res)
+                Ok(input) => {
+                    match crate::plugins::plugin_manager_cmd::update_plugin_collection_all(
+                        input.collection_source,
+                        input.repo_dirs,
+                        input.git_repo_dirs,
+                    )
+                    .await
+                    {
+                        Ok(res) => {
+                            reload_external_plugins_state(state).await;
+                            json_response(&res)
+                        }
+                        Err(e) => LiveResponse::text("500 Internal Server Error", e),
                     }
-                    Err(e) => LiveResponse::text("500 Internal Server Error", e),
-                },
+                }
                 Err(error) => error,
             }
         }
         ("POST", "/api/plugins/collections/remove") => {
             let body = read_body(request).await;
             match parse_json::<CollectionRemoveRequest>(&body) {
-                Ok(input) => match crate::plugins::plugin_manager_cmd::remove_plugin_collection(input.repo_dirs).await {
+                Ok(input) => match crate::plugins::plugin_manager_cmd::remove_plugin_collection(
+                    input.repo_dirs,
+                )
+                .await
+                {
                     Ok(res) => {
                         reload_external_plugins_state(state).await;
                         json_response(&res)
@@ -617,7 +638,9 @@ async fn handle_request(
                 Ok(input) => {
                     let pm = state.plugin_manager.lock().await;
                     let mut skill_mgr = state.skill_manager.lock().await;
-                    let resp = crate::ai::router::Router::slash_command(&input.query, &pm, &mut skill_mgr).await;
+                    let resp =
+                        crate::ai::router::Router::slash_command(&input.query, &pm, &mut skill_mgr)
+                            .await;
                     json_response(&resp)
                 }
                 Err(error) => error,
@@ -627,10 +650,12 @@ async fn handle_request(
         ("POST", "/api/vision/analyze") => {
             let body = read_body(request).await;
             match parse_json::<VisionRequest>(&body) {
-                Ok(input) => match vision_analyze_backend(&input.prompt, &input.image_base64, state).await {
-                    Ok(text) => json_response(&text),
-                    Err(e) => LiveResponse::text("500 Internal Server Error", e),
-                },
+                Ok(input) => {
+                    match vision_analyze_backend(&input.prompt, &input.image_base64, state).await {
+                        Ok(text) => json_response(&text),
+                        Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                    }
+                }
                 Err(error) => error,
             }
         }
@@ -656,12 +681,28 @@ fn normalize_path(path: &str) -> String {
 
 fn encode_response(response: LiveResponse) -> Vec<u8> {
     let header = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         response.status,
         response.content_type,
         response.body.len()
     );
     [header.into_bytes(), response.body.into_bytes()].concat()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoded_response_includes_cors_preflight_headers() {
+        let response = LiveResponse::text("204 No Content", String::new());
+        let encoded = String::from_utf8(encode_response(response)).unwrap();
+
+        assert!(encoded.starts_with("HTTP/1.1 204 No Content\r\n"));
+        assert!(encoded.contains("Access-Control-Allow-Origin: *\r\n"));
+        assert!(encoded.contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"));
+        assert!(encoded.contains("Access-Control-Allow-Headers: Content-Type\r\n"));
+    }
 }
 
 /// Vision analyze — AI half. The screenshot is captured locally by the desktop
@@ -746,10 +787,7 @@ pub async fn search_backend(query: String, state: &SplitServerState) -> Vec<Quer
 /// `/api/slash/preview` endpoint and the Tauri `slash_preview` command so both
 /// surfaces behave identically. `pm` is passed in (already locked by the
 /// caller) to keep this free of `SplitServerState` / `AppState` coupling.
-pub async fn slash_preview_backend(
-    query: &str,
-    pm: &crate::PluginManager,
-) -> Vec<QueryResult> {
+pub async fn slash_preview_backend(query: &str, pm: &crate::PluginManager) -> Vec<QueryResult> {
     let lower = query.to_lowercase();
 
     // Parse command and argument
@@ -970,7 +1008,11 @@ async fn install_runtime_dep_backend(id: &str, state: &SplitServerState) -> Resu
                     stderr
                 };
                 emit(format!("{} installer failed.", runtime_label(id))).await;
-                Err(format!("Failed to install {}: {}", runtime_label(id), detail))
+                Err(format!(
+                    "Failed to install {}: {}",
+                    runtime_label(id),
+                    detail
+                ))
             }
         }
         _ => Err(format!("Unknown plugin runtime dependency: {id}")),
