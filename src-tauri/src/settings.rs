@@ -112,6 +112,19 @@ pub struct AppSettings {
     pub github_orgs: Vec<String>,
 }
 
+impl AppSettings {
+    /// Effective AI API key: the value stored in settings, or — when empty —
+    /// the `OMNILLM_API_KEY` env var. Returns an empty string when neither is
+    /// set. The env var is read on every call so updates take effect without
+    /// a restart and we never persist it to disk.
+    pub fn resolve_ai_api_key(&self) -> String {
+        if !self.ai_api_key.is_empty() {
+            return self.ai_api_key.clone();
+        }
+        std::env::var("OMNILLM_API_KEY").unwrap_or_default()
+    }
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {

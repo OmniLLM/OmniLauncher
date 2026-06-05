@@ -300,7 +300,7 @@ async fn handle_request(
                         let mut client = state.ai_client.lock().await;
                         *client = AiClient::new(
                             updated.ai_base_url.clone(),
-                            updated.ai_api_key.clone(),
+                            updated.resolve_ai_api_key(),
                             updated.ai_model.clone(),
                         );
                     }
@@ -717,7 +717,7 @@ pub async fn vision_analyze_backend(
         let settings = state.settings.lock().await;
         (
             settings.ai_base_url.trim_end_matches('/').to_string(),
-            settings.ai_api_key.clone(),
+            settings.resolve_ai_api_key(),
             settings.ai_model.clone(),
         )
     };

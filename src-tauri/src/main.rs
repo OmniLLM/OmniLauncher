@@ -269,7 +269,7 @@ pub fn run() {
 
     let ai_client = AiClient::new(
         settings.ai_base_url.clone(),
-        settings.ai_api_key.clone(),
+        settings.resolve_ai_api_key(),
         settings.ai_model.clone(),
     );
 
@@ -1225,7 +1225,7 @@ async fn save_settings_cmd(
     let mut client = state.ai_client.lock().await;
     *client = AiClient::new(
         settings.ai_base_url.clone(),
-        settings.ai_api_key.clone(),
+        settings.resolve_ai_api_key(),
         settings.ai_model.clone(),
     );
     Ok(save_settings(&settings))
@@ -1669,7 +1669,7 @@ fn main() {
         let settings = load_settings();
         let ai_client = AiClient::new(
             settings.ai_base_url.clone(),
-            settings.ai_api_key.clone(),
+            settings.resolve_ai_api_key(),
             settings.ai_model.clone(),
         );
         let mut skill_manager = SkillManager::new();
