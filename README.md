@@ -341,7 +341,80 @@ make test           # run all tests (single-threaded)
 > `cargo`, and `npx tauri` commands directly, or run individual targets via
 > `make -f Makefile <target>` after switching `SHELL` to `bash`.
 
-### Configure AI
+### Split backend/frontend production
+
+You can also deploy the split architecture in production.
+
+#### Backend service (WSL / Linux)
+
+```bash
+make backend-prod
+```
+
+This runs the Rust backend in release mode with `--split-backend`.
+
+You can override bind settings:
+
+```bash
+make backend-prod SPLIT_HOST=0.0.0.0 SPLIT_PORT=15000
+```
+
+#### Frontend build (Windows or anywhere)
+
+```bash
+make frontend-prod FRONTEND_BACKEND_URL=http://your-backend-host:1422
+```
+
+This produces a static web build in `dist/` configured to talk to the split backend.
+
+#### Local production preview
+
+```bash
+make serve-frontend-prod FRONTEND_BACKEND_URL=http://127.0.0.1:1422
+```
+
+That serves the production frontend locally using Vite preview.
+
+In a real deployment, you can instead serve `dist/` from nginx, Caddy, IIS, or any static file host.
+
+
+You can now run the backend and frontend separately:
+
+#### 1. Run backend in WSL / Linux
+
+```bash
+make backend-dev
+```
+
+This starts the Rust backend-only API server on `0.0.0.0:1422` by default.
+Override with:
+
+```bash
+make backend-dev SPLIT_HOST=0.0.0.0 SPLIT_PORT=15000
+```
+
+#### 2. Run frontend in Windows
+
+In a Windows terminal from the same repo:
+
+```bash
+make frontend-dev FRONTEND_BACKEND_URL=http://<wsl-host-or-localhost>:1422
+```
+
+If Windows can already reach WSL through localhost port forwarding, this is enough:
+
+```bash
+make frontend-dev FRONTEND_BACKEND_URL=http://127.0.0.1:1422
+```
+
+The browser frontend uses `VITE_OMNILAUNCHER_BACKEND_URL` to talk to the backend over HTTP/SSE instead of Tauri IPC.
+
+#### Split-dev notes
+
+- Integrated desktop development still works with `make dev`
+- Split mode is intended for launcher UI + backend logic development without Tauri coupling during iteration
+- Some desktop-only capabilities remain Tauri-only in browser mode, such as screenshot/vision flows and native window behavior
+
 
 1. Press **Ctrl+,** to open Settings (or click the ⚙ gear icon)
 2. **API Base URL** — e.g. `https://api.openai.com`, a local Ollama endpoint,

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, listen } from "../lib/runtime";
+import type { RuntimeDependency, RuntimeProgressEvent } from "../types/app";
 
 interface PluginInfo {
   name: string;
@@ -59,21 +59,6 @@ interface AppSettings {
   [key: string]: unknown;
 }
 
-interface RuntimeDependency {
-  id: string;
-  label: string;
-  installed: boolean;
-  installable: boolean;
-  install_command?: string | null;
-  detail: string;
-}
-
-interface RuntimeProgressEvent {
-  id: string;
-  label: string;
-  message: string;
-}
-
 interface PluginManagerProps {
   onClose: () => void;
 }
@@ -82,13 +67,19 @@ const DEFAULT_DIR = "~/.omnilauncher/plugins (default)";
 
 export default function PluginManager({ onClose }: PluginManagerProps) {
   const [collections, setCollections] = useState<PluginCollection[]>([]);
-  const [expandedCollections, setExpandedCollections] = useState<Record<string, boolean>>({});
+  const [expandedCollections, setExpandedCollections] = useState<
+    Record<string, boolean>
+  >({});
   const [source, setSource] = useState("");
   const [targetDir, setTargetDir] = useState<string>(""); // "" = default
   const [extraDirs, setExtraDirs] = useState<string[]>([]);
   const [runtimeDeps, setRuntimeDeps] = useState<RuntimeDependency[]>([]);
-  const [runtimeInstalling, setRuntimeInstalling] = useState<string | null>(null);
-  const [runtimeProgress, setRuntimeProgress] = useState<Record<string, string>>({});
+  const [runtimeInstalling, setRuntimeInstalling] = useState<string | null>(
+    null,
+  );
+  const [runtimeProgress, setRuntimeProgress] = useState<
+    Record<string, string>
+  >({});
   const [status, setStatus] = useState<{
     type: "idle" | "loading" | "success" | "error";
     message: string;
@@ -132,11 +123,14 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
-    listen<RuntimeProgressEvent>("omnilauncher://plugin-runtime-progress", (event) => {
-      const { id, label, message } = event.payload;
-      setRuntimeProgress((current) => ({ ...current, [id]: message }));
-      setStatus({ type: "loading", message: `${label}: ${message}` });
-    }).then((dispose) => {
+    listen<RuntimeProgressEvent>(
+      "omnilauncher://plugin-runtime-progress",
+      (event) => {
+        const { id, label, message } = event.payload;
+        setRuntimeProgress((current) => ({ ...current, [id]: message }));
+        setStatus({ type: "loading", message: `${label}: ${message}` });
+      },
+    ).then((dispose) => {
       if (disposed) {
         dispose();
       } else {
@@ -173,7 +167,10 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
     setRuntimeProgress((current) => ({ ...current, [dep.id]: "Starting…" }));
     setStatus({ type: "loading", message: `Installing ${dep.label}…` });
     try {
-      const message = await invoke<string>("install_plugin_runtime_dependency", { id: dep.id });
+      const message = await invoke<string>(
+        "install_plugin_runtime_dependency",
+        { id: dep.id },
+      );
       setStatus({ type: "success", message: `✓ ${message}` });
       setRuntimeProgress((current) => {
         const next = { ...current };
@@ -207,7 +204,10 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
       });
       return;
     }
-    setStatus({ type: "loading", message: `Updating collection "${collection.name}"…` });
+    setStatus({
+      type: "loading",
+      message: `Updating collection "${collection.name}"…`,
+    });
     // The backend performs the per-repo update loop and partial-failure
     // aggregation, returning a single summary result.
     const gitRepoDirs = collection.repos
@@ -215,11 +215,14 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
       .map((repo) => repo.dir_name);
     const repoDirs = collection.repos.map((repo) => repo.dir_name);
     try {
-      const result = await invoke<CollectionOpResult>("update_plugin_collection_all", {
-        collectionSource: collection.collection_source ?? null,
-        repoDirs,
-        gitRepoDirs,
-      });
+      const result = await invoke<CollectionOpResult>(
+        "update_plugin_collection_all",
+        {
+          collectionSource: collection.collection_source ?? null,
+          repoDirs,
+          gitRepoDirs,
+        },
+      );
       setStatus({
         type: result.failed.length > 0 ? "error" : "success",
         message: `${result.failed.length > 0 ? "✗" : "✓"} Collection "${collection.name}": ${result.message}`,
@@ -231,10 +234,16 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
   };
 
   const handleRemoveCollection = async (collection: PluginCollection) => {
-    setStatus({ type: "loading", message: `Removing collection "${collection.name}"…` });
+    setStatus({
+      type: "loading",
+      message: `Removing collection "${collection.name}"…`,
+    });
     const repoDirs = collection.repos.map((repo) => repo.dir_name);
     try {
-      const result = await invoke<CollectionOpResult>("remove_plugin_collection", { repoDirs });
+      const result = await invoke<CollectionOpResult>(
+        "remove_plugin_collection",
+        { repoDirs },
+      );
       setStatus({
         type: result.failed.length > 0 ? "error" : "success",
         message: `${result.failed.length > 0 ? "✗" : "✓"} Collection "${collection.name}": ${result.message}`,
@@ -291,7 +300,9 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
             onChange={(e) => setTargetDir(e.target.value)}
             className={
               "plugin-panel__target-select" +
-              (targetDir === "" ? " plugin-panel__target-select--placeholder" : "")
+              (targetDir === ""
+                ? " plugin-panel__target-select--placeholder"
+                : "")
             }
             title="Install into…"
           >
@@ -315,7 +326,9 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
       </div>
 
       {/* Status message */}
-      {status.type !== "idle" && <div className={statusClass}>{status.message}</div>}
+      {status.type !== "idle" && (
+        <div className={statusClass}>{status.message}</div>
+      )}
 
       {/* Runtimes */}
       {runtimeDeps.length > 0 && (
@@ -341,7 +354,9 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
                   <span
                     className={
                       "omni-pill plugin-runtimes__pill " +
-                      (dep.installed ? "omni-pill--success" : "omni-pill--warning")
+                      (dep.installed
+                        ? "omni-pill--success"
+                        : "omni-pill--warning")
                     }
                   >
                     {dep.installed ? "READY" : "MISSING"}
@@ -352,7 +367,10 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
                       className="plugin-runtimes__detail"
                       title={dep.install_command || dep.detail}
                     >
-                      {progress || (dep.installed ? dep.detail : dep.install_command || dep.detail)}
+                      {progress ||
+                        (dep.installed
+                          ? dep.detail
+                          : dep.install_command || dep.detail)}
                     </div>
                   </div>
                   {!dep.installed && (
@@ -371,7 +389,11 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
                           : dep.install_command || dep.detail
                       }
                     >
-                      {busy ? "Installing…" : dep.installable ? "Install" : "Details"}
+                      {busy
+                        ? "Installing…"
+                        : dep.installable
+                          ? "Install"
+                          : "Details"}
                     </button>
                   )}
                 </div>
@@ -388,8 +410,9 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
             No external plugin repos installed yet.
             <br />
             <span className="plugin-panel__empty-hint">
-              Paste a Git URL, GitHub <code>owner/repo</code>, or local path above to install one.
-              GitHub repos use <code>gh</code> when authenticated (private &amp; GHE supported).
+              Paste a Git URL, GitHub <code>owner/repo</code>, or local path
+              above to install one. GitHub repos use <code>gh</code> when
+              authenticated (private &amp; GHE supported).
             </span>
           </div>
         ) : (
@@ -398,7 +421,8 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
             const pluginCount = collection.plugins.length;
             const repoCount = collection.repos.length;
             const updateDisabled =
-              status.type === "loading" || (!collection.has_git_repo && !collection.collection_source);
+              status.type === "loading" ||
+              (!collection.has_git_repo && !collection.collection_source);
             return (
               <div key={collection.key} className="collection-card">
                 <div
@@ -415,10 +439,14 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
                       e.stopPropagation();
                       toggleCollection(collection.key);
                     }}
-                    aria-label={expanded ? "Collapse collection" : "Expand collection"}
+                    aria-label={
+                      expanded ? "Collapse collection" : "Expand collection"
+                    }
                     aria-expanded={expanded}
                     title={
-                      expanded ? "Collapse collection plugins" : "Expand collection plugins"
+                      expanded
+                        ? "Collapse collection plugins"
+                        : "Expand collection plugins"
                     }
                   >
                     {expanded ? "▾" : "▸"}
@@ -432,7 +460,9 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
                         {pluginCount} plugin{pluginCount === 1 ? "" : "s"}
                       </span>
                       {repoCount > 1 && (
-                        <span className="collection-card__count">{repoCount} repos</span>
+                        <span className="collection-card__count">
+                          {repoCount} repos
+                        </span>
                       )}
                       {collection.has_git_repo && (
                         <span className="collection-card__git-badge">git</span>
@@ -497,18 +527,26 @@ export default function PluginManager({ onClose }: PluginManagerProps) {
                                 <span className="plugin-row__kind">PLUGIN</span>
                                 <span>{plugin.icon ?? "🔌"}</span>
                                 <span>{plugin.name}</span>
-                                <span className="plugin-row__version">v{plugin.version}</span>
+                                <span className="plugin-row__version">
+                                  v{plugin.version}
+                                </span>
                                 {plugin.keyword && (
-                                  <span className="plugin-row__keyword">{plugin.keyword}</span>
+                                  <span className="plugin-row__keyword">
+                                    {plugin.keyword}
+                                  </span>
                                 )}
                               </div>
-                              <div className="plugin-row__desc">{plugin.description}</div>
+                              <div className="plugin-row__desc">
+                                {plugin.description}
+                              </div>
                             </div>
 
                             <button
                               type="button"
                               className="omni-btn omni-btn--xs plugin-row__action"
-                              onClick={() => handleUpdateRepo(plugin.repo_dir_name)}
+                              onClick={() =>
+                                handleUpdateRepo(plugin.repo_dir_name)
+                              }
                               disabled={updatePluginDisabled}
                               aria-disabled={updatePluginDisabled}
                               title={

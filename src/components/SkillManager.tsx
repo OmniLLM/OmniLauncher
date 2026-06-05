@@ -1,15 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-
-interface SkillInfo {
-  name: string;
-  description: string;
-  version: string;
-  triggers: string[];
-  tags: string[];
-  tools_hint: string[];
-  path: string;
-}
+import { invoke } from "../lib/runtime";
+import type { SkillInfo } from "../types/app";
 
 type SkillState = "Active" | "Stale" | "Archived";
 
@@ -77,7 +68,9 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
   const [usage, setUsage] = useState<Record<string, SkillUsage>>({});
   const [proposals, setProposals] = useState<Proposal[] | null>(null);
   const [proposing, setProposing] = useState(false);
-  const [expandedSkills, setExpandedSkills] = useState<Record<string, boolean>>({});
+  const [expandedSkills, setExpandedSkills] = useState<Record<string, boolean>>(
+    {},
+  );
   const [source, setSource] = useState("");
   const [status, setStatus] = useState<Status>({ type: "idle", message: "" });
 
@@ -115,7 +108,9 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
     if (!trimmed) return;
     setStatus({ type: "loading", message: "Installing…" });
     try {
-      const message = await invoke<string>("install_skill", { source: trimmed });
+      const message = await invoke<string>("install_skill", {
+        source: trimmed,
+      });
       setStatus({ type: "success", message: `✓ ${message}` });
       setSource("");
       refresh();
@@ -162,7 +157,8 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
       const parts: string[] = [];
       if (r.seen_new.length) parts.push(`${r.seen_new.length} new`);
       if (r.marked_stale.length) parts.push(`${r.marked_stale.length} stale`);
-      if (r.marked_archived.length) parts.push(`${r.marked_archived.length} archived`);
+      if (r.marked_archived.length)
+        parts.push(`${r.marked_archived.length} archived`);
       const summary = parts.length ? parts.join(" · ") : "no changes";
       setStatus({
         type: "success",
@@ -176,7 +172,10 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
 
   const handleProposeConsolidation = async () => {
     setProposing(true);
-    setStatus({ type: "loading", message: "Asking the LLM for consolidation suggestions…" });
+    setStatus({
+      type: "loading",
+      message: "Asking the LLM for consolidation suggestions…",
+    });
     try {
       const list = await invoke<Proposal[]>("propose_skill_consolidation");
       setProposals(list);
@@ -201,12 +200,18 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
         : p.kind === "rewrite"
           ? `rewrite "${p.name}"`
           : `archive "${p.name}"`;
-    if (!window.confirm(`Apply: ${label}?\n\nA backup of any modified SKILL.md will be saved before the change.`)) {
+    if (
+      !window.confirm(
+        `Apply: ${label}?\n\nA backup of any modified SKILL.md will be saved before the change.`,
+      )
+    ) {
       return;
     }
     setStatus({ type: "loading", message: `Applying: ${label}…` });
     try {
-      const out = await invoke<ApplyOutcome>("apply_skill_consolidation", { proposal: p });
+      const out = await invoke<ApplyOutcome>("apply_skill_consolidation", {
+        proposal: p,
+      });
       setStatus({
         type: "success",
         message: `✓ ${out.message}${out.backups.length ? ` (backup: ${out.backups.length})` : ""}`,
@@ -321,7 +326,14 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
             background: "rgba(176, 138, 69, 0.08)",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 8,
+            }}
+          >
             <strong>🪄 LLM consolidation suggestions</strong>
             <button
               type="button"
@@ -333,7 +345,8 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
             </button>
           </div>
           <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
-            Each suggestion is read-only until you approve. Backups are written before any file change.
+            Each suggestion is read-only until you approve. Backups are written
+            before any file change.
           </div>
           {proposals.map((p, i) => {
             const title =
@@ -352,17 +365,28 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
               <div
                 key={i}
                 style={{
-                  borderTop: i === 0 ? "none" : "1px solid rgba(176,138,69,0.3)",
+                  borderTop:
+                    i === 0 ? "none" : "1px solid rgba(176,138,69,0.3)",
                   padding: "8px 0",
                 }}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600 }}>
-                      <span className="skill-card__kind">{p.kind.toUpperCase()}</span>{" "}
+                      <span className="skill-card__kind">
+                        {p.kind.toUpperCase()}
+                      </span>{" "}
                       {title}
                     </div>
-                    <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4 }}>{p.rationale}</div>
+                    <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4 }}>
+                      {p.rationale}
+                    </div>
                     {bodyPreview && (
                       <details style={{ marginTop: 6 }}>
                         <summary style={{ cursor: "pointer", fontSize: 12 }}>
@@ -385,7 +409,13 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                       </details>
                     )}
                   </div>
-                  <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 6,
+                      alignItems: "flex-start",
+                    }}
+                  >
                     <button
                       type="button"
                       className="omni-btn omni-btn--primary omni-btn--xs"
@@ -416,8 +446,8 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
             No skills installed yet.
             <br />
             <span className="skill-panel__empty-hint">
-              Paste a URL or local path above to install one.
-              GitHub URLs use <code>gh</code> when authenticated (private &amp; GHE supported).
+              Paste a URL or local path above to install one. GitHub URLs use{" "}
+              <code>gh</code> when authenticated (private &amp; GHE supported).
             </span>
           </div>
         ) : (
@@ -427,7 +457,11 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
             const state: SkillState = u?.state ?? "Active";
             const pinned = u?.pinned ?? false;
             const stateColor =
-              state === "Archived" ? "#a36363" : state === "Stale" ? "#b08a45" : "#5e8a5e";
+              state === "Archived"
+                ? "#a36363"
+                : state === "Stale"
+                  ? "#b08a45"
+                  : "#5e8a5e";
             return (
               <div key={skill.name} className="skill-card">
                 {/* ── Card header row ── */}
@@ -445,7 +479,11 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                       e.stopPropagation();
                       toggleSkill(skill.name);
                     }}
-                    aria-label={expanded ? "Collapse skill details" : "Expand skill details"}
+                    aria-label={
+                      expanded
+                        ? "Collapse skill details"
+                        : "Expand skill details"
+                    }
                     aria-expanded={expanded}
                     title={expanded ? "Collapse details" : "Expand details"}
                   >
@@ -457,7 +495,9 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                       <span className="skill-card__kind">SKILL</span>
                       <span className="skill-card__name">{skill.name}</span>
                       {skill.version && (
-                        <span className="skill-card__version">v{skill.version}</span>
+                        <span className="skill-card__version">
+                          v{skill.version}
+                        </span>
                       )}
                       <span
                         className="skill-card__tag"
@@ -471,7 +511,8 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                           className="skill-card__tag"
                           title={`Last used ${formatRelative(u.last_used)}`}
                         >
-                          {u.uses} use{u.uses === 1 ? "" : "s"} · {formatRelative(u.last_used)}
+                          {u.uses} use{u.uses === 1 ? "" : "s"} ·{" "}
+                          {formatRelative(u.last_used)}
                         </span>
                       )}
                       {skill.tags.slice(0, 2).map((tag) => (
@@ -481,15 +522,21 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                       ))}
                     </div>
                     {skill.description && (
-                      <div className="skill-card__desc">{skill.description}</div>
+                      <div className="skill-card__desc">
+                        {skill.description}
+                      </div>
                     )}
                   </div>
 
-                  <div className="skill-card__actions" style={{ display: "contents" }}>
+                  <div
+                    className="skill-card__actions"
+                    style={{ display: "contents" }}
+                  >
                     <button
                       type="button"
                       className={
-                        "omni-btn omni-btn--xs" + (pinned ? " omni-btn--primary" : "")
+                        "omni-btn omni-btn--xs" +
+                        (pinned ? " omni-btn--primary" : "")
                       }
                       onClick={(e) => {
                         e.stopPropagation();
@@ -578,7 +625,10 @@ export default function SkillManager({ onClose }: SkillManagerProps) {
                             </span>
                             <span
                               className="skill-card__chip"
-                              style={{ color: stateColor, borderColor: stateColor }}
+                              style={{
+                                color: stateColor,
+                                borderColor: stateColor,
+                              }}
                             >
                               state: {state.toLowerCase()}
                             </span>

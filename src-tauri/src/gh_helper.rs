@@ -297,9 +297,7 @@ pub fn parse_github_repo(source: &str) -> Option<GithubRepoRef> {
     if let Some(rest) = s.strip_prefix("git@") {
         let (host, path) = rest.split_once(':')?;
         let path = path.trim_end_matches('/').trim_end_matches(".git");
-        let mut parts = path.splitn(2, '/');
-        let owner = parts.next()?;
-        let repo = parts.next()?;
+        let (owner, repo) = path.split_once('/')?;
         if owner.is_empty() || repo.is_empty() {
             return None;
         }

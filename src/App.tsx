@@ -1,4 +1,13 @@
-import { useState, useEffect, useCallback, useRef, useMemo, memo, lazy, Suspense } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+  memo,
+  lazy,
+  Suspense,
+} from "react";
 import { renderMarkdown } from "./utils/markdown";
 import {
   loadLauncherConfig,
@@ -11,60 +20,22 @@ import {
   slashSuggestions,
   helpResults,
 } from "./launcherConfig";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { invoke, listen, getCurrentWebviewWindow } from "./lib/runtime";
 import SearchBar from "./components/SearchBar";
 import ResultList from "./components/ResultList";
-
 
 // Code-split heavy on-demand panels so they don't bloat the initial launcher bundle.
 const SettingsWindow = lazy(() => import("./components/SettingsWindow"));
 const PluginManager = lazy(() => import("./components/PluginManager"));
 const SkillManager = lazy(() => import("./components/SkillManager"));
 
-interface QueryResult {
-  id: string;
-  title: string;
-  subtitle?: string;
-  icon?: string;
-  score: number;
-  action_type: string;
-  action_data: string;
-  source?: string;
-}
-
-interface AiResponse {
-  content: string;
-  tools_used: string[];
-  results: QueryResult[];
-  is_ai: boolean;
-}
-
-interface ConversationTurn {
-  role: "user" | "assistant";
-  content: string;
-  tools_used?: string[];
-  isStreaming?: boolean;
-}
-
-interface AiSessionInfo {
-  id: number;
-  title: string;
-  created_at: string;
-  last_active_at: string;
-  message_count: number;
-}
-
-interface AppSettings {
-  ai_base_url: string;
-  ai_model: string;
-  ai_api_key: string;
-  theme: string;
-  hotkey: string;
-  max_results: number;
-  background_url: string;
-}
+import type {
+  QueryResult,
+  AiResponse,
+  ConversationTurn,
+  AiSessionInfo,
+  AppSettings,
+} from "./types/app";
 
 type ThemeMode = "dark" | "light" | "system";
 type ResolvedTheme = "dark" | "light";
@@ -129,9 +100,8 @@ export default function App() {
   const [showPluginManager, setShowPluginManager] = useState(false);
   const [showSkillManager, setShowSkillManager] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>("system");
-  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(
-    getSystemTheme(),
-  );
+  const [systemTheme, setSystemTheme] =
+    useState<ResolvedTheme>(getSystemTheme());
   const [backgroundUrl, setBackgroundUrl] = useState<string>("");
   const [conversationHistory, setConversationHistory] = useState<
     ConversationTurn[]
@@ -199,8 +169,7 @@ export default function App() {
   const [exportToast, setExportToast] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  const resolvedTheme: ResolvedTheme =
-    theme === "system" ? systemTheme : theme;
+  const resolvedTheme: ResolvedTheme = theme === "system" ? systemTheme : theme;
 
   const handleThemeToggle = useCallback(async () => {
     const next: ThemeMode = resolvedTheme === "dark" ? "light" : "dark";
@@ -208,7 +177,9 @@ export default function App() {
     // Persist to backend settings so it survives restarts
     try {
       const current = await invoke<AppSettings>("get_settings");
-      await invoke("save_settings_cmd", { settings: { ...current, theme: next } });
+      await invoke("save_settings_cmd", {
+        settings: { ...current, theme: next },
+      });
     } catch {
       // non-fatal — the in-memory theme change already happened
     }
@@ -310,13 +281,18 @@ export default function App() {
 
   // Listen for settings changes from the standalone settings window
   useEffect(() => {
-    const unlisten = listen<AppSettings>("omnilauncher://settings-saved", (e) => {
-      setTheme(parseThemeMode(e.payload.theme));
-      setBackgroundUrl(e.payload.background_url ?? "");
-      setSettings(e.payload);
-      setShowSettings(false);
-    });
-    return () => { unlisten.then(fn => fn()); };
+    const unlisten = listen<AppSettings>(
+      "omnilauncher://settings-saved",
+      (e) => {
+        setTheme(parseThemeMode(e.payload.theme));
+        setBackgroundUrl(e.payload.background_url ?? "");
+        setSettings(e.payload);
+        setShowSettings(false);
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   useEffect(() => {
@@ -437,7 +413,8 @@ export default function App() {
 
   // Browser-level fallback for focus restore (useful in dev/web context)
   useEffect(() => {
-    const shouldFocusLauncherInput = () => !showPluginManager && !showSkillManager;
+    const shouldFocusLauncherInput = () =>
+      !showPluginManager && !showSkillManager;
 
     const restoreFocus = () => {
       if (!shouldFocusLauncherInput()) return;
@@ -487,7 +464,8 @@ export default function App() {
       aiCleanupRef.current = cleanup;
 
       const finish = (content: string, tools_used?: string[]) => {
-        const wasCancelled = cancelRequestedRef.current || content === "Error: Cancelled by user";
+        const wasCancelled =
+          cancelRequestedRef.current || content === "Error: Cancelled by user";
         cleanup();
         setConversationHistory((prev) => {
           const next = [...prev];
@@ -683,7 +661,10 @@ export default function App() {
         );
         const turns: ConversationTurn[] = (msgs || [])
           .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+          .map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          }));
         setConversationHistory(turns);
         pendingQueueRef.current = [];
         setQueuedPrompts([]);
@@ -763,7 +744,10 @@ export default function App() {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         setAiModeEnabled(true);
         if (value.trim() && inputHistoryRef.current[0] !== value.trim()) {
-          inputHistoryRef.current = [value.trim(), ...inputHistoryRef.current].slice(0, 50);
+          inputHistoryRef.current = [
+            value.trim(),
+            ...inputHistoryRef.current,
+          ].slice(0, 50);
           setInputHistory([...inputHistoryRef.current]);
         }
         setHistoryIdx(-1);
@@ -776,7 +760,10 @@ export default function App() {
       } else if (aiModeEnabled && value.trim()) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         if (value.trim() && inputHistoryRef.current[0] !== value.trim()) {
-          inputHistoryRef.current = [value.trim(), ...inputHistoryRef.current].slice(0, 50);
+          inputHistoryRef.current = [
+            value.trim(),
+            ...inputHistoryRef.current,
+          ].slice(0, 50);
           setInputHistory([...inputHistoryRef.current]);
         }
         setHistoryIdx(-1);
@@ -895,19 +882,20 @@ export default function App() {
           active.tagName === "SELECT");
 
       if (e.key === "Escape") {
-        if (showCheatSheet) { setShowCheatSheet(false); return; }
+        if (showCheatSheet) {
+          setShowCheatSheet(false);
+          return;
+        }
         if (loading && isAiMode) {
           e.preventDefault();
           handleCancelAiRequest();
           return;
         }
-        if (
-          query === "" &&
-          !showPluginManager &&
-          !showSkillManager
-        ) {
+        if (query === "" && !showPluginManager && !showSkillManager) {
           // Already clean — hide the window
-          getCurrentWebviewWindow().hide().catch(() => {});
+          getCurrentWebviewWindow()
+            .hide()
+            .catch(() => {});
         } else {
           setQuery("");
           setResults([]);
@@ -941,15 +929,22 @@ export default function App() {
         setShowCheatSheet((prev) => !prev);
       }
 
-      if (e.key === "s" && (e.metaKey || e.ctrlKey) && isAiMode && conversationHistory.length > 0) {
+      if (
+        e.key === "s" &&
+        (e.metaKey || e.ctrlKey) &&
+        isAiMode &&
+        conversationHistory.length > 0
+      ) {
         e.preventDefault();
-        const md = conversationHistory.map(turn => {
-          const role = turn.role === "user" ? "**You**" : "**AI**";
-          const tools = turn.tools_used?.length
-            ? `\n> Tools: ${turn.tools_used.join(", ")}\n`
-            : "";
-          return `${role}\n${tools}${turn.content}`;
-        }).join("\n\n---\n\n");
+        const md = conversationHistory
+          .map((turn) => {
+            const role = turn.role === "user" ? "**You**" : "**AI**";
+            const tools = turn.tools_used?.length
+              ? `\n> Tools: ${turn.tools_used.join(", ")}\n`
+              : "";
+            return `${role}\n${tools}${turn.content}`;
+          })
+          .join("\n\n---\n\n");
         navigator.clipboard.writeText(md).catch(() => {});
         setExportToast(true);
         setTimeout(() => setExportToast(false), 2000);
@@ -974,7 +969,17 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [focusInput, query, showPluginManager, showSkillManager, showCheatSheet, isAiMode, conversationHistory, loading, handleCancelAiRequest]);
+  }, [
+    focusInput,
+    query,
+    showPluginManager,
+    showSkillManager,
+    showCheatSheet,
+    isAiMode,
+    conversationHistory,
+    loading,
+    handleCancelAiRequest,
+  ]);
 
   // ── Layout geometry ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -982,10 +987,15 @@ export default function App() {
     const unlisten = getCurrentWebviewWindow().onMoved(({ payload }) => {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
-        invoke("save_window_position", { x: payload.x, y: payload.y }).catch(() => {});
+        invoke("save_window_position", { x: payload.x, y: payload.y }).catch(
+          () => {},
+        );
       }, 500);
     });
-    return () => { clearTimeout(saveTimer); unlisten.then(fn => fn()); };
+    return () => {
+      clearTimeout(saveTimer);
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   const launcherHasContent =
@@ -996,7 +1006,8 @@ export default function App() {
   const launcherResultsMode =
     !isAiMode && !showPluginManager && !showSkillManager && results.length > 0;
   const isPanelMode = showPluginManager || showSkillManager;
-  const screenHeight = typeof window !== "undefined" ? window.screen.height : 1080;
+  const screenHeight =
+    typeof window !== "undefined" ? window.screen.height : 1080;
   const compactHeight = Math.max(320, Math.round(screenHeight * 0.3));
   const aiHeight = Math.max(560, Math.round(screenHeight * 0.5));
   const panelHeight = isPanelMode
@@ -1061,8 +1072,14 @@ export default function App() {
         }
       };
       const onMove = (ev: PointerEvent) => {
-        const w = Math.max(minW, Math.min(maxW, startW + 2 * (ev.screenX - startX)));
-        const h = Math.max(minH, Math.min(maxH, startH + 2 * (ev.screenY - startY)));
+        const w = Math.max(
+          minW,
+          Math.min(maxW, startW + 2 * (ev.screenX - startX)),
+        );
+        const h = Math.max(
+          minH,
+          Math.min(maxH, startH + 2 * (ev.screenY - startY)),
+        );
         pending = { w, h };
         if (!raf) raf = requestAnimationFrame(flush);
       };
@@ -1077,7 +1094,7 @@ export default function App() {
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
     },
-    []
+    [],
   );
 
   return (
@@ -1137,7 +1154,9 @@ export default function App() {
           boxSizing: "border-box",
           transition:
             "height 220ms cubic-bezier(0.4,0,0.2,1), max-height 220ms cubic-bezier(0.4,0,0.2,1)",
-          outline: isAiMode ? `1.5px solid color-mix(in srgb, var(--accent) 20%, transparent)` : "none",
+          outline: isAiMode
+            ? `1.5px solid color-mix(in srgb, var(--accent) 20%, transparent)`
+            : "none",
         }}
       >
         {showSettings && (
@@ -1145,487 +1164,558 @@ export default function App() {
             <SettingsWindow onClose={() => setShowSettings(false)} />
           </Suspense>
         )}
-        {!showSettings && (<>
-        {/* ── AI MODE: top bar ─────────────────────────────────────────── */}
-        {isAiMode && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "10px 16px 0",
-              flexShrink: 0,
-            }}
-          >
-            <span
-              style={{
-                fontSize: "13px",
-                color: "var(--accent)",
-                fontWeight: 600,
-                letterSpacing: "0.03em",
-              }}
-            >
-              OMNILAUNCHER AI MODE
-            </span>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", position: "relative" }}>
-              <button
-                onClick={() => setShowSessionPicker((v) => !v)}
-                title="Switch sessions"
-                style={{
-                  background: showSessionPicker ? "var(--surface-2)" : "var(--surface)",
-                  border: "none",
-                  borderRadius: "7px",
-                  padding: "4px 11px",
-                  color: "var(--text)",
-                  cursor: "pointer",
-                  fontSize: "12px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  maxWidth: "240px",
-                }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "var(--surface-2)")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = showSessionPicker
-                    ? "var(--surface-2)"
-                    : "var(--surface)")
-                }
-              >
-                <span style={{ fontSize: "10px" }}>💬</span>
-                <span
-                  style={{
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    maxWidth: "180px",
-                  }}
-                >
-                  {(() => {
-                    const cur = sessions.find((s) => s.id === currentSessionId);
-                    return cur && cur.title
-                      ? cur.title
-                      : currentSessionId
-                        ? `Session #${currentSessionId}`
-                        : "Session";
-                  })()}
-                </span>
-                <span style={{ fontSize: "9px", opacity: 0.6 }}>▾</span>
-              </button>
-              <button
-                onClick={handleNewConversation}
-                style={{
-                  background: "var(--surface)",
-                  border: "none",
-                  borderRadius: "7px",
-                  padding: "4px 11px",
-                  color: "var(--text)",
-                  cursor: "pointer",
-                  fontSize: "12px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "5px",
-                }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "var(--surface-2)")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "var(--surface)")
-                }
-              >
-                <span style={{ fontSize: "10px" }}>✦</span> New conversation
-              </button>
-
-              {showSessionPicker && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "calc(100% + 6px)",
-                    right: 0,
-                    width: "320px",
-                    maxHeight: "360px",
-                    overflowY: "auto",
-                    background: "var(--surface)",
-                    border: `1px solid var(--surface-2)`,
-                    borderRadius: "10px",
-                    boxShadow: "0 12px 32px rgba(0,0,0,0.35)",
-                    zIndex: 50,
-                    padding: "6px",
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {sessions.length === 0 && (
-                    <div
-                      style={{
-                        padding: "10px 12px",
-                        fontSize: "12px",
-                        color: "var(--sub)",
-                      }}
-                    >
-                      No sessions yet.
-                    </div>
-                  )}
-                  {sessions.map((s) => {
-                    const active = s.id === currentSessionId;
-                    return (
-                      <div
-                        key={s.id}
-                        onClick={() => handleSwitchSession(s.id)}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                          padding: "7px 9px",
-                          borderRadius: "7px",
-                          cursor: "pointer",
-                          background: active ? "var(--surface-2)" : "transparent",
-                        }}
-                        onMouseEnter={(e) =>
-                          (e.currentTarget.style.background = "var(--surface-2)")
-                        }
-                        onMouseLeave={(e) =>
-                          (e.currentTarget.style.background = active
-                            ? "var(--surface-2)"
-                            : "transparent")
-                        }
-                      >
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div
-                            style={{
-                              fontSize: "12.5px",
-                              color: "var(--text)",
-                              fontWeight: active ? 600 : 500,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {s.title || `Session #${s.id}`}
-                          </div>
-                          <div
-                            style={{
-                              fontSize: "10.5px",
-                              color: "var(--sub)",
-                              marginTop: "2px",
-                              display: "flex",
-                              gap: "8px",
-                            }}
-                          >
-                            <span>{s.message_count} msg</span>
-                            <span style={{ opacity: 0.6 }}>
-                              {(s.last_active_at || "").slice(0, 16)}
-                            </span>
-                          </div>
-                        </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteSession(s.id);
-                          }}
-                          title="Delete session"
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            color: "var(--sub)",
-                            cursor: "pointer",
-                            fontSize: "13px",
-                            padding: "2px 6px",
-                            borderRadius: "5px",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = "var(--danger)";
-                            e.currentTarget.style.color = "#fff";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = "transparent";
-                            e.currentTarget.style.color = "var(--sub)";
-                          }}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ── AI MODE: scrollable chat history ─────────────────────────── */}
-        {isAiMode && !showSkillManager && (
-          <div
-            ref={chatScrollRef}
-            style={{
-              flex: 1,
-              overflowY: "auto",
-              padding: "12px 16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "10px",
-              scrollbarWidth: "thin",
-              scrollbarColor: `var(--surface-2) transparent`,
-            }}
-          >
-            {conversationHistory.length === 0 && queuedPrompts.length === 0 && (
+        {!showSettings && (
+          <>
+            {/* ── AI MODE: top bar ─────────────────────────────────────────── */}
+            {isAiMode && (
               <div
                 style={{
-                  flex: 1,
                   display: "flex",
-                  flexDirection: "column",
                   alignItems: "center",
-                  justifyContent: "center",
-                  color: "var(--sub)",
-                  gap: "8px",
-                  paddingBottom: "24px",
-                  minHeight: "360px",
+                  justifyContent: "space-between",
+                  padding: "10px 16px 0",
+                  flexShrink: 0,
                 }}
               >
-                <span style={{ fontSize: "32px", opacity: 0.35 }}>✦</span>
                 <span
                   style={{
                     fontSize: "13px",
-                    textAlign: "center",
-                    maxWidth: "280px",
-                    lineHeight: 1.6,
+                    color: "var(--accent)",
+                    fontWeight: 600,
+                    letterSpacing: "0.03em",
                   }}
                 >
-                  Ask me anything — I can search the web, run calculations, and
-                  more.
+                  OMNILAUNCHER AI MODE
                 </span>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    position: "relative",
+                  }}
+                >
+                  <button
+                    onClick={() => setShowSessionPicker((v) => !v)}
+                    title="Switch sessions"
+                    style={{
+                      background: showSessionPicker
+                        ? "var(--surface-2)"
+                        : "var(--surface)",
+                      border: "none",
+                      borderRadius: "7px",
+                      padding: "4px 11px",
+                      color: "var(--text)",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      maxWidth: "240px",
+                    }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = "var(--surface-2)")
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = showSessionPicker
+                        ? "var(--surface-2)"
+                        : "var(--surface)")
+                    }
+                  >
+                    <span style={{ fontSize: "10px" }}>💬</span>
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        maxWidth: "180px",
+                      }}
+                    >
+                      {(() => {
+                        const cur = sessions.find(
+                          (s) => s.id === currentSessionId,
+                        );
+                        return cur && cur.title
+                          ? cur.title
+                          : currentSessionId
+                            ? `Session #${currentSessionId}`
+                            : "Session";
+                      })()}
+                    </span>
+                    <span style={{ fontSize: "9px", opacity: 0.6 }}>▾</span>
+                  </button>
+                  <button
+                    onClick={handleNewConversation}
+                    style={{
+                      background: "var(--surface)",
+                      border: "none",
+                      borderRadius: "7px",
+                      padding: "4px 11px",
+                      color: "var(--text)",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "5px",
+                    }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = "var(--surface-2)")
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = "var(--surface)")
+                    }
+                  >
+                    <span style={{ fontSize: "10px" }}>✦</span> New conversation
+                  </button>
+
+                  {showSessionPicker && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "calc(100% + 6px)",
+                        right: 0,
+                        width: "320px",
+                        maxHeight: "360px",
+                        overflowY: "auto",
+                        background: "var(--surface)",
+                        border: `1px solid var(--surface-2)`,
+                        borderRadius: "10px",
+                        boxShadow: "0 12px 32px rgba(0,0,0,0.35)",
+                        zIndex: 50,
+                        padding: "6px",
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {sessions.length === 0 && (
+                        <div
+                          style={{
+                            padding: "10px 12px",
+                            fontSize: "12px",
+                            color: "var(--sub)",
+                          }}
+                        >
+                          No sessions yet.
+                        </div>
+                      )}
+                      {sessions.map((s) => {
+                        const active = s.id === currentSessionId;
+                        return (
+                          <div
+                            key={s.id}
+                            onClick={() => handleSwitchSession(s.id)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                              padding: "7px 9px",
+                              borderRadius: "7px",
+                              cursor: "pointer",
+                              background: active
+                                ? "var(--surface-2)"
+                                : "transparent",
+                            }}
+                            onMouseEnter={(e) =>
+                              (e.currentTarget.style.background =
+                                "var(--surface-2)")
+                            }
+                            onMouseLeave={(e) =>
+                              (e.currentTarget.style.background = active
+                                ? "var(--surface-2)"
+                                : "transparent")
+                            }
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div
+                                style={{
+                                  fontSize: "12.5px",
+                                  color: "var(--text)",
+                                  fontWeight: active ? 600 : 500,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {s.title || `Session #${s.id}`}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: "10.5px",
+                                  color: "var(--sub)",
+                                  marginTop: "2px",
+                                  display: "flex",
+                                  gap: "8px",
+                                }}
+                              >
+                                <span>{s.message_count} msg</span>
+                                <span style={{ opacity: 0.6 }}>
+                                  {(s.last_active_at || "").slice(0, 16)}
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteSession(s.id);
+                              }}
+                              title="Delete session"
+                              style={{
+                                background: "transparent",
+                                border: "none",
+                                color: "var(--sub)",
+                                cursor: "pointer",
+                                fontSize: "13px",
+                                padding: "2px 6px",
+                                borderRadius: "5px",
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.background =
+                                  "var(--danger)";
+                                e.currentTarget.style.color = "#fff";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.background =
+                                  "transparent";
+                                e.currentTarget.style.color = "var(--sub)";
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            {conversationHistory.map((turn, i) => (
-              <ChatBubble key={i} turn={turn} />
-            ))}
+            {/* ── AI MODE: scrollable chat history ─────────────────────────── */}
+            {isAiMode && !showSkillManager && (
+              <div
+                ref={chatScrollRef}
+                style={{
+                  flex: 1,
+                  overflowY: "auto",
+                  padding: "12px 16px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "10px",
+                  scrollbarWidth: "thin",
+                  scrollbarColor: `var(--surface-2) transparent`,
+                }}
+              >
+                {conversationHistory.length === 0 &&
+                  queuedPrompts.length === 0 && (
+                    <div
+                      style={{
+                        flex: 1,
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "var(--sub)",
+                        gap: "8px",
+                        paddingBottom: "24px",
+                        minHeight: "360px",
+                      }}
+                    >
+                      <span style={{ fontSize: "32px", opacity: 0.35 }}>✦</span>
+                      <span
+                        style={{
+                          fontSize: "13px",
+                          textAlign: "center",
+                          maxWidth: "280px",
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        Ask me anything — I can search the web, run
+                        calculations, and more.
+                      </span>
+                    </div>
+                  )}
 
-            {queuedPrompts.map((prompt, i) => (
-              <QueuedPromptBubble
-                key={`queued-${i}-${prompt}`}
-                prompt={prompt}
-              />
-            ))}
-          </div>
-        )}
+                {conversationHistory.map((turn, i) => (
+                  <ChatBubble key={i} turn={turn} />
+                ))}
 
-        {/* ── PLUGIN MANAGER panel ─────────────────────────────────────── */}
-        {showPluginManager && !isAiMode && (
-          <Suspense fallback={null}>
-            <PluginManager
-              onClose={() => setShowPluginManager(false)}
-            />
-          </Suspense>
-        )}
+                {queuedPrompts.map((prompt, i) => (
+                  <QueuedPromptBubble
+                    key={`queued-${i}-${prompt}`}
+                    prompt={prompt}
+                  />
+                ))}
+              </div>
+            )}
 
-        {/* ── SKILL MANAGER panel ──────────────────────────────────────── */}
-        {showSkillManager && (
-          <Suspense fallback={null}>
-            <SkillManager
-              onClose={() => setShowSkillManager(false)}
-            />
-          </Suspense>
-        )}
+            {/* ── PLUGIN MANAGER panel ─────────────────────────────────────── */}
+            {showPluginManager && !isAiMode && (
+              <Suspense fallback={null}>
+                <PluginManager onClose={() => setShowPluginManager(false)} />
+              </Suspense>
+            )}
 
-        {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
-        {!isAiMode && !showPluginManager && !showSkillManager && (
-          <>
-            {query.trim() === "" && favoriteItems.length > 0 && (
+            {/* ── SKILL MANAGER panel ──────────────────────────────────────── */}
+            {showSkillManager && (
+              <Suspense fallback={null}>
+                <SkillManager onClose={() => setShowSkillManager(false)} />
+              </Suspense>
+            )}
+
+            {/* ── LAUNCHER MODE: results list ───────────────────────────────── */}
+            {!isAiMode && !showPluginManager && !showSkillManager && (
+              <>
+                {query.trim() === "" && favoriteItems.length > 0 && (
+                  <ResultList
+                    results={favoriteItems}
+                    query=""
+                    onExecute={handleExecute}
+                    groupTitle="★ Favorites"
+                    favorites={favorites}
+                    onToggleFavorite={handleToggleFavorite}
+                  />
+                )}
+                {results.length > 0 && (
+                  <div
+                    style={{
+                      margin: "0 12px 8px",
+                      background:
+                        "color-mix(in srgb, var(--surface) 60%, transparent)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "12px",
+                      overflow: "hidden",
+                      backdropFilter: "blur(10px)",
+                      WebkitBackdropFilter: "blur(10px)",
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                    }}
+                  >
+                    <ResultList
+                      results={results}
+                      query={query}
+                      onExecute={handleExecute}
+                      favorites={favorites}
+                      onToggleFavorite={handleToggleFavorite}
+                    />
+                  </div>
+                )}
+                {/* Loading skeleton — only when the user has typed something and
+                we're waiting on the backend (no stale results to show). */}
+                {results.length === 0 && searching && query.trim() !== "" && (
+                  <div
+                    className="results"
+                    aria-live="polite"
+                    aria-busy="true"
+                    style={{ padding: "8px 0" }}
+                  >
+                    {[0, 1, 2].map((i) => (
+                      <div
+                        key={i}
+                        className="result-item"
+                        style={{ cursor: "default", animation: "none" }}
+                      >
+                        <span
+                          className="skeleton"
+                          style={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: 6,
+                            flexShrink: 0,
+                          }}
+                        />
+                        <div className="result-item__content">
+                          <span
+                            className="skeleton"
+                            style={{
+                              display: "block",
+                              height: 12,
+                              width: `${70 - i * 12}%`,
+                              marginBottom: 6,
+                            }}
+                          />
+                          <span
+                            className="skeleton"
+                            style={{
+                              display: "block",
+                              height: 10,
+                              width: `${50 - i * 8}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* Error state — backend search call rejected. */}
+                {results.length === 0 &&
+                  !searching &&
+                  searchError &&
+                  query.trim() !== "" && (
+                    <div
+                      role="alert"
+                      style={{
+                        padding: "16px",
+                        fontSize: 13,
+                        color: "var(--error)",
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      <div>⚠ Search failed: {searchError}</div>
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontSize: 12,
+                          color: "var(--sub)",
+                        }}
+                      >
+                        Edit your query to try again.
+                      </div>
+                    </div>
+                  )}
+                {/* Empty state — query typed, search finished, nothing matched. */}
+                {results.length === 0 &&
+                  !searching &&
+                  !searchError &&
+                  query.trim() !== "" &&
+                  !isHelpQuery(query) &&
+                  !isHelpHintQuery(query) &&
+                  !isAiPrefix(query) &&
+                  !isConversationResetCommand(query) && (
+                    <div
+                      style={{
+                        padding: "16px",
+                        textAlign: "center",
+                        fontSize: 13,
+                        color: "var(--sub)",
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      <div style={{ fontSize: 22, marginBottom: 4 }}>🔍</div>
+                      No matches for{" "}
+                      <strong style={{ color: "var(--text)" }}>{query}</strong>
+                      <div style={{ marginTop: 6, fontSize: 12 }}>
+                        Press{" "}
+                        <kbd
+                          style={{
+                            fontFamily: "monospace",
+                            background:
+                              "color-mix(in srgb, var(--accent) 12%, transparent)",
+                            border: "1px solid var(--border)",
+                            borderRadius: 4,
+                            padding: "1px 6px",
+                            color: "var(--accent)",
+                          }}
+                        >
+                          Ctrl+K
+                        </kbd>{" "}
+                        to ask AI, or{" "}
+                        <kbd
+                          style={{
+                            fontFamily: "monospace",
+                            background:
+                              "color-mix(in srgb, var(--accent) 12%, transparent)",
+                            border: "1px solid var(--border)",
+                            borderRadius: 4,
+                            padding: "1px 6px",
+                            color: "var(--accent)",
+                          }}
+                        >
+                          ?
+                        </kbd>{" "}
+                        for help
+                      </div>
+                    </div>
+                  )}
+              </>
+            )}
+
+            {/* ── AI MODE: slash command suggestions overlay ────────────────── */}
+            {isAiMode && results.length > 0 && isSlashPrefix(query) && (
               <ResultList
-                results={favoriteItems}
-                query=""
+                results={results}
+                query={query}
                 onExecute={handleExecute}
-                groupTitle="★ Favorites"
                 favorites={favorites}
                 onToggleFavorite={handleToggleFavorite}
               />
             )}
-            {results.length > 0 && (
-              <div
-                style={{
-                  margin: "0 12px 8px",
-                  background: "color-mix(in srgb, var(--surface) 60%, transparent)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "12px",
-                  overflow: "hidden",
-                  backdropFilter: "blur(10px)",
-                  WebkitBackdropFilter: "blur(10px)",
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+
+            <div
+              style={{
+                flexShrink: 0,
+                paddingBottom: "2px",
+                paddingTop: launcherResultsMode ? "10px" : undefined,
+                paddingLeft: launcherResultsMode ? "12px" : undefined,
+                paddingRight: launcherResultsMode ? "12px" : undefined,
+                order: launcherResultsMode ? -1 : undefined,
+                transform: isCompactMode ? "translateY(-18px)" : undefined,
+              }}
+            >
+              {/* ── Search / input bar (always at bottom) ────────────────────── */}
+              <SearchBar
+                value={query}
+                onChange={handleQueryChange}
+                onSubmit={handleSubmit}
+                isAiMode={isAiMode}
+                loading={loading}
+                queueDepth={queueDepth}
+                onCancel={handleCancelAiRequest}
+                onSettingsClick={() => setShowSettings(true)}
+                resolvedTheme={resolvedTheme}
+                onThemeToggle={handleThemeToggle}
+                compact={isCompactMode}
+                inputRef={inputRef}
+                inputHistory={inputHistory}
+                historyIdx={historyIdx}
+                onHistoryNavigate={(idx, val) => {
+                  setHistoryIdx(idx);
+                  setQuery(val);
                 }}
-              >
-                <ResultList results={results} query={query} onExecute={handleExecute} favorites={favorites} onToggleFavorite={handleToggleFavorite} />
-              </div>
-            )}
-            {/* Loading skeleton — only when the user has typed something and
-                we're waiting on the backend (no stale results to show). */}
-            {results.length === 0 && searching && query.trim() !== "" && (
-              <div
-                className="results"
-                aria-live="polite"
-                aria-busy="true"
-                style={{ padding: "8px 0" }}
-              >
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className="result-item"
-                    style={{ cursor: "default", animation: "none" }}
-                  >
-                    <span
-                      className="skeleton"
-                      style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0 }}
-                    />
-                    <div className="result-item__content">
-                      <span
-                        className="skeleton"
-                        style={{
-                          display: "block",
-                          height: 12,
-                          width: `${70 - i * 12}%`,
-                          marginBottom: 6,
-                        }}
-                      />
-                      <span
-                        className="skeleton"
-                        style={{ display: "block", height: 10, width: `${50 - i * 8}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {/* Error state — backend search call rejected. */}
-            {results.length === 0 && !searching && searchError && query.trim() !== "" && (
-              <div
-                role="alert"
-                style={{
-                  padding: "16px",
-                  fontSize: 13,
-                  color: "var(--error)",
-                  lineHeight: 1.55,
-                }}
-              >
-                <div>⚠ Search failed: {searchError}</div>
-                <div style={{ marginTop: 6, fontSize: 12, color: "var(--sub)" }}>
-                  Edit your query to try again.
-                </div>
-              </div>
-            )}
-            {/* Empty state — query typed, search finished, nothing matched. */}
-            {results.length === 0 && !searching && !searchError && query.trim() !== "" &&
-              !isHelpQuery(query) && !isHelpHintQuery(query) &&
-              !isAiPrefix(query) && !isConversationResetCommand(query) && (
-              <div
-                style={{
-                  padding: "16px",
-                  textAlign: "center",
-                  fontSize: 13,
-                  color: "var(--sub)",
-                  lineHeight: 1.55,
-                }}
-              >
-                <div style={{ fontSize: 22, marginBottom: 4 }}>🔍</div>
-                No matches for <strong style={{ color: "var(--text)" }}>{query}</strong>
-                <div style={{ marginTop: 6, fontSize: 12 }}>
-                  Press <kbd style={{
-                    fontFamily: "monospace",
-                    background: "color-mix(in srgb, var(--accent) 12%, transparent)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    padding: "1px 6px",
-                    color: "var(--accent)",
-                  }}>Ctrl+K</kbd> to ask AI, or <kbd style={{
-                    fontFamily: "monospace",
-                    background: "color-mix(in srgb, var(--accent) 12%, transparent)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    padding: "1px 6px",
-                    color: "var(--accent)",
-                  }}>?</kbd> for help
-                </div>
-              </div>
-            )}
+              />
+            </div>
+
+            {/* ── Bottom-right corner resize grip (keeps window centered) ──── */}
+            <div
+              onPointerDown={handleResizeStart}
+              onDoubleClick={resetWindowSize}
+              title="Drag to resize · Double-click or Ctrl+0 to reset"
+              style={{
+                position: "fixed",
+                right: 0,
+                bottom: 0,
+                width: "18px",
+                height: "18px",
+                cursor: "nwse-resize",
+                zIndex: 9990,
+                background:
+                  "linear-gradient(135deg, transparent 0 45%, color-mix(in srgb, var(--text) 35%, transparent) 45% 55%, transparent 55% 70%, color-mix(in srgb, var(--text) 35%, transparent) 70% 80%, transparent 80%)",
+                opacity: 0.5,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.9")}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.5")}
+            />
           </>
         )}
-
-        {/* ── AI MODE: slash command suggestions overlay ────────────────── */}
-        {isAiMode && results.length > 0 && isSlashPrefix(query) && (
-          <ResultList
-            results={results}
-            query={query}
-            onExecute={handleExecute}
-            favorites={favorites}
-            onToggleFavorite={handleToggleFavorite}
-          />
-        )}
-
-        <div
-          style={{
-            flexShrink: 0,
-            paddingBottom: "2px",
-            paddingTop: launcherResultsMode ? "10px" : undefined,
-            paddingLeft: launcherResultsMode ? "12px" : undefined,
-            paddingRight: launcherResultsMode ? "12px" : undefined,
-            order: launcherResultsMode ? -1 : undefined,
-            transform: isCompactMode ? "translateY(-18px)" : undefined,
-          }}
-        >
-          {/* ── Search / input bar (always at bottom) ────────────────────── */}
-          <SearchBar
-            value={query}
-            onChange={handleQueryChange}
-            onSubmit={handleSubmit}
-            isAiMode={isAiMode}
-            loading={loading}
-            queueDepth={queueDepth}
-            onCancel={handleCancelAiRequest}
-            onSettingsClick={() => setShowSettings(true)}
-            resolvedTheme={resolvedTheme}
-            onThemeToggle={handleThemeToggle}
-            compact={isCompactMode}
-            inputRef={inputRef}
-            inputHistory={inputHistory}
-            historyIdx={historyIdx}
-            onHistoryNavigate={(idx, val) => {
-              setHistoryIdx(idx);
-              setQuery(val);
-            }}
-          />
-        </div>
-
-        {/* ── Bottom-right corner resize grip (keeps window centered) ──── */}
-        <div
-          onPointerDown={handleResizeStart}
-          onDoubleClick={resetWindowSize}
-          title="Drag to resize · Double-click or Ctrl+0 to reset"
-          style={{
-            position: "fixed",
-            right: 0,
-            bottom: 0,
-            width: "18px",
-            height: "18px",
-            cursor: "nwse-resize",
-            zIndex: 9990,
-            background:
-              "linear-gradient(135deg, transparent 0 45%, color-mix(in srgb, var(--text) 35%, transparent) 45% 55%, transparent 55% 70%, color-mix(in srgb, var(--text) 35%, transparent) 70% 80%, transparent 80%)",
-            opacity: 0.5,
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.9")}
-          onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.5")}
-        />
-        </>)}
       </div>
 
       {exportToast && (
-        <div style={{
-          position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)",
-          background: "var(--bg-elevated)", border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)",
-          borderRadius: 8, padding: "8px 16px",
-          fontSize: 12, color: "var(--accent)", fontWeight: 600,
-          zIndex: 9998, animation: "omni-fade-in 150ms ease both",
-          pointerEvents: "none",
-        }}>
+        <div
+          style={{
+            position: "fixed",
+            bottom: 16,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "var(--bg-elevated)",
+            border:
+              "1px solid color-mix(in srgb, var(--accent) 40%, transparent)",
+            borderRadius: 8,
+            padding: "8px 16px",
+            fontSize: 12,
+            color: "var(--accent)",
+            fontWeight: 600,
+            zIndex: 9998,
+            animation: "omni-fade-in 150ms ease both",
+            pointerEvents: "none",
+          }}
+        >
           ✓ Conversation copied to clipboard
         </div>
       )}
@@ -1634,9 +1724,13 @@ export default function App() {
         <div
           onClick={() => setShowCheatSheet(false)}
           style={{
-            position: "fixed", inset: 0, zIndex: 9999,
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
             background: "rgba(0,0,0,0.7)",
-            display: "flex", alignItems: "center", justifyContent: "center",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             animation: "omni-fade-in 150ms ease both",
           }}
         >
@@ -1651,7 +1745,15 @@ export default function App() {
               boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
             }}
           >
-            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 16, letterSpacing: "0.04em" }}>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                color: "var(--text)",
+                marginBottom: 16,
+                letterSpacing: "0.04em",
+              }}
+            >
               ⌨ Keyboard Shortcuts
             </div>
             {[
@@ -1672,18 +1774,48 @@ export default function App() {
               ["Right-click", "Context menu on result"],
               ["★ (hover)", "Favorite a result"],
             ].map(([key, desc]) => (
-              <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                <kbd style={{
-                  fontFamily: "monospace", fontSize: 11,
-                  background: "rgba(255,255,255,0.08)",
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  borderRadius: 5, padding: "2px 8px",
-                  color: "var(--accent)",
-                }}>{key}</kbd>
-                <span style={{ fontSize: 12, color: "var(--text-secondary)", marginLeft: 16 }}>{desc}</span>
+              <div
+                key={key}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "5px 0",
+                  borderBottom: "1px solid rgba(255,255,255,0.04)",
+                }}
+              >
+                <kbd
+                  style={{
+                    fontFamily: "monospace",
+                    fontSize: 11,
+                    background: "rgba(255,255,255,0.08)",
+                    border: "1px solid rgba(255,255,255,0.15)",
+                    borderRadius: 5,
+                    padding: "2px 8px",
+                    color: "var(--accent)",
+                  }}
+                >
+                  {key}
+                </kbd>
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: "var(--text-secondary)",
+                    marginLeft: 16,
+                  }}
+                >
+                  {desc}
+                </span>
               </div>
             ))}
-            <div style={{ fontSize: 11, color: "var(--sub)", marginTop: 12, textAlign: "center" }}>
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--sub)",
+                marginTop: 12,
+                textAlign: "center",
+              }}
+            >
               Press F1 or click outside to close
             </div>
           </div>
@@ -1813,7 +1945,9 @@ const ChatBubble = memo(function ChatBubble({
           lineHeight: "1.65",
           wordBreak: "break-word",
           // Assistant bubble gets a subtle accent left border
-          borderLeft: !isUser ? `3px solid color-mix(in srgb, var(--accent) 33%, transparent)` : "none",
+          borderLeft: !isUser
+            ? `3px solid color-mix(in srgb, var(--accent) 33%, transparent)`
+            : "none",
           boxShadow: isUser
             ? `0 2px 8px color-mix(in srgb, var(--user-bubble) 27%, transparent)`
             : "0 1px 4px rgba(0,0,0,0.15)",

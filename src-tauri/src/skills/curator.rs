@@ -30,18 +30,13 @@ pub const INTERVAL_SECS: u64 = 7 * 86_400;
 pub const STALE_AFTER_SECS: u64 = 30 * 86_400;
 pub const ARCHIVE_AFTER_SECS: u64 = 90 * 86_400;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillState {
+    #[default]
     Active,
     Stale,
     Archived,
-}
-
-impl Default for SkillState {
-    fn default() -> Self {
-        SkillState::Active
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

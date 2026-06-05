@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "frontend:dev": "vite",
+    "frontend:split": "vite --host 0.0.0.0",
     "tauri": "tauri"
   },
   "dependencies": {

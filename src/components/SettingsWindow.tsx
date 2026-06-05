@@ -1,16 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
-
-interface AppSettings {
-  ai_base_url: string;
-  ai_model: string;
-  ai_api_key: string;
-  theme: string;
-  hotkey: string;
-  max_results: number;
-  background_url: string;
-}
+import { invoke, emit } from "../lib/runtime";
+import type { AppSettings } from "../types/app";
 
 const BG_PRESETS = [
   { label: "None (solid color)", value: "" },
@@ -58,7 +48,9 @@ export default function SettingsWindow({ onClose }: Props = {}) {
   const currentBgUrl = settings?.background_url ?? "";
   const isCustomBg =
     currentBgUrl !== "" &&
-    !BG_PRESETS.some((p) => p.value === currentBgUrl && p.value !== "__custom__");
+    !BG_PRESETS.some(
+      (p) => p.value === currentBgUrl && p.value !== "__custom__",
+    );
   const bgSelectValue = isCustomBg ? "__custom__" : currentBgUrl;
 
   const [models, setModels] = useState<string[]>([]);
@@ -119,7 +111,10 @@ export default function SettingsWindow({ onClose }: Props = {}) {
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
         setShowModelDropdown(false);
       }
     };
@@ -242,9 +237,15 @@ export default function SettingsWindow({ onClose }: Props = {}) {
         </div>
 
         {/* Right content pane */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
           <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
-
             {activeTab === "ai" && (
               <div>
                 <div className="settings-section-header">AI Provider</div>
@@ -254,7 +255,11 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                     <input
                       className="omni-input"
                       value={settings.ai_base_url}
-                      onChange={(e) => setSettings((s) => s && { ...s, ai_base_url: e.target.value })}
+                      onChange={(e) =>
+                        setSettings(
+                          (s) => s && { ...s, ai_base_url: e.target.value },
+                        )
+                      }
                     />
                   </div>
                   <div style={rowStyle()}>
@@ -263,18 +268,34 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       className="omni-input"
                       type="password"
                       value={settings.ai_api_key}
-                      onChange={(e) => setSettings((s) => s && { ...s, ai_api_key: e.target.value })}
+                      onChange={(e) =>
+                        setSettings(
+                          (s) => s && { ...s, ai_api_key: e.target.value },
+                        )
+                      }
                       placeholder="(optional)"
                     />
                   </div>
-                  <div ref={dropdownRef} style={{ ...rowStyle(true), position: "relative" }}>
+                  <div
+                    ref={dropdownRef}
+                    style={{ ...rowStyle(true), position: "relative" }}
+                  >
                     <span style={rowLabelStyle}>
                       Model
                       {modelsLoading && (
-                        <span style={{ color: "var(--accent)" }}> (loading…)</span>
+                        <span style={{ color: "var(--accent)" }}>
+                          {" "}
+                          (loading…)
+                        </span>
                       )}
                       {modelsError && (
-                        <span style={{ color: "var(--error)" }} title={modelsError}> ⚠</span>
+                        <span
+                          style={{ color: "var(--error)" }}
+                          title={modelsError}
+                        >
+                          {" "}
+                          ⚠
+                        </span>
                       )}
                     </span>
                     <div style={{ position: "relative", width: "100%" }}>
@@ -284,7 +305,9 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                         value={modelFilter}
                         onChange={(e) => {
                           setModelFilter(e.target.value);
-                          setSettings((s) => s && { ...s, ai_model: e.target.value });
+                          setSettings(
+                            (s) => s && { ...s, ai_model: e.target.value },
+                          );
                           setShowModelDropdown(true);
                         }}
                         onFocus={() => setShowModelDropdown(true)}
@@ -306,11 +329,16 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                           })}
                         </div>
                       )}
-                      {showModelDropdown && !modelsLoading && filteredModels.length === 0 && models.length > 0 && (
-                        <div className="settings-popover">
-                          <div className="settings-popover__empty">No matches</div>
-                        </div>
-                      )}
+                      {showModelDropdown &&
+                        !modelsLoading &&
+                        filteredModels.length === 0 &&
+                        models.length > 0 && (
+                          <div className="settings-popover">
+                            <div className="settings-popover__empty">
+                              No matches
+                            </div>
+                          </div>
+                        )}
                     </div>
                   </div>
                 </div>
@@ -327,14 +355,20 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       className="omni-select"
                       style={{ cursor: "pointer" }}
                       value={settings.theme}
-                      onChange={(e) => setSettings((s) => s && { ...s, theme: e.target.value })}
+                      onChange={(e) =>
+                        setSettings((s) => s && { ...s, theme: e.target.value })
+                      }
                     >
                       <option value="system">System (Follow OS)</option>
                       <option value="dark">Dark (Battle Blue)</option>
                       <option value="light">Light (Catppuccin Latte)</option>
                     </select>
                   </div>
-                  <div style={rowStyle(!isCustomBg && bgSelectValue !== "__custom__")}>
+                  <div
+                    style={rowStyle(
+                      !isCustomBg && bgSelectValue !== "__custom__",
+                    )}
+                  >
                     <span style={rowLabelStyle}>Background</span>
                     <select
                       className="omni-select"
@@ -343,7 +377,9 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       onChange={(e) => {
                         const val = e.target.value;
                         if (val !== "__custom__") {
-                          setSettings((s) => s && { ...s, background_url: val });
+                          setSettings(
+                            (s) => s && { ...s, background_url: val },
+                          );
                         }
                       }}
                     >
@@ -360,7 +396,12 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       <input
                         className="omni-input"
                         value={currentBgUrl}
-                        onChange={(e) => setSettings((s) => s && { ...s, background_url: e.target.value })}
+                        onChange={(e) =>
+                          setSettings(
+                            (s) =>
+                              s && { ...s, background_url: e.target.value },
+                          )
+                        }
                         placeholder="https://example.com/image.jpg"
                       />
                     </div>
@@ -395,7 +436,13 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       max={50}
                       value={settings.max_results}
                       onChange={(e) =>
-                        setSettings((s) => s && { ...s, max_results: parseInt(e.target.value) || 10 })
+                        setSettings(
+                          (s) =>
+                            s && {
+                              ...s,
+                              max_results: parseInt(e.target.value) || 10,
+                            },
+                        )
                       }
                     />
                   </div>

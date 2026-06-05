@@ -8,7 +8,7 @@
  * (no async round-trip while typing). Until `loadLauncherConfig()` resolves, the
  * predicates use the same defaults the backend ships, so first paint is correct.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./lib/runtime";
 
 /** Result shape consumed by ResultList — mirrors the backend QueryResult. */
 export interface LauncherResult {
@@ -45,11 +45,36 @@ const DEFAULT_CONFIG: LauncherConfig = {
   reset_commands: ["/new", "/clear"],
   help_commands: ["/help", "/?", "help"],
   slash_commands: [
-    { name: "/plugins", shortcut: "/pm", description: "Open external plugin manager", usage: "/plugins" },
-    { name: "/skills", shortcut: null, description: "Open skill manager (install, view, delete skills)", usage: "/skills" },
-    { name: "/new", shortcut: null, description: "Start a new AI conversation", usage: "/new" },
-    { name: "/clear", shortcut: null, description: "Clear the current AI conversation", usage: "/clear" },
-    { name: "/help", shortcut: "/?", description: "Show all available commands", usage: "/help" },
+    {
+      name: "/plugins",
+      shortcut: "/pm",
+      description: "Open external plugin manager",
+      usage: "/plugins",
+    },
+    {
+      name: "/skills",
+      shortcut: null,
+      description: "Open skill manager (install, view, delete skills)",
+      usage: "/skills",
+    },
+    {
+      name: "/new",
+      shortcut: null,
+      description: "Start a new AI conversation",
+      usage: "/new",
+    },
+    {
+      name: "/clear",
+      shortcut: null,
+      description: "Clear the current AI conversation",
+      usage: "/clear",
+    },
+    {
+      name: "/help",
+      shortcut: "/?",
+      description: "Show all available commands",
+      usage: "/help",
+    },
   ],
 };
 
@@ -105,7 +130,11 @@ export function isHelpHintQuery(input: string): boolean {
 
 // ─── Catalog-derived result lists ────────────────────────────────────────────
 
-function toResult(sc: SlashCommand, idPrefix: string, actionType: string): LauncherResult {
+function toResult(
+  sc: SlashCommand,
+  idPrefix: string,
+  actionType: string,
+): LauncherResult {
   return {
     id: `${idPrefix}-${sc.name}`,
     title: sc.shortcut ? `${sc.name}  ${sc.shortcut}` : sc.name,
@@ -126,10 +155,15 @@ export function slashSuggestions(query: string): LauncherResult[] {
         sc.name.toLowerCase().startsWith(lower) ||
         (sc.shortcut && sc.shortcut.toLowerCase().startsWith(lower)),
     )
-    .map((sc) => ({ ...toResult(sc, "slash", "slash_complete"), action_data: `${sc.name} ` }));
+    .map((sc) => ({
+      ...toResult(sc, "slash", "slash_complete"),
+      action_data: `${sc.name} `,
+    }));
 }
 
 /** Full catalog rendered as the /help result list. */
 export function helpResults(): LauncherResult[] {
-  return config.slash_commands.map((sc) => toResult(sc, "help", "help_command"));
+  return config.slash_commands.map((sc) =>
+    toResult(sc, "help", "help_command"),
+  );
 }

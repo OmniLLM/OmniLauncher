@@ -9,6 +9,7 @@ pub mod path_config;
 pub mod plugins;
 pub mod settings;
 pub mod skills;
+pub mod split_server;
 
 pub use ai::router::{AiResponse, ConversationContext, Router};
 pub use plugins::{PluginManager, QueryResult};

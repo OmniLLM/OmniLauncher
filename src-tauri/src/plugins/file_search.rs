@@ -131,10 +131,9 @@ fn snapshot_index() -> IndexSnapshot {
             Ok(g) => g,
             Err(_) => return IndexSnapshot::Cold,
         };
-        match &*guard {
-            Some(idx) => Some((idx.paths.clone(), idx.built_at.elapsed())),
-            None => None,
-        }
+        (*guard)
+            .as_ref()
+            .map(|idx| (idx.paths.clone(), idx.built_at.elapsed()))
     };
     match snap {
         None => {

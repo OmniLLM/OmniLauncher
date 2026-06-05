@@ -5,7 +5,7 @@ use omnilauncher_lib::{
     },
     create_plugin_manager_builtin_only,
     live_server::{LiveResponse, LiveServer},
-    load_settings, save_settings, AppSettings, QueryResult, SkillInfo, SkillManager,
+    load_settings, save_settings, split_server, AppSettings, QueryResult, SkillInfo, SkillManager,
 };
 mod python_installer;
 use python_installer::{check_bundled_python, install_python_command};
@@ -1704,7 +1704,10 @@ async fn update_plugin_collection_all(
     git_repo_dirs: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<omnilauncher_lib::plugins::plugin_manager_cmd::CollectionOpResult, String> {
-    log::debug!("update_plugin_collection_all invoked ({} git repos)", git_repo_dirs.len());
+    log::debug!(
+        "update_plugin_collection_all invoked ({} git repos)",
+        git_repo_dirs.len()
+    );
     let result = omnilauncher_lib::plugins::plugin_manager_cmd::update_plugin_collection_all(
         collection_source,
         repo_dirs,
@@ -1722,7 +1725,10 @@ async fn remove_plugin_collection(
     repo_dirs: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<omnilauncher_lib::plugins::plugin_manager_cmd::CollectionOpResult, String> {
-    log::debug!("remove_plugin_collection invoked ({} repos)", repo_dirs.len());
+    log::debug!(
+        "remove_plugin_collection invoked ({} repos)",
+        repo_dirs.len()
+    );
     let result =
         omnilauncher_lib::plugins::plugin_manager_cmd::remove_plugin_collection(repo_dirs).await?;
     reload_external_plugins(&state).await;
@@ -2164,6 +2170,7 @@ async fn vision_analyze(
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let debug_enabled = args.iter().any(|arg| arg == "--debug");
+    let split_backend_only = args.iter().any(|arg| arg == "--split-backend");
     init_debug_logging(debug_enabled);
 
     if debug_enabled {
@@ -2178,6 +2185,48 @@ fn main() {
     .is_ok()
     {
         log::info!("Running without debug file logging");
+    }
+
+    if split_backend_only {
+        let settings = load_settings();
+        let ai_client = AiClient::new(
+            settings.ai_base_url.clone(),
+            settings.ai_api_key.clone(),
+            settings.ai_model.clone(),
+        );
+        let mut skill_manager = SkillManager::new();
+        skill_manager.load_all();
+
+        let mut conversation = ConversationContext::default();
+        let sid = omnilauncher_lib::db::conversation::current_session_id();
+        conversation.session_id = sid;
+        conversation.messages =
+            omnilauncher_lib::db::conversation::load_recent_for_session(sid, 20);
+
+        let state = split_server::SplitServerState {
+            plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
+            ai_client: Arc::new(Mutex::new(ai_client)),
+            settings: Arc::new(Mutex::new(settings.clone())),
+            conversation: Arc::new(Mutex::new(conversation)),
+            ai_in_flight: Arc::new(Semaphore::new(1)),
+            current_ai_task: Arc::new(Mutex::new(None)),
+            skill_manager: Arc::new(Mutex::new(skill_manager)),
+            event_bus: split_server::EventBus::default(),
+            latest_selection: Arc::new(Mutex::new(None)),
+        };
+
+        let host =
+            std::env::var("OMNILAUNCHER_SPLIT_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+        let port = std::env::var("OMNILAUNCHER_SPLIT_PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(1422);
+
+        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        rt.block_on(async move {
+            split_server::spawn_split_server(state, host, port).await;
+        });
+        return;
     }
 
     run();

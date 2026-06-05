@@ -2,7 +2,6 @@ use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Write `command` to a temp `.ps1` script and return its path. Using a script
 /// file with `-File` sidesteps PowerShell's `-Command` parser, which otherwise
