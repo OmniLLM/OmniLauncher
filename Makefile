@@ -1,4 +1,4 @@
-.PHONY: help dev dev-debug prod prod-debug restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle stop stop-running stop-dev-server status logs backend-dev frontend-dev split-check backend-prod frontend-prod serve-frontend-prod stop-split-backend
+.PHONY: help dev dev-debug prod prod-debug restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle stop stop-running stop-dev-server status logs backend-dev browser-dev split-check backend-prod frontend-prod serve-frontend-prod stop-split-backend
 
 SHELL := /usr/bin/env bash
 
@@ -20,51 +20,77 @@ FRONTEND_SERVE_PORT ?= 4173
 
 
 help:
-	@printf '%s\n' 'OmniLauncher - Makefile targets:'
-	@printf '%s\n' ''
-	@printf '%s\n' '  dev              Start integrated dev server with hot reload (Vite + Tauri)'
-	@printf '%s\n' '  dev-debug        Start integrated dev server with verbose file logging (--debug)'
-	@printf '%s\n' '  backend-dev      Run split backend API server only (for WSL/Linux)'
-	@printf '%s\n' '  backend-prod     Run split backend API server in release mode'
-	@printf '%s\n' '  frontend-dev     Run frontend only, targeting split backend via HTTP'
-	@printf '%s\n' '  frontend-prod    Build frontend for split production deployment'
-	@printf '%s\n' '  serve-frontend-prod Serve built split frontend locally'
-	@printf '%s\n' '  split-check      Verify frontend build + Rust checks for split workflow'
-	@printf '%s\n' '  prod             Build and start app in production mode (release)'
-	@printf '%s\n' '  prod-debug       Build and start app in production mode with --debug logging'
-	@printf '%s\n' '  restart          Restart production app (use REBUILD=1 to rebuild)'
-	@printf '%s\n' '  restart-rebuild  Rebuild release binary and restart production app'
-	@printf '%s\n' '  build            Build frontend + Tauri (debug)'
-	@printf '%s\n' '  build-frontend   Build frontend only (Vite)'
-	@printf '%s\n' '  release          Build release binary with optimizations'
-	@printf '%s\n' '  bundle           Create installer packages (MSI, NSIS, etc.)'
-	@printf '%s\n' '  install          Install frontend + Rust dependencies'
-	@printf '%s\n' '  install-deps     Alias for install'
-	@printf '%s\n' '  clean            Remove build artifacts'
-	@printf '%s\n' '  lint             Run Clippy (Rust linter)'
-	@printf '%s\n' '  format           Format Rust + frontend code'
-	@printf '%s\n' '  check            Run TypeScript + Rust type checks'
-	@printf '%s\n' '  test             Run all tests'
-	@printf '%s\n' '  status           Show app status (running, dev server, build)'
-	@printf '%s\n' '  logs             Tail the debug log file live'
+	$(info OmniLauncher - Makefile targets:)
+	$(info )
+	$(info   dev              Start the DESKTOP UI shell (Tauri); needs a backend (run 'make backend-dev'))
+	$(info   dev-debug        Start the desktop UI shell with verbose file logging (--debug))
+	$(info   backend-dev      Run the separated backend API server (hosts all logic/plugins/skills))
+	$(info   backend-prod     Run the separated backend API server in release mode)
+	$(info   browser-dev      Run the browser-only frontend against the backend (NOT the desktop app))
+	$(info   frontend-prod    Build frontend for split production deployment)
+	$(info   serve-frontend-prod Serve built split frontend locally)
+	$(info   split-check      Verify frontend build + Rust checks for split workflow)
+	$(info   prod             Build and start app in production mode (release))
+	$(info   prod-debug       Build and start app in production mode with --debug logging)
+	$(info   restart          Restart production app (use REBUILD=1 to rebuild))
+	$(info   restart-rebuild  Rebuild release binary and restart production app)
+	$(info   build            Build frontend + Tauri (debug))
+	$(info   build-frontend   Build frontend only (Vite))
+	$(info   release          Build release binary with optimizations)
+	$(info   bundle           Create installer packages (MSI, NSIS, etc.))
+	$(info   install          Install frontend + Rust dependencies)
+	$(info   install-deps     Alias for install)
+	$(info   clean            Remove build artifacts)
+	$(info   lint             Run Clippy (Rust linter))
+	$(info   format           Format Rust + frontend code)
+	$(info   check            Run TypeScript + Rust type checks)
+	$(info   test             Run all tests)
+	$(info   status           Show app status (running, dev server, build))
+	$(info   logs             Tail the debug log file live)
+	@:
 
 dev: stop-running stop-dev-server
-	$(TAURI_DEV)
+	@echo "Desktop UI shell - expects a backend at $(FRONTEND_BACKEND_URL) (start it with 'make backend-dev')."
+ifeq ($(PLATFORM),windows)
+	set "OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && $(TAURI_DEV)
+else
+	OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) $(TAURI_DEV)
+endif
 
 dev-debug: stop-running stop-dev-server
-	TAURI_DEBUG=1 $(TAURI_DEV) -- -- --debug
+ifeq ($(PLATFORM),windows)
+	set "TAURI_DEBUG=1" && set "OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && $(TAURI_DEV) -- -- --debug
+else
+	TAURI_DEBUG=1 OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) $(TAURI_DEV) -- -- --debug
+endif
 
 backend-dev:
+ifeq ($(PLATFORM),windows)
+	set "OMNILAUNCHER_SPLIT_HOST=$(SPLIT_HOST)" && set "OMNILAUNCHER_SPLIT_PORT=$(SPLIT_PORT)" && $(CARGO) run --manifest-path src-tauri/Cargo.toml -- --split-backend
+else
 	OMNILAUNCHER_SPLIT_HOST=$(SPLIT_HOST) OMNILAUNCHER_SPLIT_PORT=$(SPLIT_PORT) $(CARGO) run --manifest-path src-tauri/Cargo.toml -- --split-backend
+endif
 
 backend-prod:
+ifeq ($(PLATFORM),windows)
+	set "OMNILAUNCHER_SPLIT_HOST=$(SPLIT_HOST)" && set "OMNILAUNCHER_SPLIT_PORT=$(SPLIT_PORT)" && $(CARGO) run --release --manifest-path src-tauri/Cargo.toml -- --split-backend
+else
 	OMNILAUNCHER_SPLIT_HOST=$(SPLIT_HOST) OMNILAUNCHER_SPLIT_PORT=$(SPLIT_PORT) $(CARGO) run --release --manifest-path src-tauri/Cargo.toml -- --split-backend
+endif
 
-frontend-dev:
+browser-dev: stop-dev-server
+ifeq ($(PLATFORM),windows)
+	set "VITE_OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && $(NPM) run frontend:split
+else
 	VITE_OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) $(NPM) run frontend:split
+endif
 
 frontend-prod:
+ifeq ($(PLATFORM),windows)
+	set "VITE_OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && $(NPM) run build
+else
 	VITE_OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) $(NPM) run build
+endif
 
 serve-frontend-prod: frontend-prod
 	$(NPX) vite preview --host 0.0.0.0 --port $(FRONTEND_SERVE_PORT)
@@ -74,14 +100,14 @@ split-check: build-frontend
 
 prod: stop-running release
 ifeq ($(PLATFORM),windows)
-	@if [ -f src-tauri/target/release/omnilauncher.exe ]; then powershell -NoProfile -Command "Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe'"; else echo 'Release binary not found. Run make release first.'; exit 1; fi
+	@if exist src-tauri\target\release\omnilauncher.exe (powershell -NoProfile -Command "Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe'") else (echo Release binary not found. Run make release first. && exit /b 1)
 else
 	@if [ -f src-tauri/target/release/omnilauncher ]; then nohup src-tauri/target/release/omnilauncher >/dev/null 2>&1 &; else echo 'Release binary not found. Run make release first.'; exit 1; fi
 endif
 
 prod-debug: stop-running release
 ifeq ($(PLATFORM),windows)
-	@if [ -f src-tauri/target/release/omnilauncher.exe ]; then powershell -NoProfile -Command "Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' -ArgumentList '--debug'"; else echo 'Release binary not found. Run make release first.'; exit 1; fi
+	@if exist src-tauri\target\release\omnilauncher.exe (powershell -NoProfile -Command "Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' -ArgumentList '--debug'") else (echo Release binary not found. Run make release first. && exit /b 1)
 else
 	@if [ -f src-tauri/target/release/omnilauncher ]; then nohup src-tauri/target/release/omnilauncher --debug >/dev/null 2>&1 &; else echo 'Release binary not found. Run make release first.'; exit 1; fi
 endif
@@ -91,7 +117,7 @@ ifeq ($(REBUILD),1)
 	$(MAKE) prod
 else
 ifeq ($(PLATFORM),windows)
-	@if [ -f src-tauri/target/release/omnilauncher.exe ]; then powershell -NoProfile -Command "Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe'"; else echo 'Release binary not found. Run make prod or make restart REBUILD=1.'; exit 1; fi
+	@if exist src-tauri\target\release\omnilauncher.exe (powershell -NoProfile -Command "Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe'") else (echo Release binary not found. Run make prod or make restart REBUILD=1. && exit /b 1)
 else
 	@if [ -f src-tauri/target/release/omnilauncher ]; then nohup src-tauri/target/release/omnilauncher >/dev/null 2>&1 &; else echo 'Release binary not found. Run make prod or make restart REBUILD=1.'; exit 1; fi
 endif
@@ -119,7 +145,11 @@ install-deps:
 	cd src-tauri && $(CARGO) fetch
 
 clean: stop-running
+ifeq ($(PLATFORM),windows)
+	-powershell -NoProfile -Command "Remove-Item -Recurse -Force dist,node_modules,src-tauri/target -ErrorAction SilentlyContinue"
+else
 	rm -rf dist node_modules src-tauri/target
+endif
 
 lint:
 	cd src-tauri && $(CARGO) clippy -- -D warnings
