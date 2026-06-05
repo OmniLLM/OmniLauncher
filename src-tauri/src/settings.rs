@@ -97,6 +97,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub capture_selection_on_open: bool,
 
+    /// Base URL of the separated backend the desktop shell connects to.
+    /// Empty = use the `OMNILAUNCHER_BACKEND_URL` env override or the built-in
+    /// default (`http://127.0.0.1:1422`).
+    #[serde(default)]
+    pub backend_url: String,
+
     // ── legacy single-server fields (migrated on first load) ──────────────────
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub github_token: String,
@@ -119,6 +125,7 @@ impl Default for AppSettings {
             plugin_dirs: vec![],
             github_servers: vec![],
             capture_selection_on_open: false,
+            backend_url: String::new(),
             github_token: String::new(),
             github_server: String::new(),
             github_orgs: vec![],

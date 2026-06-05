@@ -82,6 +82,22 @@ fn debug_log_path() -> PathBuf {
         .join("omnilauncher.log")
 }
 
+/// Resolve the backend URL for the desktop shell:
+/// 1. `OMNILAUNCHER_BACKEND_URL` env override
+/// 2. `settings.backend_url`
+/// 3. default `http://127.0.0.1:1422`
+fn resolve_backend_url(settings: &AppSettings) -> String {
+    if let Ok(url) = std::env::var("OMNILAUNCHER_BACKEND_URL") {
+        if !url.trim().is_empty() {
+            return url.trim().to_string();
+        }
+    }
+    if !settings.backend_url.trim().is_empty() {
+        return settings.backend_url.trim().to_string();
+    }
+    "http://127.0.0.1:1422".to_string()
+}
+
 fn init_debug_logging(enable_debug: bool) {
     if !enable_debug {
         return;
