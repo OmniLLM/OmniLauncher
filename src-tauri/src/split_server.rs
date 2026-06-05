@@ -623,6 +623,17 @@ async fn handle_request(
                 Err(error) => error,
             }
         }
+        // ─── Vision ─────────────────────────────────────────────────────────
+        ("POST", "/api/vision/analyze") => {
+            let body = read_body(request).await;
+            match parse_json::<VisionRequest>(&body) {
+                Ok(input) => match vision_analyze_backend(&input.prompt, &input.image_base64, state).await {
+                    Ok(text) => json_response(&text),
+                    Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                },
+                Err(error) => error,
+            }
+        }
         _ => LiveResponse::text("404 Not Found", "Not Found".to_string()),
     }
 }
@@ -651,6 +662,79 @@ fn encode_response(response: LiveResponse) -> Vec<u8> {
         response.body.len()
     );
     [header.into_bytes(), response.body.into_bytes()].concat()
+}
+
+/// Vision analyze — AI half. The screenshot is captured locally by the desktop
+/// shell (only it has a screen) and handed in as base64; this performs the
+/// OpenAI-style chat-completion call with the image and returns the text.
+pub async fn vision_analyze_backend(
+    prompt: &str,
+    image_base64: &str,
+    state: &SplitServerState,
+) -> Result<String, String> {
+    let (base_url, api_key, model) = {
+        let settings = state.settings.lock().await;
+        (
+            settings.ai_base_url.trim_end_matches('/').to_string(),
+            settings.ai_api_key.clone(),
+            settings.ai_model.clone(),
+        )
+    };
+
+    let user_prompt = if prompt.trim().is_empty() {
+        "Please describe what you see in this image.".to_string()
+    } else {
+        prompt.to_string()
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:image/png;base64,{}", image_base64)
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": user_prompt
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 1024
+    });
+
+    let url = format!("{}/v1/chat/completions", base_url);
+    let mut req = client.post(&url).json(&payload);
+    if !api_key.is_empty() {
+        req = req.bearer_auth(&api_key);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("API request failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("API error {}: {}", status, text));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("(no response)")
+        .to_string())
 }
 
 pub async fn search_backend(query: String, state: &SplitServerState) -> Vec<QueryResult> {
