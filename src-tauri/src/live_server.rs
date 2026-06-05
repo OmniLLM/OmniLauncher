@@ -6,6 +6,7 @@ use tokio::{
     sync::RwLock,
 };
 
+#[derive(Debug)]
 pub struct LiveResponse {
     pub status: &'static str,
     pub content_type: &'static str,

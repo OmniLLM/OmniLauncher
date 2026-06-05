@@ -1,9 +1,34 @@
-.PHONY: help dev dev-debug prod prod-debug restart restart-rebuild build build-frontend install install-deps clean lint format check test release bundle status logs \
-        backend-dev backend-prod backend-build stop-backend \
-        frontend-dev frontend-dev-debug frontend-prod frontend-prod-debug frontend-build stop-frontend \
-        browser-dev frontend-prod-web serve-frontend-prod split-check stop stop-running stop-dev-server stop-split-backend
+.PHONY: help \
+        build build-frontend build-backend \
+        stop stop-frontend stop-backend stop-all \
+        start start-frontend start-backend \
+        restart restart-frontend restart-backend \
+        clean clean-frontend clean-backend \
+        remove-binary prepare-binaries \
+        logs status \
+        prod-debug prod-debug-backend prod-debug-frontend \
+        test-frontend test-rust test-backend test-health test-smoke test-e2e test-unit test-all \
+        start-wsl-backend restart-wsl-backend
 
-SHELL := /usr/bin/env bash
+# -- Configuration ------------------------------------------------------------
+
+NPM          ?= npm
+NPX          ?= npx
+CARGO        ?= cargo
+SPLIT_HOST   ?= 0.0.0.0
+SPLIT_PORT   ?= 1422
+BACKEND_URL  ?= http://127.0.0.1:$(SPLIT_PORT)
+
+# Backend mode: local | wsl | remote
+#   local  - build and run backend on this machine (default)
+#   wsl    - build and run backend inside WSL
+#   remote - connect to an already-running backend at $(BACKEND_URL)
+BACKEND_MODE ?= local
+
+# Set REBUILD=1 to force a rebuild before starting:
+#   make start-backend              # start existing binary
+#   make start-backend REBUILD=1    # rebuild, then start
+REBUILD ?= 0
 
 ifeq ($(OS),Windows_NT)
   PLATFORM := windows
@@ -11,236 +36,218 @@ else
   PLATFORM := unix
 endif
 
-NPM ?= npm
-NPX ?= npx
-CARGO ?= cargo
-TAURI_DEV ?= $(NPX) tauri dev
-TAURI_BUILD ?= $(NPX) tauri build
-SPLIT_HOST ?= 0.0.0.0
-SPLIT_PORT ?= 1422
-FRONTEND_BACKEND_URL ?= http://127.0.0.1:$(SPLIT_PORT)
-FRONTEND_SERVE_PORT ?= 4173
+OPS = powershell -NoProfile -File scripts/ops.ps1
 
+# -- Help ---------------------------------------------------------------------
 
 help:
-	$(info OmniLauncher - Makefile targets:)
+	$(info OmniLauncher - Makefile targets)
 	$(info )
-	$(info   backend-dev       Start backend API server in dev/debug mode)
-	$(info   backend-prod      Start backend API server in release mode)
-	$(info   backend-build     Build backend release binary)
-	$(info   stop-backend      Stop process listening on backend port $(SPLIT_PORT))
+	$(info [Build])
+	$(info   build-frontend    Build frontend release binary and role copies)
+	$(info   build-backend     Build backend release binary and role copies)
+	$(info   build             Build both)
 	$(info )
-	$(info   frontend-dev      Start desktop frontend app connected to $(FRONTEND_BACKEND_URL))
-	$(info   frontend-dev-debug Start desktop frontend app with verbose file logging (--debug))
-	$(info   frontend-prod     Build and start release desktop frontend app connected to $(FRONTEND_BACKEND_URL))
-	$(info   frontend-prod-debug Build and start release desktop frontend app with --debug logging)
-	$(info   frontend-build    Build desktop frontend app release binary)
-	$(info   stop-frontend     Stop desktop frontend app process)
+	$(info [Stop])
+	$(info   stop-frontend     Stop frontend process)
+	$(info   stop-backend      Stop backend process)
+	$(info   stop-all          Stop both)
 	$(info )
-	$(info   browser-dev       Run browser-only frontend against the backend (NOT the desktop app))
-	$(info   frontend-prod-web Build web frontend for split production deployment)
-	$(info   serve-frontend-prod Serve built split web frontend locally)
-	$(info   split-check       Verify frontend build + Rust checks for split workflow)
+	$(info [Start] use REBUILD=1 to rebuild first)
+	$(info   start-frontend    Start frontend release binary)
+	$(info   start-backend     Start backend release binary)
+	$(info   start             Start both)
 	$(info )
-	$(info   dev              Alias for frontend-dev)
-	$(info   dev-debug        Alias for frontend-dev-debug)
-	$(info   prod             Alias for frontend-prod)
-	$(info   prod-debug       Alias for frontend-prod-debug)
-	$(info   build            Alias for frontend-build)
-	$(info   release          Alias for frontend-build)
-	$(info   bundle           Create installer packages (MSI, NSIS, etc.))
-	$(info   restart          Restart production desktop frontend app (use REBUILD=1 to rebuild))
-	$(info   restart-rebuild  Rebuild release binary and restart production desktop frontend app)
-	$(info   stop             Stop frontend app and backend)
+	$(info [Restart] stop + remove binary + rebuild + start)
+	$(info   restart-frontend  Rebuild and restart frontend)
+	$(info   restart-backend   Rebuild and restart backend)
+	$(info   restart           Rebuild and restart both)
 	$(info )
-	$(info   install          Install frontend + Rust dependencies)
-	$(info   install-deps     Alias for install)
-	$(info   clean            Remove build artifacts)
-	$(info   lint             Run Clippy (Rust linter))
-	$(info   format           Format Rust + frontend code)
-	$(info   check            Run TypeScript + Rust type checks)
-	$(info   test             Run all tests)
-	$(info   status           Show app status (running, dev server, build))
-	$(info   logs             Tail the debug log file live)
+	$(info [Backend modes])
+	$(info   start-wsl-backend    Build and run backend inside WSL)
+	$(info   restart-wsl-backend  Rebuild and restart backend inside WSL)
+	$(info   prod-debug-backend   Start backend with --debug logging)
+	$(info   prod-debug-frontend  Start frontend with --debug logging)
+	$(info   prod-debug           Start both with --debug logging)
+	$(info )
+	$(info   Variables:)
+	$(info     BACKEND_MODE=local|wsl|remote  default: local)
+	$(info     BACKEND_URL=<url>              backend API URL)
+	$(info     SPLIT_HOST=<host>              backend bind host)
+	$(info     SPLIT_PORT=<port>              backend bind port)
+	$(info     REBUILD=1                      rebuild before start)
+	$(info )
+	$(info [Test])
+	$(info   test-frontend     Run frontend unit tests via vitest)
+	$(info   test-rust         Run backend unit tests via cargo test)
+	$(info   test-unit         Run both frontend + backend unit tests)
+	$(info   test-backend      Check if backend is responding on $(BACKEND_URL))
+	$(info   test-health       Alias for test-backend)
+	$(info   test-smoke        Run expanded smoke tests against running backend)
+	$(info   test-e2e          Run full E2E test mimicking frontend user flow)
+	$(info   test-all          Run all tests: unit + smoke + e2e)
+	$(info )
+	$(info [Clean])
+	$(info   clean             Remove all build artifacts)
+	$(info   clean-frontend    Remove frontend build artifacts dist/)
+	$(info   clean-backend     Remove backend build artifacts src-tauri/target/)
+	$(info   remove-binary     Remove release and role binaries)
+	$(info   prepare-binaries  Create frontend/backend role binary names)
+	$(info )
+	$(info [Logs])
+	$(info   logs              Tail the debug log file)
+	$(info )
+	$(info [Status])
+	$(info   status            Show process, port, and health status)
 	@:
 
-# ── Desktop frontend app ─────────────────────────────────────────────────────
-
-frontend-dev: stop-frontend stop-dev-server
-	@echo "Desktop frontend app - connects to backend at $(FRONTEND_BACKEND_URL)."
-ifeq ($(PLATFORM),windows)
-	set "OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && $(TAURI_DEV)
-else
-	OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) $(TAURI_DEV)
-endif
-
-frontend-dev-debug: stop-frontend stop-dev-server
-	@echo "Desktop frontend app (debug) - connects to backend at $(FRONTEND_BACKEND_URL)."
-ifeq ($(PLATFORM),windows)
-	set "TAURI_DEBUG=1" && set "OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && $(TAURI_DEV) -- -- --debug
-else
-	TAURI_DEBUG=1 OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) $(TAURI_DEV) -- -- --debug
-endif
-
-frontend-build: stop-frontend build-frontend
-	$(TAURI_BUILD) --no-bundle
-
-frontend-prod: stop-frontend frontend-build
-ifeq ($(PLATFORM),windows)
-	@if exist src-tauri\target\release\omnilauncher.exe (set "OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && powershell -NoProfile -Command "Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' -WorkingDirectory (Get-Location)") else (echo Release binary not found. Run make frontend-build first. && exit /b 1)
-else
-	@if [ -f src-tauri/target/release/omnilauncher ]; then OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) nohup src-tauri/target/release/omnilauncher >/dev/null 2>&1 & else echo 'Release binary not found. Run make frontend-build first.'; exit 1; fi
-endif
-
-frontend-prod-debug: stop-frontend frontend-build
-ifeq ($(PLATFORM),windows)
-	@if exist src-tauri\target\release\omnilauncher.exe (set "OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && powershell -NoProfile -Command "Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' -ArgumentList '--debug' -WorkingDirectory (Get-Location)") else (echo Release binary not found. Run make frontend-build first. && exit /b 1)
-else
-	@if [ -f src-tauri/target/release/omnilauncher ]; then OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) nohup src-tauri/target/release/omnilauncher --debug >/dev/null 2>&1 & else echo 'Release binary not found. Run make frontend-build first.'; exit 1; fi
-endif
-
-stop-frontend:
-ifeq ($(PLATFORM),windows)
-	-powershell -NoProfile -Command "Get-Process omnilauncher -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
-else
-	-pkill -x omnilauncher >/dev/null 2>&1 || true
-endif
-
-# Backwards-compatible desktop frontend aliases.
-dev: frontend-dev
-
-dev-debug: frontend-dev-debug
-
-prod: frontend-prod
-
-prod-debug: frontend-prod-debug
-
-build: frontend-build
-
-release: frontend-build
-
-restart: stop-frontend
-ifeq ($(REBUILD),1)
-	$(MAKE) frontend-prod
-else
-ifeq ($(PLATFORM),windows)
-	@if exist src-tauri\target\release\omnilauncher.exe (set "OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && powershell -NoProfile -Command "Start-Process -FilePath 'src-tauri/target/release/omnilauncher.exe' -WorkingDirectory (Get-Location)") else (echo Release binary not found. Run make frontend-prod or make restart REBUILD=1. && exit /b 1)
-else
-	@if [ -f src-tauri/target/release/omnilauncher ]; then OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) nohup src-tauri/target/release/omnilauncher >/dev/null 2>&1 & else echo 'Release binary not found. Run make frontend-prod or make restart REBUILD=1.'; exit 1; fi
-endif
-endif
-
-restart-rebuild:
-	$(MAKE) restart REBUILD=1
-
-# ── Backend API server ────────────────────────────────────────────────────────
-
-backend-dev:
-ifeq ($(PLATFORM),windows)
-	set "OMNILAUNCHER_SPLIT_HOST=$(SPLIT_HOST)" && set "OMNILAUNCHER_SPLIT_PORT=$(SPLIT_PORT)" && $(CARGO) run --manifest-path src-tauri/Cargo.toml -- --split-backend
-else
-	OMNILAUNCHER_SPLIT_HOST=$(SPLIT_HOST) OMNILAUNCHER_SPLIT_PORT=$(SPLIT_PORT) $(CARGO) run --manifest-path src-tauri/Cargo.toml -- --split-backend
-endif
-
-backend-prod:
-ifeq ($(PLATFORM),windows)
-	set "OMNILAUNCHER_SPLIT_HOST=$(SPLIT_HOST)" && set "OMNILAUNCHER_SPLIT_PORT=$(SPLIT_PORT)" && $(CARGO) run --release --manifest-path src-tauri/Cargo.toml -- --split-backend
-else
-	OMNILAUNCHER_SPLIT_HOST=$(SPLIT_HOST) OMNILAUNCHER_SPLIT_PORT=$(SPLIT_PORT) $(CARGO) run --release --manifest-path src-tauri/Cargo.toml -- --split-backend
-endif
-
-backend-build:
-	cd src-tauri && $(CARGO) build --release
-
-stop-backend:
-ifeq ($(PLATFORM),windows)
-	-powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort $(SPLIT_PORT) -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { Stop-Process -Id ($$_.OwningProcess) -Force -ErrorAction SilentlyContinue }"
-else
-	-lsof -ti:$(SPLIT_PORT) | xargs -r kill -9 >/dev/null 2>&1 || true
-endif
-
-# Backwards-compatible backend stop alias.
-stop-split-backend: stop-backend
-
-# ── Browser/web frontend ──────────────────────────────────────────────────────
-
-browser-dev: stop-dev-server
-ifeq ($(PLATFORM),windows)
-	set "VITE_OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && $(NPM) run frontend:split
-else
-	VITE_OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) $(NPM) run frontend:split
-endif
-
-frontend-prod-web:
-ifeq ($(PLATFORM),windows)
-	set "VITE_OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL)" && $(NPM) run build
-else
-	VITE_OMNILAUNCHER_BACKEND_URL=$(FRONTEND_BACKEND_URL) $(NPM) run build
-endif
-
-serve-frontend-prod: frontend-prod-web
-	$(NPX) vite preview --host 0.0.0.0 --port $(FRONTEND_SERVE_PORT)
-
-split-check: build-frontend
-	cd src-tauri && $(CARGO) check
-
-# ── Shared maintenance ────────────────────────────────────────────────────────
+# -- Build --------------------------------------------------------------------
 
 build-frontend:
 	$(NPM) run build
+	$(NPX) tauri build --no-bundle
+	$(OPS) prepare-binaries
 
-bundle: stop-frontend build-frontend
-	$(TAURI_BUILD)
+build-backend:
+	cd src-tauri && $(CARGO) build --release
+	$(OPS) prepare-binaries
 
-install: install-deps
+build: build-frontend build-backend
 
-install-deps:
-	$(NPM) install
-	cd src-tauri && $(CARGO) fetch
+# -- Stop ---------------------------------------------------------------------
 
-clean: stop-frontend
-ifeq ($(PLATFORM),windows)
-	-powershell -NoProfile -Command "Remove-Item -Recurse -Force dist,node_modules,src-tauri/target -ErrorAction SilentlyContinue"
-else
-	rm -rf dist node_modules src-tauri/target
+stop-frontend:
+	$(OPS) stop-frontend
+
+stop-backend:
+	$(OPS) stop-backend
+
+stop-all: stop-frontend stop-backend
+
+# -- Remove binary ------------------------------------------------------------
+
+remove-binary:
+	$(OPS) remove-binary
+
+prepare-binaries:
+	$(OPS) prepare-binaries
+
+# -- Start --------------------------------------------------------------------
+
+# Conditional rebuild helper: when REBUILD=1, remove binary and rebuild
+# before the actual start step. Default REBUILD=0 starts the existing binary.
+maybe-rebuild-backend:
+ifeq ($(REBUILD),1)
+	$(OPS) remove-binary
+	cd src-tauri && $(CARGO) build --release
+	$(OPS) prepare-binaries
 endif
 
-lint:
-	cd src-tauri && $(CARGO) clippy -- -D warnings
-
-format:
-	$(NPX) prettier --write "src/**/*.{ts,tsx,css,json}"
-	cd src-tauri && $(CARGO) fmt
-
-check:
-	$(NPX) tsc --noEmit
-	cd src-tauri && $(CARGO) check
-
-test: stop-frontend
-	cd src-tauri && $(CARGO) test -- --test-threads=1
-
-stop: stop-frontend stop-backend
-
-# Backwards-compatible frontend stop alias.
-stop-running: stop-frontend
-
-stop-dev-server:
-ifeq ($(PLATFORM),windows)
-	-powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { Stop-Process -Id ($$_.OwningProcess) -Force -ErrorAction SilentlyContinue }"
-else
-	-lsof -ti:1420 | xargs -r kill -9 >/dev/null 2>&1 || true
+maybe-rebuild-frontend:
+ifeq ($(REBUILD),1)
+	$(OPS) remove-binary
+	$(NPM) run build
+	$(NPX) tauri build --no-bundle
+	$(OPS) prepare-binaries
 endif
 
-status:
-ifeq ($(PLATFORM),windows)
-	@pwsh -NoProfile -File scripts/status.ps1
-else
-	@bash scripts/status.sh
-endif
+# -- Frontend start -----------------------------------------------------------
+
+start-frontend: stop-frontend maybe-rebuild-frontend
+	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)"
+
+# -- Backend start local ------------------------------------------------------
+
+start-backend: stop-backend maybe-rebuild-backend
+	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
+
+start: start-backend start-frontend
+
+# -- WSL backend --------------------------------------------------------------
+# Builds and runs the backend inside WSL. The frontend on Windows connects
+# via BACKEND_URL. The default http://127.0.0.1:1422 works with WSL2 forwarding.
+
+start-wsl-backend:
+	$(OPS) start-wsl-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)" --BackendUrl "$(BACKEND_URL)"
+
+restart-wsl-backend:
+	$(OPS) restart-wsl-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
+
+# -- Restart ------------------------------------------------------------------
+
+restart-frontend:
+	$(OPS) stop-frontend
+	$(OPS) remove-binary
+	$(NPM) run build
+	$(NPX) tauri build --no-bundle
+	$(OPS) prepare-binaries
+	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)"
+
+restart-backend:
+	$(OPS) stop-backend
+	$(OPS) remove-binary
+	cd src-tauri && $(CARGO) build --release
+	$(OPS) prepare-binaries
+	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
+
+restart:
+	$(OPS) stop-all
+	$(OPS) remove-binary
+	$(NPM) run build
+	$(NPX) tauri build --no-bundle
+	$(OPS) prepare-binaries
+	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
+	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)"
+
+# -- Clean --------------------------------------------------------------------
+
+clean-frontend:
+	$(OPS) clean-frontend
+
+clean-backend:
+	$(OPS) clean-backend
+
+clean: clean-frontend clean-backend
+
+# -- Logs ---------------------------------------------------------------------
 
 logs:
-ifeq ($(PLATFORM),windows)
-	@pwsh -NoProfile -File scripts/logs.ps1
-else
-	@bash scripts/logs.sh
-endif
+	pwsh -NoProfile -File scripts/logs.ps1
+
+# -- Status -------------------------------------------------------------------
+
+status:
+	$(OPS) status --BackendUrl "$(BACKEND_URL)" --SplitPort "$(SPLIT_PORT)"
+
+# -- Debug release binaries with --debug --------------------------------------
+
+prod-debug-backend: stop-backend maybe-rebuild-backend
+	$(OPS) prod-debug-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
+
+prod-debug-frontend: stop-frontend maybe-rebuild-frontend
+	$(OPS) prod-debug-frontend --BackendUrl "$(BACKEND_URL)"
+
+prod-debug: prod-debug-backend prod-debug-frontend
+
+# -- Test ---------------------------------------------------------------------
+
+test-frontend:
+	$(NPM) test
+
+test-rust:
+	cd src-tauri && $(CARGO) test
+
+test-backend:
+	$(OPS) test-backend --BackendUrl "$(BACKEND_URL)"
+
+test-health: test-backend
+
+test-smoke:
+	pwsh -NoProfile -File scripts/smoke-endpoints.ps1 -BaseUrl "$(BACKEND_URL)"
+
+test-e2e:
+	pwsh -NoProfile -File scripts/test-e2e.ps1 -BaseUrl "$(BACKEND_URL)"
+
+test-unit: test-frontend test-rust
+
+test-all: test-unit test-smoke test-e2e

@@ -89,12 +89,16 @@ fn debug_log_path() -> PathBuf {
 fn resolve_backend_url(settings: &AppSettings) -> String {
     if let Ok(url) = std::env::var("OMNILAUNCHER_BACKEND_URL") {
         if !url.trim().is_empty() {
+            log::info!("backend URL resolved from OMNILAUNCHER_BACKEND_URL={}", url.trim());
             return url.trim().to_string();
         }
+        log::debug!("OMNILAUNCHER_BACKEND_URL is set but empty; falling back");
     }
     if !settings.backend_url.trim().is_empty() {
+        log::info!("backend URL resolved from settings.backend_url={}", settings.backend_url.trim());
         return settings.backend_url.trim().to_string();
     }
+    log::info!("backend URL resolved from built-in default http://127.0.0.1:1422");
     "http://127.0.0.1:1422".to_string()
 }
 
@@ -515,6 +519,7 @@ pub fn run() {
             propose_skill_consolidation,
             apply_skill_consolidation,
             set_window_geometry,
+            save_window_position,
             install_plugin,
             update_plugin,
             update_plugin_collection,
@@ -524,8 +529,8 @@ pub fn run() {
             list_plugins,
             remove_plugin,
             capture_vision_screenshot,
-            save_window_position,
             set_window_size_centered,
+            frontend_log,
             list_plugin_runtime_dependencies,
             install_plugin_runtime_dependency,
             omnilauncher_lib::python_installer::install_python_command,
@@ -550,6 +555,18 @@ async fn save_window_position(x: i32, y: i32) -> Result<(), String> {
     let path = window_pos_path();
     let json = format!("{{\"x\":{},\"y\":{}}}", x, y);
     std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn frontend_log(level: String, message: String) -> Result<(), String> {
+    match level.as_str() {
+        "error" => log::error!("[frontend] {message}"),
+        "warn" => log::warn!("[frontend] {message}"),
+        "debug" => log::debug!("[frontend] {message}"),
+        "trace" => log::trace!("[frontend] {message}"),
+        _ => log::info!("[frontend] {message}"),
+    }
+    Ok(())
 }
 
 /// Resize the window to an explicit logical size while keeping it centered on

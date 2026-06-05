@@ -1,5 +1,86 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { isWindowLocalCommand, invoke } from "./runtime";
+import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
+import { isWindowLocalCommand, invoke, getBackendMode, listen, emit } from "./runtime";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Set up a mock backend URL and fetch spy. Returns the captured request info. */
+function mockBackend(): { calls: { url: string; method: string; body?: string }[] } {
+  const state = { calls: [] as { url: string; method: string; body?: string }[] };
+  (globalThis as any).window = {
+    __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  (globalThis as any).fetch = async (url: string, init?: RequestInit) => {
+    state.calls.push({
+      url: String(url),
+      method: init?.method ?? "GET",
+      body: typeof init?.body === "string" ? init.body : undefined,
+    });
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  return state;
+}
+
+/** Set up mock backend that returns a specific response. */
+function mockBackendWithResponse(responseBody: unknown, status = 200) {
+  const state = { calls: [] as { url: string; method: string; body?: string }[] };
+  (globalThis as any).window = {
+    __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  (globalThis as any).fetch = async (url: string, init?: RequestInit) => {
+    state.calls.push({
+      url: String(url),
+      method: init?.method ?? "GET",
+      body: typeof init?.body === "string" ? init.body : undefined,
+    });
+    return new Response(JSON.stringify(responseBody), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  return state;
+}
+
+/** Set up mock backend that rejects with a network error. */
+function mockBackendNetworkError(errorMessage: string) {
+  (globalThis as any).window = {
+    __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  (globalThis as any).fetch = async () => {
+    throw new Error(errorMessage);
+  };
+}
+
+/** Set up mock backend that returns a non-2xx status. */
+function mockBackendHttpError(status: number, body: string) {
+  (globalThis as any).window = {
+    __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  (globalThis as any).fetch = async () => {
+    return new Response(body, { status, headers: { "Content-Type": "text/plain" } });
+  };
+}
+
+function cleanupGlobals() {
+  delete (globalThis as any).window;
+  delete (globalThis as any).fetch;
+}
+
+// ===========================================================================
+// 1. Command classification
+// ===========================================================================
 
 describe("command classification", () => {
   it("treats window/geometry commands as local", () => {
@@ -16,45 +97,441 @@ describe("command classification", () => {
     expect(isWindowLocalCommand("install_plugin")).toBe(false);
     expect(isWindowLocalCommand("get_settings")).toBe(false);
   });
+
+  it("treats unknown commands as not-local", () => {
+    expect(isWindowLocalCommand("unknown_command")).toBe(false);
+    expect(isWindowLocalCommand("")).toBe(false);
+    expect(isWindowLocalCommand("SET_WINDOW_GEOMETRY")).toBe(false); // case-sensitive
+  });
 });
 
-describe("http routing for new endpoints", () => {
-  afterEach(() => {
-    delete (globalThis as any).window;
-    delete (globalThis as any).fetch;
-  });
+// ===========================================================================
+// 2. Backend mode detection
+// ===========================================================================
 
-  function mockBackend(): string[] {
-    const calls: string[] = [];
+describe("backend mode detection", () => {
+  afterEach(cleanupGlobals);
+
+  it('returns "http" when backend URL is set', () => {
     (globalThis as any).window = {
       __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
     };
-    (globalThis as any).fetch = async (url: string) => {
-      calls.push(String(url));
-      return new Response(JSON.stringify([]), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    };
-    return calls;
-  }
-
-  it("maps list_skills to GET /api/skills", async () => {
-    const calls = mockBackend();
-    await invoke("list_skills");
-    expect(calls.some((u) => u.endsWith("/api/skills"))).toBe(true);
+    expect(getBackendMode()).toBe("http");
   });
 
-  it("maps list_plugin_collections to GET /api/plugins/collections", async () => {
-    const calls = mockBackend();
-    await invoke("list_plugin_collections");
-    expect(calls.some((u) => u.endsWith("/api/plugins/collections"))).toBe(true);
+  it('returns "mock" when no Tauri runtime and no backend URL', () => {
+    // No window at all => mock mode
+    expect(getBackendMode()).toBe("mock");
   });
 
-  it("maps slash_preview to POST /api/slash/preview", async () => {
-    const calls = mockBackend();
-    await invoke("slash_preview", { query: "/calc 1+1" });
-    expect(calls.some((u) => u.endsWith("/api/slash/preview"))).toBe(true);
+  it('returns "mock" when window exists but no backend URL and no Tauri', () => {
+    (globalThis as any).window = {};
+    expect(getBackendMode()).toBe("mock");
   });
 });
 
+// ===========================================================================
+// 3. HTTP routing for all command endpoints
+// ===========================================================================
+
+describe("http routing for new endpoints", () => {
+  afterEach(cleanupGlobals);
+
+  // --- GET endpoints ---
+
+  it("maps list_skills to GET /api/skills", async () => {
+    const state = mockBackend();
+    await invoke("list_skills");
+    expect(state.calls.some((c) => c.url.endsWith("/api/skills") && c.method === "GET")).toBe(true);
+  });
+
+  it("maps list_plugin_collections to GET /api/plugins/collections", async () => {
+    const state = mockBackend();
+    await invoke("list_plugin_collections");
+    expect(state.calls.some((c) => c.url.endsWith("/api/plugins/collections"))).toBe(true);
+  });
+
+  it("maps get_settings to GET /api/settings", async () => {
+    const state = mockBackend();
+    await invoke("get_settings");
+    expect(state.calls.some((c) => c.url.endsWith("/api/settings") && c.method === "GET")).toBe(true);
+  });
+
+  it("maps get_launcher_config to GET /api/launcher-config", async () => {
+    const state = mockBackend();
+    await invoke("get_launcher_config");
+    expect(state.calls.some((c) => c.url.endsWith("/api/launcher-config"))).toBe(true);
+  });
+
+  it("maps list_favorites to GET /api/favorites", async () => {
+    const state = mockBackend();
+    await invoke("list_favorites");
+    expect(state.calls.some((c) => c.url.endsWith("/api/favorites") && c.method === "GET")).toBe(true);
+  });
+
+  it("maps list_ai_sessions to GET /api/sessions", async () => {
+    const state = mockBackend();
+    await invoke("list_ai_sessions");
+    expect(state.calls.some((c) => c.url.endsWith("/api/sessions"))).toBe(true);
+  });
+
+  it("maps current_ai_session to GET /api/sessions/current", async () => {
+    const state = mockBackend();
+    await invoke("current_ai_session");
+    expect(state.calls.some((c) => c.url.endsWith("/api/sessions/current"))).toBe(true);
+  });
+
+  it("maps list_skill_usage to GET /api/skills/usage", async () => {
+    const state = mockBackend();
+    await invoke("list_skill_usage");
+    expect(state.calls.some((c) => c.url.endsWith("/api/skills/usage"))).toBe(true);
+  });
+
+  it("maps list_plugin_runtime_dependencies to GET /api/plugins/runtime-deps", async () => {
+    const state = mockBackend();
+    await invoke("list_plugin_runtime_dependencies");
+    expect(state.calls.some((c) => c.url.endsWith("/api/plugins/runtime-deps"))).toBe(true);
+  });
+
+  // --- POST endpoints ---
+
+  it("maps slash_preview to POST /api/slash/preview", async () => {
+    const state = mockBackend();
+    await invoke("slash_preview", { query: "/calc 1+1" });
+    expect(state.calls.some((c) => c.url.endsWith("/api/slash/preview") && c.method === "POST")).toBe(true);
+  });
+
+  it("maps search to POST /api/search with query body", async () => {
+    const state = mockBackend();
+    await invoke("search", { query: "notepad" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/search"));
+    expect(call).toBeDefined();
+    expect(call!.method).toBe("POST");
+    expect(JSON.parse(call!.body!)).toEqual({ query: "notepad" });
+  });
+
+  it("maps ai_query to POST /api/ai/query with query body", async () => {
+    const state = mockBackend();
+    await invoke("ai_query", { query: "what is 2+2" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/ai/query"));
+    expect(call).toBeDefined();
+    expect(call!.method).toBe("POST");
+    expect(JSON.parse(call!.body!)).toEqual({ query: "what is 2+2" });
+  });
+
+  it("maps ai_cancel to POST /api/ai/cancel", async () => {
+    const state = mockBackend();
+    await invoke("ai_cancel");
+    expect(state.calls.some((c) => c.url.endsWith("/api/ai/cancel") && c.method === "POST")).toBe(true);
+  });
+
+  it("maps save_settings_cmd to POST /api/settings with settings body", async () => {
+    const state = mockBackend();
+    const settings = { ai_base_url: "http://example.com", ai_model: "gpt-4" };
+    await invoke("save_settings_cmd", { settings });
+    const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual(settings);
+  });
+
+  it("maps list_models to POST /api/models with base_url and api_key", async () => {
+    const state = mockBackend();
+    await invoke("list_models", { baseUrl: "http://ai.local", apiKey: "sk-test" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/models"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ base_url: "http://ai.local", api_key: "sk-test" });
+  });
+
+  it("maps switch_ai_session to POST /api/sessions/switch", async () => {
+    const state = mockBackend();
+    await invoke("switch_ai_session", { sessionId: 42 });
+    const call = state.calls.find((c) => c.url.endsWith("/api/sessions/switch"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ session_id: 42 });
+  });
+
+  it("maps delete_ai_session to POST /api/sessions/delete", async () => {
+    const state = mockBackend();
+    await invoke("delete_ai_session", { sessionId: 99 });
+    const call = state.calls.find((c) => c.url.endsWith("/api/sessions/delete"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ session_id: 99 });
+  });
+
+  it("maps clear_conversation to POST /api/sessions/clear", async () => {
+    const state = mockBackend();
+    await invoke("clear_conversation");
+    expect(state.calls.some((c) => c.url.endsWith("/api/sessions/clear") && c.method === "POST")).toBe(true);
+  });
+
+  it("maps execute_result to POST /api/execute-result", async () => {
+    const state = mockBackend();
+    const result = { id: "calc::1", action_type: "plugin_execute", action_data: "calc" };
+    await invoke("execute_result", { result });
+    const call = state.calls.find((c) => c.url.endsWith("/api/execute-result"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ result });
+  });
+
+  it("maps execute_slash_command to POST /api/slash/execute", async () => {
+    const state = mockBackend();
+    await invoke("execute_slash_command", { query: "/todo add milk" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/slash/execute"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ query: "/todo add milk" });
+  });
+
+  // --- DELETE endpoints ---
+
+  it("maps remove_favorite to DELETE /api/favorites/:id", async () => {
+    const state = mockBackend();
+    await invoke("remove_favorite", { id: "fav-123" });
+    const call = state.calls.find((c) => c.url.includes("/api/favorites/fav-123") && c.method === "DELETE");
+    expect(call).toBeDefined();
+  });
+
+  // --- Skill management endpoints ---
+
+  it("maps install_skill to POST /api/skills/install", async () => {
+    const state = mockBackend();
+    await invoke("install_skill", { source: "https://example.com/skill.git" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/skills/install"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ source: "https://example.com/skill.git" });
+  });
+
+  it("maps update_skill to POST /api/skills/update", async () => {
+    const state = mockBackend();
+    await invoke("update_skill", { name: "my-skill" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/skills/update"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ name: "my-skill" });
+  });
+
+  it("maps delete_skill to POST /api/skills/delete", async () => {
+    const state = mockBackend();
+    await invoke("delete_skill", { name: "old-skill" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/skills/delete"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ name: "old-skill" });
+  });
+
+  it("maps pin_skill to POST /api/skills/pin", async () => {
+    const state = mockBackend();
+    await invoke("pin_skill", { name: "my-skill", pinned: true });
+    const call = state.calls.find((c) => c.url.endsWith("/api/skills/pin"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ name: "my-skill", pinned: true });
+  });
+
+  it("maps run_curator_now to POST /api/skills/curator/run", async () => {
+    const state = mockBackend();
+    await invoke("run_curator_now");
+    expect(state.calls.some((c) => c.url.endsWith("/api/skills/curator/run") && c.method === "POST")).toBe(true);
+  });
+
+  it("maps propose_skill_consolidation to POST /api/skills/consolidation/propose", async () => {
+    const state = mockBackend();
+    await invoke("propose_skill_consolidation");
+    expect(state.calls.some((c) => c.url.endsWith("/api/skills/consolidation/propose"))).toBe(true);
+  });
+
+  it("maps apply_skill_consolidation to POST /api/skills/consolidation/apply", async () => {
+    const state = mockBackend();
+    await invoke("apply_skill_consolidation", { proposal: { name: "merged" } });
+    const call = state.calls.find((c) => c.url.endsWith("/api/skills/consolidation/apply"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ proposal: { name: "merged" } });
+  });
+
+  // --- Plugin management endpoints ---
+
+  it("maps install_plugin to POST /api/plugins/install", async () => {
+    const state = mockBackend();
+    await invoke("install_plugin", { source: "https://github.com/user/plugin", targetDir: "/plugins" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/plugins/install"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ source: "https://github.com/user/plugin", target_dir: "/plugins" });
+  });
+
+  it("maps update_plugin to POST /api/plugins/update", async () => {
+    const state = mockBackend();
+    await invoke("update_plugin", { name: "my-plugin" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/plugins/update"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ name: "my-plugin" });
+  });
+
+  it("maps install_plugin_runtime_dependency to POST /api/plugins/runtime-deps/install", async () => {
+    const state = mockBackend();
+    await invoke("install_plugin_runtime_dependency", { id: "python" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/plugins/runtime-deps/install"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ id: "python" });
+  });
+
+  // --- Vision endpoint ---
+
+  it("maps vision_analyze to POST /api/vision/analyze", async () => {
+    const state = mockBackend();
+    await invoke("vision_analyze", { prompt: "describe this", imageBase64: "abc123" });
+    const call = state.calls.find((c) => c.url.endsWith("/api/vision/analyze"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual({ prompt: "describe this", image_base64: "abc123" });
+  });
+});
+
+// ===========================================================================
+// 4. Error handling
+// ===========================================================================
+
+describe("error handling", () => {
+  afterEach(cleanupGlobals);
+
+  it("throws on network failure", async () => {
+    mockBackendNetworkError("Failed to fetch");
+    await expect(invoke("search", { query: "test" })).rejects.toThrow("Failed to fetch");
+  });
+
+  it("throws on non-2xx HTTP response", async () => {
+    mockBackendHttpError(500, "Internal Server Error");
+    await expect(invoke("search", { query: "test" })).rejects.toThrow("Internal Server Error");
+  });
+
+  it("throws on 404 response", async () => {
+    mockBackendHttpError(404, "Not Found");
+    await expect(invoke("get_settings")).rejects.toThrow("Not Found");
+  });
+
+  it("throws on unknown command in HTTP mode", async () => {
+    mockBackend();
+    await expect(invoke("nonexistent_command")).rejects.toThrow(
+      'Command "nonexistent_command" is not available in browser mode yet.'
+    );
+  });
+
+  it("throws descriptive error on empty body with non-2xx status", async () => {
+    mockBackendHttpError(503, "");
+    await expect(invoke("search", { query: "test" })).rejects.toThrow("HTTP 503");
+  });
+});
+
+// ===========================================================================
+// 5. Default / missing arguments
+// ===========================================================================
+
+describe("default arguments handling", () => {
+  afterEach(cleanupGlobals);
+
+  it("search defaults to empty query when no args provided", async () => {
+    const state = mockBackend();
+    await invoke("search");
+    const call = state.calls.find((c) => c.url.endsWith("/api/search"));
+    expect(JSON.parse(call!.body!)).toEqual({ query: "" });
+  });
+
+  it("ai_query defaults to empty query when no args provided", async () => {
+    const state = mockBackend();
+    await invoke("ai_query");
+    const call = state.calls.find((c) => c.url.endsWith("/api/ai/query"));
+    expect(JSON.parse(call!.body!)).toEqual({ query: "" });
+  });
+
+  it("slash_preview defaults to empty query when no args provided", async () => {
+    const state = mockBackend();
+    await invoke("slash_preview");
+    const call = state.calls.find((c) => c.url.endsWith("/api/slash/preview"));
+    expect(JSON.parse(call!.body!)).toEqual({ query: "" });
+  });
+
+  it("remove_favorite encodes the id in the URL", async () => {
+    const state = mockBackend();
+    await invoke("remove_favorite", { id: "fav with spaces" });
+    const call = state.calls.find((c) => c.method === "DELETE");
+    expect(call!.url).toContain("fav%20with%20spaces");
+  });
+
+  it("remove_favorite handles missing id gracefully", async () => {
+    const state = mockBackend();
+    await invoke("remove_favorite", {});
+    const call = state.calls.find((c) => c.method === "DELETE");
+    expect(call).toBeDefined();
+  });
+});
+
+// ===========================================================================
+// 6. Mock / fallback mode (no backend, no Tauri)
+// ===========================================================================
+
+describe("mock mode fallbacks", () => {
+  afterEach(cleanupGlobals);
+
+  it("returns mock search results when no backend", async () => {
+    // No window, no fetch => mock mode
+    const results = await invoke<any[]>("search");
+    expect(Array.isArray(results)).toBe(true);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]).toHaveProperty("title");
+    expect(results[0]).toHaveProperty("id");
+  });
+
+  it("returns mock settings when no backend", async () => {
+    const settings = await invoke<any>("get_settings");
+    expect(settings).toHaveProperty("ai_model");
+    expect(settings).toHaveProperty("theme");
+    expect(settings).toHaveProperty("hotkey");
+  });
+
+  it("returns empty object for unknown commands in mock mode", async () => {
+    const result = await invoke("anything_else");
+    expect(result).toEqual({});
+  });
+});
+
+// ===========================================================================
+// 7. Window-local commands in HTTP mode
+// ===========================================================================
+
+describe("window-local commands in HTTP mode bypass HTTP", () => {
+  afterEach(cleanupGlobals);
+
+  it("resolves locally for geometry commands without Tauri runtime", async () => {
+    // In HTTP mode, window-local commands resolve to true immediately
+    (globalThis as any).window = {
+      __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+    };
+    (globalThis as any).fetch = async () => {
+      throw new Error("should not be called for window-local commands");
+    };
+    // Without Tauri, these go through the HTTP switch and return Promise.resolve(true)
+    const result = await invoke("set_window_geometry");
+    expect(result).toBe(true);
+  });
+});
+
+// ===========================================================================
+// 8. Response data integrity
+// ===========================================================================
+
+describe("response data integrity", () => {
+  afterEach(cleanupGlobals);
+
+  it("returns parsed JSON response correctly", async () => {
+    const mockData = { items: [{ id: 1, name: "test" }], total: 1 };
+    mockBackendWithResponse(mockData);
+    const result = await invoke<typeof mockData>("search", { query: "test" });
+    expect(result).toEqual(mockData);
+  });
+
+  it("handles empty array response", async () => {
+    mockBackendWithResponse([]);
+    const result = await invoke<unknown[]>("search", { query: "nonexistent" });
+    expect(result).toEqual([]);
+  });
+
+  it("handles boolean response", async () => {
+    mockBackendWithResponse(true);
+    const result = await invoke<boolean>("ai_cancel");
+    expect(result).toBe(true);
+  });
+});

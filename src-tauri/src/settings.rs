@@ -128,7 +128,7 @@ impl AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            ai_base_url: "http://localhost:5000".to_string(),
+            ai_base_url: "http://127.0.0.1:5000".to_string(),
             ai_model: "auto".to_string(),
             ai_api_key: String::new(),
             theme: "system".to_string(),
@@ -158,40 +158,54 @@ pub fn settings_path() -> std::path::PathBuf {
 
 pub fn load_settings() -> AppSettings {
     let path = settings_path();
+    log::info!("Loading settings from {}", path.display());
     if path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(mut s) = serde_json::from_str::<AppSettings>(&content) {
-                // Migrate legacy single-server fields into github_servers
-                if s.github_servers.is_empty()
-                    && (!s.github_token.is_empty()
-                        || !s.github_server.is_empty()
-                        || !s.github_orgs.is_empty())
-                {
-                    let hostname = if s.github_server.is_empty() {
-                        "github.com".to_string()
-                    } else {
-                        // strip scheme + /api/v3 to get hostname
-                        s.github_server
-                            .trim_start_matches("https://")
-                            .trim_start_matches("http://")
-                            .trim_end_matches("/api/v3")
-                            .trim_end_matches('/')
-                            .to_string()
-                    };
-                    s.github_servers.push(GitHubServer {
-                        hostname,
-                        api_base: String::new(),
-                        token: s.github_token.clone(),
-                        orgs: s.github_orgs.clone(),
-                    });
+        match std::fs::read_to_string(&path) {
+            Ok(content) => match serde_json::from_str::<AppSettings>(&content) {
+                Ok(mut s) => {
+                    // Migrate legacy single-server fields into github_servers
+                    if s.github_servers.is_empty()
+                        && (!s.github_token.is_empty()
+                            || !s.github_server.is_empty()
+                            || !s.github_orgs.is_empty())
+                    {
+                        let hostname = if s.github_server.is_empty() {
+                            "github.com".to_string()
+                        } else {
+                            // strip scheme + /api/v3 to get hostname
+                            s.github_server
+                                .trim_start_matches("https://")
+                                .trim_start_matches("http://")
+                                .trim_end_matches("/api/v3")
+                                .trim_end_matches('/')
+                                .to_string()
+                        };
+                        s.github_servers.push(GitHubServer {
+                            hostname,
+                            api_base: String::new(),
+                            token: s.github_token.clone(),
+                            orgs: s.github_orgs.clone(),
+                        });
+                    }
+                    // Auto-detect gh CLI authenticated hosts when no servers configured
+                    if s.github_servers.is_empty() {
+                        s.github_servers = detect_gh_hosts();
+                    }
+                    return s;
                 }
-                // Auto-detect gh CLI authenticated hosts when no servers configured
-                if s.github_servers.is_empty() {
-                    s.github_servers = detect_gh_hosts();
+                Err(err) => {
+                    log::warn!("Failed to parse settings from {}: {err}", path.display());
                 }
-                return s;
+            },
+            Err(err) => {
+                log::warn!("Failed to read settings from {}: {err}", path.display());
             }
         }
+    } else {
+        log::info!(
+            "Settings file does not exist at {}; using defaults",
+            path.display()
+        );
     }
     // Auto-detect gh CLI authenticated hosts for fresh installs
     AppSettings {

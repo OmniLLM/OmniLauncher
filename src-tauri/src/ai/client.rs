@@ -458,4 +458,167 @@ mod client_tests {
             other => panic!("Expected Transport or Timeout, got {:?}", other),
         }
     }
+
+    #[test]
+    fn test_client_with_empty_api_key() {
+        let c = AiClient::new(
+            "http://localhost:9999".into(),
+            "".into(),
+            "test-model".into(),
+        );
+        assert_eq!(c.base_url(), "http://localhost:9999");
+        assert_eq!(c.model(), "test-model");
+    }
+
+    #[test]
+    fn test_client_trims_trailing_slash_in_url() {
+        // The URL trimming happens in chat_with_tools_once, not in new()
+        let c = AiClient::new(
+            "http://localhost:9999/".into(),
+            "key".into(),
+            "model".into(),
+        );
+        // base_url stores it as-is, trimming happens at call time
+        assert_eq!(c.base_url(), "http://localhost:9999/");
+    }
+
+    #[tokio::test]
+    async fn test_chat_with_tools_returns_error_on_connection_refused() {
+        let c = make_client();
+        let result = c
+            .chat_with_tools(vec![Message::user("hello")], vec![])
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_stub_succeeds() {
+        let c = make_client();
+        let result = c.chat_stream(vec![Message::user("hello")], ()).await;
+        assert!(result.is_ok());
+    }
+
+    // ── Message construction tests ─────────────────────────────────────
+
+    #[test]
+    fn test_message_system() {
+        let msg = Message::system("You are a helpful assistant.");
+        assert_eq!(msg.role, "system");
+        assert_eq!(msg.content_str(), "You are a helpful assistant.");
+        assert!(msg.tool_calls.is_none());
+        assert!(msg.tool_call_id.is_none());
+    }
+
+    #[test]
+    fn test_message_user() {
+        let msg = Message::user("Hello!");
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.content_str(), "Hello!");
+    }
+
+    #[test]
+    fn test_message_assistant() {
+        let msg = Message::assistant("Hi there!");
+        assert_eq!(msg.role, "assistant");
+        assert_eq!(msg.content_str(), "Hi there!");
+    }
+
+    #[test]
+    fn test_message_content_str_with_none() {
+        let msg = Message {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        };
+        assert_eq!(msg.content_str(), "");
+    }
+
+    #[test]
+    fn test_message_assistant_tool_calls() {
+        let tc = ToolCall {
+            id: "call-1".to_string(),
+            call_type: Some("function".to_string()),
+            function: FunctionCall {
+                name: "calculator".to_string(),
+                arguments: r#"{"expr":"2+2"}"#.to_string(),
+            },
+        };
+        let msg = Message::assistant_tool_calls(Some("Let me calculate.".into()), vec![tc]);
+        assert_eq!(msg.role, "assistant");
+        assert_eq!(msg.content_str(), "Let me calculate.");
+        assert!(msg.tool_calls.is_some());
+        let tcs = msg.tool_calls.unwrap();
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].function.name, "calculator");
+    }
+
+    #[test]
+    fn test_message_tool_result() {
+        let msg = Message::tool_result("call-1", "calculator", "4");
+        assert_eq!(msg.role, "tool");
+        assert_eq!(msg.content_str(), "4");
+        assert_eq!(msg.tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(msg.name.as_deref(), Some("calculator"));
+    }
+
+    // ── Serialization roundtrip tests ──────────────────────────────────
+
+    #[test]
+    fn test_message_serialization_roundtrip() {
+        let msg = Message::user("test message");
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: Message = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.role, "user");
+        assert_eq!(deserialized.content_str(), "test message");
+    }
+
+    #[test]
+    fn test_chat_response_serialization() {
+        let resp = ChatResponse {
+            content: Some("Hello!".to_string()),
+            tool_calls: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("Hello!"));
+        let deserialized: ChatResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.content.as_deref(), Some("Hello!"));
+        assert!(deserialized.tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_chat_response_with_tool_calls() {
+        let resp = ChatResponse {
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "tc-1".to_string(),
+                call_type: Some("function".to_string()),
+                function: FunctionCall {
+                    name: "search".to_string(),
+                    arguments: r#"{"q":"rust"}"#.to_string(),
+                },
+            }]),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: ChatResponse = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.content.is_none());
+        let tcs = deserialized.tool_calls.unwrap();
+        assert_eq!(tcs[0].function.name, "search");
+    }
+
+    #[test]
+    fn test_tool_call_serialization_skips_none_type() {
+        let tc = ToolCall {
+            id: "tc-1".to_string(),
+            call_type: None,
+            function: FunctionCall {
+                name: "test".to_string(),
+                arguments: "{}".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&tc).unwrap();
+        // "type" field should be skipped when None
+        assert!(!json.contains("\"type\""));
+    }
 }

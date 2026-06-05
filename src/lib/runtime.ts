@@ -8,6 +8,39 @@ import { getCurrentWebviewWindow as tauriGetCurrentWebviewWindow } from "@tauri-
 const isTauriRuntime = () =>
   typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__;
 
+type FrontendLogLevel = "trace" | "debug" | "info" | "warn" | "error";
+
+function frontendLog(level: FrontendLogLevel, message: string) {
+  const line = `[runtime] ${message}`;
+  const consoleFn = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+  consoleFn(line);
+
+  if (!isTauriRuntime()) return;
+  tauriInvoke("frontend_log", { level, message: line }).catch(() => {
+    // Logging must never break app behavior.
+  });
+}
+
+function summarizeArgs(args?: Record<string, unknown>): string {
+  if (!args) return "none";
+  try {
+    return JSON.stringify(args, (key, value) => {
+      const lower = key.toLowerCase();
+      if (lower.includes("key") || lower.includes("token") || lower.includes("secret")) {
+        return value ? "[redacted]" : value;
+      }
+      if (typeof value === "string" && value.length > 160) {
+        return `${value.slice(0, 160)}...(${value.length} chars)`;
+      }
+      return value;
+    });
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+let lastLoggedBackendUrl = "__unset__";
+
 /// Window/OS-shell commands run in the local Tauri process — only it owns a
 /// window. They bypass HTTP routing entirely even when a backend URL is set.
 const WINDOW_LOCAL_COMMANDS = new Set<string>([
@@ -34,11 +67,27 @@ const WINDOW_LOCAL_EVENTS = new Set<string>([
 /// the desktop shell can inject `window.__OMNILAUNCHER_BACKEND_URL__` after the
 /// frontend module has already evaluated, without a race.
 function backendUrl(): string {
+  let resolved = "";
+  let source = "vite-env";
   if (typeof window !== "undefined") {
     const injected = (window as any).__OMNILAUNCHER_BACKEND_URL__;
-    if (injected) return String(injected).trim();
+    if (injected) {
+      resolved = String(injected).trim();
+      source = "tauri-injected-window";
+    }
   }
-  return import.meta.env.VITE_OMNILAUNCHER_BACKEND_URL?.trim() || "";
+  if (!resolved) {
+    resolved = import.meta.env.VITE_OMNILAUNCHER_BACKEND_URL?.trim() || "";
+  }
+
+  if (resolved !== lastLoggedBackendUrl) {
+    lastLoggedBackendUrl = resolved;
+    frontendLog(
+      "info",
+      `backend URL resolved from ${source}: ${resolved || "[empty - using local/mock runtime]"}`,
+    );
+  }
+  return resolved;
 }
 
 /// HTTP mode is active whenever a backend URL is known — including inside the
@@ -66,16 +115,35 @@ function buildUrl(path: string): string {
 }
 
 async function httpJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(buildUrl(path), {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+  const url = buildUrl(path);
+  const method = init?.method ?? "GET";
+  const start = performance.now();
+  const bodySummary = typeof init?.body === "string" ? `${init.body.length} bytes` : "none";
+  frontendLog("debug", `HTTP ${method} ${url} start body=${bodySummary}`);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+      ...init,
+    });
+  } catch (error) {
+    frontendLog(
+      "error",
+      `HTTP ${method} ${url} network failure after ${Math.round(performance.now() - start)}ms: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    throw error;
+  }
+
+  const elapsed = Math.round(performance.now() - start);
+  frontendLog("debug", `HTTP ${method} ${url} response status=${response.status} elapsed=${elapsed}ms`);
 
   if (!response.ok) {
     const text = await response.text();
+    frontendLog("error", `HTTP ${method} ${url} failed status=${response.status} body=${text.slice(0, 500)}`);
     throw new Error(text || `HTTP ${response.status}`);
   }
 
@@ -83,7 +151,15 @@ async function httpJson<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
 
-  return response.json() as Promise<T>;
+  try {
+    return (await response.json()) as T;
+  } catch (error) {
+    frontendLog(
+      "error",
+      `HTTP ${method} ${url} JSON parse failure: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    throw error;
+  }
 }
 
 function dispatchLocalEvent<T>(name: string, payload: T) {
@@ -94,8 +170,10 @@ function ensureHttpEventStream(name: string) {
   if (!httpMode() || eventControllers.has(name)) return;
   const controller = new AbortController();
   eventControllers.set(name, controller);
+  const url = buildUrl(`/api/events/${encodeURIComponent(name)}`);
+  frontendLog("debug", `SSE subscribe ${name} via ${url}`);
 
-  fetch(buildUrl(`/api/events/${encodeURIComponent(name)}`), {
+  fetch(url, {
     signal: controller.signal,
     headers: { Accept: "text/event-stream" },
   })
@@ -103,6 +181,7 @@ function ensureHttpEventStream(name: string) {
       if (!response.ok || !response.body) {
         throw new Error(`Failed to subscribe: ${response.status}`);
       }
+      frontendLog("debug", `SSE connected ${name} status=${response.status}`);
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -120,8 +199,11 @@ function ensureHttpEventStream(name: string) {
           if (!line) continue;
           const raw = line.slice(6);
           try {
-            dispatchLocalEvent(name, JSON.parse(raw));
+            const parsed = JSON.parse(raw);
+            frontendLog("trace", `SSE event ${name} payload=${summarizeArgs({ payload: parsed })}`);
+            dispatchLocalEvent(name, parsed);
           } catch {
+            frontendLog("trace", `SSE event ${name} raw=${raw.slice(0, 200)}`);
             dispatchLocalEvent(name, raw as unknown);
           }
         }
@@ -129,10 +211,15 @@ function ensureHttpEventStream(name: string) {
     })
     .catch((error) => {
       if (!controller.signal.aborted) {
+        frontendLog(
+          "warn",
+          `SSE stream ended for ${name}: ${error instanceof Error ? error.message : String(error)}`,
+        );
         console.warn(`HTTP event stream ended for ${name}:`, error);
       }
     })
     .finally(() => {
+      frontendLog("debug", `SSE closed ${name}`);
       eventControllers.delete(name);
     });
 }
@@ -159,9 +246,13 @@ export async function invoke<T = unknown>(
   cmd: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
+  const mode = getBackendMode();
+  frontendLog("debug", `invoke ${cmd} mode=${mode} args=${summarizeArgs(args)}`);
+
   // Window/OS-shell commands always run in the local Tauri process — only it
   // owns a window. They bypass HTTP routing entirely.
   if (isWindowLocalCommand(cmd) && isTauriRuntime()) {
+    frontendLog("debug", `invoke ${cmd} routed to local Tauri command`);
     return tauriInvoke<T>(cmd, args);
   }
 
@@ -370,6 +461,7 @@ export async function listen<T>(
   eventName: string,
   handler: EventHandler<T>,
 ): Promise<Unlisten> {
+  frontendLog("debug", `listen ${eventName} mode=${getBackendMode()}`);
   // Window-origin events (shown/selection) are emitted by the local Tauri
   // process, so prefer the Tauri listener for them when running in the shell.
   if (WINDOW_LOCAL_EVENTS.has(eventName) && isTauriRuntime()) {
@@ -400,6 +492,7 @@ export async function listen<T>(
 }
 
 export async function emit<T>(eventName: string, payload?: T): Promise<void> {
+  frontendLog("debug", `emit ${eventName} mode=${getBackendMode()} payload=${summarizeArgs({ payload })}`);
   if (isTauriRuntime()) {
     return tauriEmit(eventName, payload);
   }

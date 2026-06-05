@@ -177,8 +177,14 @@ fn json_response<T: Serialize>(value: &T) -> LiveResponse {
 }
 
 fn parse_json<T: for<'de> Deserialize<'de>>(body: &str) -> Result<T, LiveResponse> {
-    serde_json::from_str(body)
-        .map_err(|error| LiveResponse::text("400 Bad Request", format!("Invalid JSON: {error}")))
+    serde_json::from_str(body).map_err(|error| {
+        log::warn!(
+            "split backend JSON parse error: {} (body_bytes={})",
+            error,
+            body.len()
+        );
+        LiveResponse::text("400 Bad Request", format!("Invalid JSON: {error}"))
+    })
 }
 
 async fn read_body(request: &str) -> String {
@@ -187,6 +193,14 @@ async fn read_body(request: &str) -> String {
         .nth(1)
         .unwrap_or_default()
         .to_string()
+}
+
+fn request_body_len(request: &str) -> usize {
+    request
+        .split("\r\n\r\n")
+        .nth(1)
+        .map(str::len)
+        .unwrap_or_default()
 }
 
 pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16) {
@@ -232,9 +246,18 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
             let method = parts.next().unwrap_or("GET");
             let target = parts.next().unwrap_or("/");
             let (path, query) = split_path_query(target);
+            log::debug!(
+                "split backend request from {}: method={} path={} query={} bytes={}",
+                addr,
+                method,
+                path,
+                query,
+                read_len
+            );
 
-            if let Some(event_name) = path.strip_prefix("/api/events/") {
-                let mut receiver = state.event_bus.subscribe(event_name).await;
+            if let Some(event_name) = event_name_from_path(&path) {
+                log::debug!("split backend SSE subscribe from {}: {}", addr, event_name);
+                let mut receiver = state.event_bus.subscribe(&event_name).await;
                 let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n".to_string();
                 if stream.write_all(headers.as_bytes()).await.is_err() {
                     return;
@@ -250,6 +273,14 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
             }
 
             let response = handle_request(&state, method, &path, &query, &request).await;
+            log::debug!(
+                "split backend response to {}: method={} path={} status={} body_bytes={}",
+                addr,
+                method,
+                path,
+                response.status,
+                response.body.len()
+            );
             let bytes = encode_response(response);
             let _ = stream.write_all(&bytes).await;
             let _ = stream.shutdown().await;
@@ -264,6 +295,14 @@ async fn handle_request(
     _query: &str,
     request: &str,
 ) -> LiveResponse {
+    if method != "GET" && method != "OPTIONS" {
+        log::trace!(
+            "split backend request body: method={} path={} body_bytes={}",
+            method,
+            path,
+            request_body_len(request)
+        );
+    }
     match (method, path) {
         ("OPTIONS", _) => LiveResponse::text("204 No Content", String::new()),
         ("GET", "/health") => LiveResponse::json("{\"ok\":true}".to_string()),
@@ -276,12 +315,29 @@ async fn handle_request(
         }
         ("GET", "/api/settings") => {
             let settings = state.settings.lock().await.clone();
+            log::debug!(
+                "split backend get settings: base_url={} model={} theme={} max_results={} background_url={}",
+                settings.ai_base_url,
+                settings.ai_model,
+                settings.theme,
+                settings.max_results,
+                settings.background_url
+            );
             json_response(&settings)
         }
         ("POST", "/api/settings") => {
             let body = read_body(request).await;
             match parse_json::<SaveSettingsRequest>(&body) {
                 Ok(input) => {
+                    log::debug!(
+                        "split backend save settings request: base_url={} model={} theme={} max_results={} background_url={} api_key_present={}",
+                        input.ai_base_url,
+                        input.ai_model,
+                        input.theme,
+                        input.max_results,
+                        input.background_url,
+                        !input.ai_api_key.trim().is_empty()
+                    );
                     let updated = AppSettings {
                         ai_base_url: input.ai_base_url,
                         ai_model: input.ai_model,
@@ -305,6 +361,11 @@ async fn handle_request(
                         );
                     }
                     let ok = save_settings(&updated);
+                    if ok {
+                        log::info!("split backend saved settings successfully");
+                    } else {
+                        log::error!("split backend failed to save settings");
+                    }
                     state
                         .event_bus
                         .emit_json("omnilauncher://settings-saved", &updated)
@@ -670,6 +731,42 @@ fn split_path_query(target: &str) -> (String, String) {
     }
 }
 
+fn event_name_from_path(path: &str) -> Option<String> {
+    path.strip_prefix("/api/events/")
+        .map(percent_decode)
+        .filter(|name| !name.is_empty())
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+
+        out.push(bytes[i]);
+        i += 1;
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn normalize_path(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed == "/" {
@@ -693,6 +790,8 @@ fn encode_response(response: LiveResponse) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    // ── encode_response tests ──────────────────────────────────────────
+
     #[test]
     fn encoded_response_includes_cors_preflight_headers() {
         let response = LiveResponse::text("204 No Content", String::new());
@@ -702,6 +801,365 @@ mod tests {
         assert!(encoded.contains("Access-Control-Allow-Origin: *\r\n"));
         assert!(encoded.contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"));
         assert!(encoded.contains("Access-Control-Allow-Headers: Content-Type\r\n"));
+    }
+
+    #[test]
+    fn encoded_json_response_has_correct_content_type() {
+        let response = LiveResponse::json(r#"{"ok":true}"#.to_string());
+        let encoded = String::from_utf8(encode_response(response)).unwrap();
+
+        assert!(encoded.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(encoded.contains("Content-Type: application/json; charset=utf-8\r\n"));
+        assert!(encoded.contains(r#"{"ok":true}"#));
+    }
+
+    #[test]
+    fn encoded_response_has_correct_content_length() {
+        let body = "Hello, World!";
+        let response = LiveResponse::text("200 OK", body.to_string());
+        let encoded = String::from_utf8(encode_response(response)).unwrap();
+
+        let expected_header = format!("Content-Length: {}\r\n", body.len());
+        assert!(encoded.contains(&expected_header));
+    }
+
+    #[test]
+    fn encoded_response_includes_cache_control_headers() {
+        let response = LiveResponse::json("{}".to_string());
+        let encoded = String::from_utf8(encode_response(response)).unwrap();
+
+        assert!(encoded.contains("Cache-Control: no-store, no-cache, must-revalidate\r\n"));
+        assert!(encoded.contains("Pragma: no-cache\r\n"));
+        assert!(encoded.contains("Expires: 0\r\n"));
+    }
+
+    #[test]
+    fn encoded_response_includes_connection_close() {
+        let response = LiveResponse::text("200 OK", "test".to_string());
+        let encoded = String::from_utf8(encode_response(response)).unwrap();
+
+        assert!(encoded.contains("Connection: close\r\n"));
+    }
+
+    #[test]
+    fn encoded_response_empty_body() {
+        let response = LiveResponse::text("204 No Content", String::new());
+        let encoded = String::from_utf8(encode_response(response)).unwrap();
+
+        assert!(encoded.contains("Content-Length: 0\r\n"));
+        // Headers end with \r\n\r\n, body is empty
+        assert!(encoded.ends_with("\r\n\r\n"));
+    }
+
+    // ── split_path_query tests ─────────────────────────────────────────
+
+    #[test]
+    fn split_path_query_no_query_string() {
+        let (path, query) = split_path_query("/api/health");
+        assert_eq!(path, "/api/health");
+        assert_eq!(query, "");
+    }
+
+    #[test]
+    fn split_path_query_with_query_string() {
+        let (path, query) = split_path_query("/api/search?q=hello&limit=10");
+        assert_eq!(path, "/api/search");
+        assert_eq!(query, "q=hello&limit=10");
+    }
+
+    #[test]
+    fn split_path_query_root() {
+        let (path, query) = split_path_query("/");
+        assert_eq!(path, "/");
+        assert_eq!(query, "");
+    }
+
+    #[test]
+    fn split_path_query_empty() {
+        let (path, query) = split_path_query("");
+        assert_eq!(path, "/");
+        assert_eq!(query, "");
+    }
+
+    #[test]
+    fn split_path_query_with_empty_query() {
+        let (path, query) = split_path_query("/api/test?");
+        assert_eq!(path, "/api/test");
+        assert_eq!(query, "");
+    }
+
+    // ── normalize_path tests ───────────────────────────────────────────
+
+    #[test]
+    fn normalize_path_strips_trailing_slash() {
+        assert_eq!(normalize_path("/api/test/"), "/api/test");
+    }
+
+    #[test]
+    fn normalize_path_handles_root() {
+        assert_eq!(normalize_path("/"), "/");
+    }
+
+    #[test]
+    fn normalize_path_handles_empty() {
+        assert_eq!(normalize_path(""), "/");
+    }
+
+    #[test]
+    fn normalize_path_preserves_normal_path() {
+        assert_eq!(normalize_path("/api/ai/query"), "/api/ai/query");
+    }
+
+    #[test]
+    fn normalize_path_trims_whitespace() {
+        assert_eq!(normalize_path("  /api/test  "), "/api/test");
+    }
+
+    // ── read_body tests ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn read_body_extracts_body_after_headers() {
+        let raw_request = "POST /api/search HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"query\":\"hello\"}";
+        let body = read_body(raw_request).await;
+        assert_eq!(body, "{\"query\":\"hello\"}");
+    }
+
+    #[tokio::test]
+    async fn read_body_returns_empty_for_no_body() {
+        let raw_request = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let body = read_body(raw_request).await;
+        assert_eq!(body, "");
+    }
+
+    #[tokio::test]
+    async fn read_body_returns_empty_for_malformed_request() {
+        let raw_request = "GET /health HTTP/1.1";
+        let body = read_body(raw_request).await;
+        assert_eq!(body, "");
+    }
+
+    // ── request_body_len tests ─────────────────────────────────────────
+
+    #[test]
+    fn request_body_len_with_body() {
+        let raw = "POST /api HTTP/1.1\r\n\r\n{\"a\":1}";
+        assert_eq!(request_body_len(raw), 7);
+    }
+
+    #[test]
+    fn request_body_len_no_body() {
+        let raw = "GET / HTTP/1.1\r\n\r\n";
+        assert_eq!(request_body_len(raw), 0);
+    }
+
+    #[test]
+    fn request_body_len_no_separator() {
+        let raw = "GET / HTTP/1.1";
+        assert_eq!(request_body_len(raw), 0);
+    }
+
+    // ── parse_json tests ───────────────────────────────────────────────
+
+    #[test]
+    fn parse_json_valid() {
+        let result: Result<SearchRequest, _> = parse_json(r#"{"query":"hello"}"#);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().query, "hello");
+    }
+
+    #[test]
+    fn parse_json_invalid_returns_400() {
+        let result: Result<SearchRequest, _> = parse_json("not json");
+        assert!(result.is_err());
+        let error_response = result.unwrap_err();
+        assert_eq!(error_response.status, "400 Bad Request");
+        assert!(error_response.body.contains("Invalid JSON"));
+    }
+
+    #[test]
+    fn parse_json_missing_field_returns_400() {
+        let result: Result<SearchRequest, _> = parse_json(r#"{"wrong_field":"hello"}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_json_empty_string_returns_400() {
+        let result: Result<SearchRequest, _> = parse_json("");
+        assert!(result.is_err());
+    }
+
+    // ── json_response tests ────────────────────────────────────────────
+
+    #[test]
+    fn json_response_serializes_value() {
+        let response = json_response(&serde_json::json!({"ok": true}));
+        assert_eq!(response.status, "200 OK");
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        assert!(response.body.contains("\"ok\":true") || response.body.contains("\"ok\": true"));
+    }
+
+    #[test]
+    fn json_response_serializes_string() {
+        let response = json_response(&"hello world".to_string());
+        assert_eq!(response.status, "200 OK");
+        assert!(response.body.contains("hello world"));
+    }
+
+    #[test]
+    fn json_response_serializes_bool() {
+        let response = json_response(&true);
+        assert_eq!(response.body, "true");
+    }
+
+    #[test]
+    fn json_response_serializes_vec() {
+        let items: Vec<String> = vec!["a".into(), "b".into()];
+        let response = json_response(&items);
+        assert!(response.body.contains("["));
+        assert!(response.body.contains("\"a\""));
+    }
+
+    // ── EventBus tests ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn event_bus_emit_and_receive() {
+        let bus = EventBus::default();
+        let mut rx = bus.subscribe("test-event").await;
+        bus.emit_json("test-event", &"hello").await;
+        let msg = rx.recv().await.unwrap();
+        assert!(msg.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn event_bus_multiple_subscribers() {
+        let bus = EventBus::default();
+        let mut rx1 = bus.subscribe("multi").await;
+        let mut rx2 = bus.subscribe("multi").await;
+        bus.emit_json("multi", &42).await;
+        assert_eq!(rx1.recv().await.unwrap(), "42");
+        assert_eq!(rx2.recv().await.unwrap(), "42");
+    }
+
+    #[tokio::test]
+    async fn event_bus_different_channels_are_isolated() {
+        let bus = EventBus::default();
+        let mut rx_a = bus.subscribe("channel-a").await;
+        let _rx_b = bus.subscribe("channel-b").await;
+        bus.emit_json("channel-a", &"only-a").await;
+        let msg = rx_a.recv().await.unwrap();
+        assert!(msg.contains("only-a"));
+        // channel-b should not have received anything
+    }
+
+    #[tokio::test]
+    async fn event_bus_json_serialization() {
+        let bus = EventBus::default();
+        let mut rx = bus.subscribe("json-test").await;
+
+        #[derive(Serialize)]
+        struct Payload {
+            tool: String,
+            iteration: u32,
+        }
+        let payload = Payload {
+            tool: "calculator".to_string(),
+            iteration: 3,
+        };
+        bus.emit_json("json-test", &payload).await;
+        let msg = rx.recv().await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(parsed["tool"], "calculator");
+        assert_eq!(parsed["iteration"], 3);
+    }
+
+    #[tokio::test]
+    async fn event_bus_late_subscriber_misses_old_messages() {
+        let bus = EventBus::default();
+        // Emit before subscribing
+        bus.emit_json("late", &"early-message").await;
+        let mut rx = bus.subscribe("late").await;
+        bus.emit_json("late", &"late-message").await;
+        let msg = rx.recv().await.unwrap();
+        assert!(msg.contains("late-message"));
+    }
+
+    #[test]
+    fn event_stream_path_decodes_frontend_event_names() {
+        assert_eq!(
+            event_name_from_path("/api/events/omnilauncher%3A%2F%2Fai-done"),
+            Some("omnilauncher://ai-done".to_string())
+        );
+    }
+
+    // ── SelectionPayload tests ─────────────────────────────────────────
+
+    #[test]
+    fn selection_payload_serialization_roundtrip() {
+        let payload = SelectionPayload {
+            token: "tok-123".to_string(),
+            selection: "selected text".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let deserialized: SelectionPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.token, "tok-123");
+        assert_eq!(deserialized.selection, "selected text");
+    }
+
+    // ── Request type deserialization tests ──────────────────────────────
+
+    #[test]
+    fn search_request_deserialize() {
+        let json = r#"{"query":"hello world"}"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.query, "hello world");
+    }
+
+    #[test]
+    fn ai_query_request_deserialize() {
+        let json = r#"{"query":"what is rust"}"#;
+        let req: AiQueryRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.query, "what is rust");
+    }
+
+    #[test]
+    fn session_request_deserialize() {
+        let json = r#"{"session_id":42}"#;
+        let req: SessionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.session_id, 42);
+    }
+
+    #[test]
+    fn models_request_deserialize() {
+        let json = r#"{"base_url":"http://localhost:11434","api_key":"sk-test"}"#;
+        let req: ModelsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.base_url, "http://localhost:11434");
+        assert_eq!(req.api_key, "sk-test");
+    }
+
+    #[test]
+    fn vision_request_deserialize() {
+        let json = r#"{"prompt":"describe this","image_base64":"abc123"}"#;
+        let req: VisionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.prompt, "describe this");
+        assert_eq!(req.image_base64, "abc123");
+    }
+
+    #[test]
+    fn save_settings_request_deserialize() {
+        let json = r#"{
+            "ai_base_url":"http://localhost:11434",
+            "ai_model":"gpt-4",
+            "ai_api_key":"key",
+            "theme":"dark",
+            "hotkey":"Alt+Space",
+            "max_results":10,
+            "background_url":""
+        }"#;
+        let req: SaveSettingsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.ai_base_url, "http://localhost:11434");
+        assert_eq!(req.ai_model, "gpt-4");
+        assert_eq!(req.theme, "dark");
+        assert_eq!(req.max_results, 10);
     }
 }
 
