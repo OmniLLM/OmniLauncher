@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { isWindowLocalCommand } from "./runtime";
+import { describe, it, expect, afterEach } from "vitest";
+import { isWindowLocalCommand, invoke } from "./runtime";
 
 describe("command classification", () => {
   it("treats window/geometry commands as local", () => {
@@ -17,3 +17,44 @@ describe("command classification", () => {
     expect(isWindowLocalCommand("get_settings")).toBe(false);
   });
 });
+
+describe("http routing for new endpoints", () => {
+  afterEach(() => {
+    delete (globalThis as any).window;
+    delete (globalThis as any).fetch;
+  });
+
+  function mockBackend(): string[] {
+    const calls: string[] = [];
+    (globalThis as any).window = {
+      __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+    };
+    (globalThis as any).fetch = async (url: string) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    return calls;
+  }
+
+  it("maps list_skills to GET /api/skills", async () => {
+    const calls = mockBackend();
+    await invoke("list_skills");
+    expect(calls.some((u) => u.endsWith("/api/skills"))).toBe(true);
+  });
+
+  it("maps list_plugin_collections to GET /api/plugins/collections", async () => {
+    const calls = mockBackend();
+    await invoke("list_plugin_collections");
+    expect(calls.some((u) => u.endsWith("/api/plugins/collections"))).toBe(true);
+  });
+
+  it("maps slash_preview to POST /api/slash/preview", async () => {
+    const calls = mockBackend();
+    await invoke("slash_preview", { query: "/calc 1+1" });
+    expect(calls.some((u) => u.endsWith("/api/slash/preview"))).toBe(true);
+  });
+});
+

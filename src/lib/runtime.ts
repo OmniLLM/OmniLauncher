@@ -229,14 +229,99 @@ export async function invoke<T = unknown>(
           method: "POST",
           body: JSON.stringify({ result: args?.result }),
         });
+      case "slash_preview":
+        return httpJson<T>("/api/slash/preview", {
+          method: "POST",
+          body: JSON.stringify({ query: args?.query ?? "" }),
+        });
+      case "execute_slash_command":
+        return httpJson<T>("/api/slash/execute", {
+          method: "POST",
+          body: JSON.stringify({ query: args?.query ?? "" }),
+        });
+      case "list_skills":
+        return httpJson<T>("/api/skills");
+      case "list_skill_usage":
+        return httpJson<T>("/api/skills/usage");
+      case "install_skill":
+        return httpJson<T>("/api/skills/install", {
+          method: "POST",
+          body: JSON.stringify({ source: args?.source }),
+        });
+      case "update_skill":
+        return httpJson<T>("/api/skills/update", {
+          method: "POST",
+          body: JSON.stringify({ name: args?.name }),
+        });
+      case "delete_skill":
+        return httpJson<T>("/api/skills/delete", {
+          method: "POST",
+          body: JSON.stringify({ name: args?.name }),
+        });
+      case "pin_skill":
+        return httpJson<T>("/api/skills/pin", {
+          method: "POST",
+          body: JSON.stringify({ name: args?.name, pinned: args?.pinned }),
+        });
+      case "run_curator_now":
+        return httpJson<T>("/api/skills/curator/run", { method: "POST" });
+      case "propose_skill_consolidation":
+        return httpJson<T>("/api/skills/consolidation/propose", {
+          method: "POST",
+        });
+      case "apply_skill_consolidation":
+        return httpJson<T>("/api/skills/consolidation/apply", {
+          method: "POST",
+          body: JSON.stringify({ proposal: args?.proposal }),
+        });
+      case "list_plugin_collections":
+        return httpJson<T>("/api/plugins/collections");
+      case "list_plugin_runtime_dependencies":
+        return httpJson<T>("/api/plugins/runtime-deps");
+      case "install_plugin":
+        return httpJson<T>("/api/plugins/install", {
+          method: "POST",
+          body: JSON.stringify({
+            source: args?.source,
+            target_dir: args?.targetDir,
+          }),
+        });
+      case "update_plugin":
+        return httpJson<T>("/api/plugins/update", {
+          method: "POST",
+          body: JSON.stringify({ name: args?.name }),
+        });
+      case "update_plugin_collection_all":
+        return httpJson<T>("/api/plugins/collections/update", {
+          method: "POST",
+          body: JSON.stringify({
+            collection_source: args?.collectionSource,
+            repo_dirs: args?.repoDirs,
+            git_repo_dirs: args?.gitRepoDirs,
+          }),
+        });
+      case "remove_plugin_collection":
+        return httpJson<T>("/api/plugins/collections/remove", {
+          method: "POST",
+          body: JSON.stringify({ repo_dirs: args?.repoDirs }),
+        });
+      case "install_plugin_runtime_dependency":
+        return httpJson<T>("/api/plugins/runtime-deps/install", {
+          method: "POST",
+          body: JSON.stringify({ id: args?.id }),
+        });
       case "set_window_geometry":
       case "set_window_size_centered":
       case "save_window_position":
         return Promise.resolve(true as T);
       case "vision_analyze":
-        throw new Error(
-          "vision_analyze is only available in the Tauri desktop app",
-        );
+        return httpJson<T>("/api/vision/analyze", {
+          method: "POST",
+          body: JSON.stringify({
+            prompt: args?.prompt,
+            image_base64: args?.imageBase64,
+          }),
+        });
       default:
         throw new Error(
           `Command \"${cmd}\" is not available in browser mode yet.`,
