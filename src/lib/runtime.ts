@@ -7,13 +7,49 @@ import { getCurrentWebviewWindow as tauriGetCurrentWebviewWindow } from "@tauri-
 
 const isTauriRuntime = () =>
   typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__;
-const browserBackendUrl =
-  import.meta.env.VITE_OMNILAUNCHER_BACKEND_URL?.trim() || "";
-const isHttpMode = !isTauriRuntime() && !!browserBackendUrl;
+
+/// Window/OS-shell commands run in the local Tauri process — only it owns a
+/// window. They bypass HTTP routing entirely even when a backend URL is set.
+const WINDOW_LOCAL_COMMANDS = new Set<string>([
+  "set_window_geometry",
+  "set_window_size_centered",
+  "save_window_position",
+  "capture_vision_screenshot",
+]);
+
+export function isWindowLocalCommand(cmd: string): boolean {
+  return WINDOW_LOCAL_COMMANDS.has(cmd);
+}
+
+/// Events emitted by the local Tauri process (window/hotkey/selection origin).
+/// In the desktop shell these must use `tauriListen`; everything else
+/// (ai-done, ai-error, ai-tool-call, plugin-runtime-progress, settings-saved)
+/// originates on the remote backend and arrives over the SSE event stream.
+const WINDOW_LOCAL_EVENTS = new Set<string>([
+  "omnilauncher://shown",
+  "omnilauncher://selection",
+]);
+
+/// Resolve the backend base URL lazily (read at call time, not module load) so
+/// the desktop shell can inject `window.__OMNILAUNCHER_BACKEND_URL__` after the
+/// frontend module has already evaluated, without a race.
+function backendUrl(): string {
+  if (typeof window !== "undefined") {
+    const injected = (window as any).__OMNILAUNCHER_BACKEND_URL__;
+    if (injected) return String(injected).trim();
+  }
+  return import.meta.env.VITE_OMNILAUNCHER_BACKEND_URL?.trim() || "";
+}
+
+/// HTTP mode is active whenever a backend URL is known — including inside the
+/// Tauri shell, which now delegates business logic to the remote backend.
+function httpMode(): boolean {
+  return !!backendUrl();
+}
 
 export function getBackendMode(): "tauri" | "http" | "mock" {
+  if (httpMode()) return "http";
   if (isTauriRuntime()) return "tauri";
-  if (isHttpMode) return "http";
   return "mock";
 }
 
@@ -26,7 +62,7 @@ let selectionPollTimer: number | null = null;
 let lastSelectionToken = "";
 
 function buildUrl(path: string): string {
-  return `${browserBackendUrl}${path}`;
+  return `${backendUrl()}${path}`;
 }
 
 async function httpJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -55,7 +91,7 @@ function dispatchLocalEvent<T>(name: string, payload: T) {
 }
 
 function ensureHttpEventStream(name: string) {
-  if (!isHttpMode || eventControllers.has(name)) return;
+  if (!httpMode() || eventControllers.has(name)) return;
   const controller = new AbortController();
   eventControllers.set(name, controller);
 
@@ -102,7 +138,7 @@ function ensureHttpEventStream(name: string) {
 }
 
 function ensureSelectionPolling() {
-  if (!isHttpMode || selectionPollTimer !== null) return;
+  if (!httpMode() || selectionPollTimer !== null) return;
   selectionPollTimer = window.setInterval(async () => {
     try {
       const payload = await httpJson<{
@@ -123,11 +159,13 @@ export async function invoke<T = unknown>(
   cmd: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  if (isTauriRuntime()) {
+  // Window/OS-shell commands always run in the local Tauri process — only it
+  // owns a window. They bypass HTTP routing entirely.
+  if (isWindowLocalCommand(cmd) && isTauriRuntime()) {
     return tauriInvoke<T>(cmd, args);
   }
 
-  if (isHttpMode) {
+  if (httpMode()) {
     switch (cmd) {
       case "search":
         return httpJson<T>("/api/search", {
@@ -247,11 +285,15 @@ export async function listen<T>(
   eventName: string,
   handler: EventHandler<T>,
 ): Promise<Unlisten> {
-  if (isTauriRuntime()) {
+  // Window-origin events (shown/selection) are emitted by the local Tauri
+  // process, so prefer the Tauri listener for them when running in the shell.
+  if (WINDOW_LOCAL_EVENTS.has(eventName) && isTauriRuntime()) {
     return tauriListen<T>(eventName, handler);
   }
 
-  if (isHttpMode) {
+  // Everything else (AI + progress events) originates on the backend and
+  // arrives over SSE whenever a backend URL is configured.
+  if (httpMode()) {
     ensureHttpEventStream(eventName);
     if (eventName === "omnilauncher://selection") {
       ensureSelectionPolling();
@@ -262,6 +304,11 @@ export async function listen<T>(
     eventTarget.addEventListener(eventName, listener as EventListener);
     return () =>
       eventTarget.removeEventListener(eventName, listener as EventListener);
+  }
+
+  // No backend configured: fall back to the local Tauri event bus if present.
+  if (isTauriRuntime()) {
+    return tauriListen<T>(eventName, handler);
   }
 
   return () => {};
@@ -292,7 +339,7 @@ export function getCurrentWebviewWindow() {
       return () => {};
     },
     async hide() {
-      if (!isHttpMode) return;
+      if (!httpMode()) return;
       await httpJson("/api/window/hide", { method: "POST" });
     },
   };
