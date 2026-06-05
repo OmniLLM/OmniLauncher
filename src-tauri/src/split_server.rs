@@ -101,6 +101,74 @@ struct ExecuteResultRequest {
     result: QueryResult,
 }
 
+// ─── Skills request payloads ────────────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+struct SkillSourceRequest {
+    source: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillNameRequest {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillPinRequest {
+    name: String,
+    pinned: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConsolidationApplyRequest {
+    proposal: crate::skills::consolidate::Proposal,
+}
+
+// ─── Plugin request payloads ────────────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+struct PluginInstallRequest {
+    source: String,
+    #[serde(default)]
+    target_dir: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginNameRequest {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CollectionUpdateRequest {
+    #[serde(default)]
+    collection_source: Option<String>,
+    #[serde(default)]
+    repo_dirs: Vec<String>,
+    #[serde(default)]
+    git_repo_dirs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CollectionRemoveRequest {
+    #[serde(default)]
+    repo_dirs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeDepInstallRequest {
+    id: String,
+}
+
+// ─── Slash + vision request payloads ────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+struct SlashRequest {
+    query: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisionRequest {
+    prompt: String,
+    image_base64: String,
+}
+
 fn json_response<T: Serialize>(value: &T) -> LiveResponse {
     match serde_json::to_string(value) {
         Ok(body) => LiveResponse::json(body),
@@ -332,6 +400,129 @@ async fn handle_request(
             json_response(&payload)
         }
         ("POST", "/api/window/hide") => json_response(&true),
+        // ─── Skills ─────────────────────────────────────────────────────────
+        ("GET", "/api/skills") => {
+            let mgr = state.skill_manager.lock().await;
+            let metas: Vec<crate::SkillInfo> =
+                mgr.list_meta().into_iter().map(crate::SkillInfo::from).collect();
+            json_response(&metas)
+        }
+        ("GET", "/api/skills/usage") => json_response(&crate::skills::curator::snapshot()),
+        ("POST", "/api/skills/install") => {
+            let body = read_body(request).await;
+            match parse_json::<SkillSourceRequest>(&body) {
+                Ok(input) => {
+                    let mgr = state.skill_manager.clone();
+                    let res = tokio::task::spawn_blocking(move || {
+                        let mut mgr = mgr.blocking_lock();
+                        if input.source.starts_with("http://") || input.source.starts_with("https://") {
+                            mgr.install_from_url(&input.source)
+                        } else {
+                            mgr.install_from_path(&input.source)
+                        }
+                    })
+                    .await
+                    .map_err(|e| format!("install task failed: {e}"));
+                    match res {
+                        Ok(Ok(name)) => json_response(&name),
+                        Ok(Err(e)) | Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                    }
+                }
+                Err(error) => error,
+            }
+        }
+        ("POST", "/api/skills/update") => {
+            let body = read_body(request).await;
+            match parse_json::<SkillNameRequest>(&body) {
+                Ok(input) => {
+                    let mgr = state.skill_manager.clone();
+                    let res = tokio::task::spawn_blocking(move || {
+                        let mut mgr = mgr.blocking_lock();
+                        mgr.update_skill(&input.name)
+                    })
+                    .await
+                    .map_err(|e| format!("update task failed: {e}"));
+                    match res {
+                        Ok(Ok(msg)) => json_response(&msg),
+                        Ok(Err(e)) | Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                    }
+                }
+                Err(error) => error,
+            }
+        }
+        ("POST", "/api/skills/delete") => {
+            let body = read_body(request).await;
+            match parse_json::<SkillNameRequest>(&body) {
+                Ok(input) => {
+                    let mut mgr = state.skill_manager.lock().await;
+                    match mgr.delete_skill(&input.name) {
+                        Ok(msg) => json_response(&msg),
+                        Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                    }
+                }
+                Err(error) => error,
+            }
+        }
+        ("POST", "/api/skills/pin") => {
+            let body = read_body(request).await;
+            match parse_json::<SkillPinRequest>(&body) {
+                Ok(input) => {
+                    crate::skills::curator::set_pinned(&input.name, input.pinned);
+                    json_response(&true)
+                }
+                Err(error) => error,
+            }
+        }
+        ("POST", "/api/skills/curator/run") => {
+            let names = {
+                let mgr = state.skill_manager.lock().await;
+                mgr.user_skill_names()
+            };
+            match tokio::task::spawn_blocking(move || crate::skills::curator::evaluate(&names)).await {
+                Ok(report) => json_response(&serde_json::json!({
+                    "marked_stale": report.marked_stale,
+                    "marked_archived": report.marked_archived,
+                    "seen_new": report.seen_new,
+                    "total_tracked": report.total_tracked,
+                })),
+                Err(e) => LiveResponse::text(
+                    "500 Internal Server Error",
+                    format!("curator task failed: {e}"),
+                ),
+            }
+        }
+        ("POST", "/api/skills/consolidation/propose") => {
+            let skills_clone: Vec<crate::skills::Skill> = {
+                let mgr = state.skill_manager.lock().await;
+                let user_names = mgr.user_skill_names();
+                mgr.list_meta()
+                    .iter()
+                    .filter(|m| user_names.iter().any(|n| n == &m.name))
+                    .filter_map(|m| mgr.get_by_name(&m.name).cloned())
+                    .collect()
+            };
+            let ai = state.ai_client.lock().await;
+            match crate::skills::consolidate::propose(&skills_clone, &ai).await {
+                Ok(proposals) => json_response(&proposals),
+                Err(e) => LiveResponse::text(
+                    "500 Internal Server Error",
+                    format!("LLM propose failed: {e}"),
+                ),
+            }
+        }
+        ("POST", "/api/skills/consolidation/apply") => {
+            let body = read_body(request).await;
+            match parse_json::<ConsolidationApplyRequest>(&body) {
+                Ok(input) => {
+                    let mut mgr = state.skill_manager.lock().await;
+                    match crate::skills::consolidate::apply(&input.proposal, &mut mgr) {
+                        Ok(outcome) => json_response(&outcome),
+                        Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                    }
+                }
+                Err(error) => error,
+            }
+        }
         _ => LiveResponse::text("404 Not Found", "Not Found".to_string()),
     }
 }
