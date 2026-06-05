@@ -621,7 +621,7 @@ pub fn run() {
             remove_plugin_collection,
             list_plugins,
             remove_plugin,
-            vision_analyze,
+            capture_vision_screenshot,
             save_window_position,
             set_window_size_centered,
             list_plugin_runtime_dependencies,
@@ -1664,43 +1664,63 @@ async fn remove_plugin(name: String, state: tauri::State<'_, AppState>) -> Resul
     Ok(())
 }
 
-/// Vision analyze command:
-/// 1. Hides the launcher window
-/// 2. Runs `scrot -s` (interactive region select) to save a screenshot
-/// 3. Base64-encodes the image
-/// 4. Calls the configured vision model via OpenAI chat completions with image_url
-/// 5. Returns the AI response as a plain string
+/// Capture a screenshot locally and return it base64-encoded. This is the
+/// *local* half of vision: only the machine with a screen can grab one, so it
+/// stays in the desktop shell even when all business logic (the AI call) runs
+/// on a remote backend. The frontend POSTs the returned base64 to the backend's
+/// `/api/vision/analyze` endpoint.
 #[tauri::command]
-async fn vision_analyze(
-    prompt: String,
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
+async fn capture_vision_screenshot(window: tauri::WebviewWindow) -> Result<String, String> {
     use std::io::Read;
-    log::debug!("vision_analyze invoked, prompt={:?}", prompt);
+    log::debug!("capture_vision_screenshot invoked");
 
-    // Hide the launcher so it doesn't appear in the screenshot
+    // Hide the launcher so it doesn't appear in the screenshot.
     let _ = window.hide();
-    // Brief pause to let the window disappear before the user selects a region
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
-    // Generate a temp file path for the screenshot
     let tmp_path = std::env::temp_dir().join("omnilauncher_vision.png");
     let tmp_str = tmp_path.to_string_lossy().to_string();
 
-    // Run scrot with interactive selection (-s flag)
-    let output = tokio::process::Command::new("scrot")
-        .args(["-s", "--overwrite", &tmp_str])
-        .output()
-        .await
-        .map_err(|e| format!("scrot failed: {e}. Is scrot installed?"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("scrot exited with error: {}", stderr));
+    #[cfg(target_os = "windows")]
+    {
+        // Interactive region snip via Snip & Sketch (Win+Shift+S) writes the
+        // capture to the clipboard; we then save the clipboard image to file.
+        let ps = format!(
+            r#"Add-Type -AssemblyName System.Windows.Forms,System.Drawing;
+Start-Process 'ms-screenclip:';
+$deadline=(Get-Date).AddSeconds(60);
+do {{ Start-Sleep -Milliseconds 300; $img=[System.Windows.Forms.Clipboard]::GetImage() }} while (-not $img -and (Get-Date) -lt $deadline);
+if (-not $img) {{ exit 1 }};
+$img.Save('{}');"#,
+            tmp_str.replace('\'', "''")
+        );
+        let status = tokio::process::Command::new("powershell")
+            .args(["-WindowStyle", "Hidden", "-NoProfile", "-Command", &ps])
+            .status()
+            .await
+            .map_err(|e| format!("screenshot failed: {e}"))?;
+        if !status.success() || !tmp_path.exists() {
+            let _ = window.show();
+            let _ = window.set_focus();
+            return Err("Screenshot was cancelled or failed.".to_string());
+        }
     }
 
-    // Read and base64-encode the screenshot
+    #[cfg(not(target_os = "windows"))]
+    {
+        let output = tokio::process::Command::new("scrot")
+            .args(["-s", "--overwrite", &tmp_str])
+            .output()
+            .await
+            .map_err(|e| format!("scrot failed: {e}. Is scrot installed?"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = window.show();
+            let _ = window.set_focus();
+            return Err(format!("scrot exited with error: {}", stderr));
+        }
+    }
+
     let mut file =
         std::fs::File::open(&tmp_path).map_err(|e| format!("Failed to open screenshot: {e}"))?;
     let mut img_bytes = Vec::new();
@@ -1714,77 +1734,13 @@ async fn vision_analyze(
         .map_err(|e| format!("Base64 encode error: {e}"))?;
     let b64 = enc.into_inner();
 
-    // Clean up temp file (best-effort)
     let _ = std::fs::remove_file(&tmp_path);
 
-    // Build the vision prompt
-    let user_prompt = if prompt.trim().is_empty() {
-        "Please describe what you see in this image.".to_string()
-    } else {
-        prompt.clone()
-    };
-
-    // Call the AI API with the image
-    let settings = state.settings.lock().await;
-    let base_url = settings.ai_base_url.trim_end_matches('/').to_string();
-    let api_key = settings.ai_api_key.clone();
-    let model = settings.ai_model.clone();
-    drop(settings);
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let payload = serde_json::json!({
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": format!("data:image/png;base64,{}", b64)
-                        }
-                    },
-                    {
-                        "type": "text",
-                        "text": user_prompt
-                    }
-                ]
-            }
-        ],
-        "max_tokens": 1024
-    });
-
-    let url = format!("{}/v1/chat/completions", base_url);
-    let mut req = client.post(&url).json(&payload);
-    if !api_key.is_empty() {
-        req = req.bearer_auth(&api_key);
-    }
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {e}"))?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, text));
-    }
-
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let content = json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("(no response)")
-        .to_string();
-
-    // Show the window again with results
+    // Bring the launcher back so the user sees the result flow.
     let _ = window.show();
     let _ = window.set_focus();
 
-    Ok(content)
+    Ok(b64)
 }
 
 fn main() {

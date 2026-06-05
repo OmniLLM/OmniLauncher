@@ -829,7 +829,15 @@ export default function App() {
         setResults([]);
         setQuery("");
         try {
-          const response = await invoke<string>("vision_analyze", { prompt });
+          // Capture the screenshot locally (only the shell has a screen), then
+          // send it to the backend for the AI vision call.
+          const imageBase64 = await invoke<string>(
+            "capture_vision_screenshot",
+          );
+          const response = await invoke<string>("vision_analyze", {
+            prompt,
+            imageBase64,
+          });
           setConversationHistory((prev) => {
             const next = [...prev];
             next[next.length - 1] = {
