@@ -17,16 +17,29 @@ interface Props {
   onFavoritesChange: (ids: string[]) => void;
 }
 
-export default function FavoritesList({ favoriteIds, onExecute, onFavoritesChange }: Props) {
+export default function FavoritesList({
+  favoriteIds,
+  onExecute,
+  onFavoritesChange,
+}: Props) {
   const [items, setItems] = useState<QueryResult[]>([]);
 
   useEffect(() => {
-    if (favoriteIds.length === 0) { setItems([]); return; }
+    if (favoriteIds.length === 0) {
+      setItems([]);
+      return;
+    }
     try {
       const stored = localStorage.getItem("omni-favorite-items");
       const all: QueryResult[] = stored ? JSON.parse(stored) : [];
-      setItems(favoriteIds.map(id => all.find(r => r.id === id)).filter(Boolean) as QueryResult[]);
-    } catch { setItems([]); }
+      setItems(
+        favoriteIds
+          .map((id) => all.find((r) => r.id === id))
+          .filter(Boolean) as QueryResult[],
+      );
+    } catch {
+      setItems([]);
+    }
   }, [favoriteIds]);
 
   if (items.length === 0) return null;
@@ -43,18 +56,24 @@ export default function FavoritesList({ favoriteIds, onExecute, onFavoritesChang
           <span className="omni-favorites__icon">{r.icon || "📄"}</span>
           <div className="omni-favorites__main">
             <div className="omni-favorites__title">{r.title}</div>
-            {r.subtitle && <div className="omni-favorites__sub">{r.subtitle}</div>}
+            {r.subtitle && (
+              <div className="omni-favorites__sub">{r.subtitle}</div>
+            )}
           </div>
           <button
             className="omni-favorites__star"
             onClick={(e) => {
               e.stopPropagation();
-              const newIds = favoriteIds.filter(id => id !== r.id);
-              try { localStorage.setItem("omni-favorites", JSON.stringify(newIds)); } catch {}
+              const newIds = favoriteIds.filter((id) => id !== r.id);
+              try {
+                localStorage.setItem("omni-favorites", JSON.stringify(newIds));
+              } catch {}
               onFavoritesChange(newIds);
             }}
             title="Remove favorite"
-          >★</button>
+          >
+            ★
+          </button>
         </div>
       ))}
     </div>

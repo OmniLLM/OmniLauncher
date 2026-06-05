@@ -15,9 +15,7 @@
   --accent-dim: rgba(138, 180, 248, 0.15);
   --accent-hover: rgba(138, 180, 248, 0.08);
   --border: rgba(255, 255, 255, 0.12);
-  --shadow:
-    0 1px 3px rgba(0, 0, 0, 0.3),
-    0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.4);
   --user-bubble: #1a73e8;
   --user-bubble-text: #ffffff;
   --ai-bubble: #303134;
@@ -57,14 +55,18 @@
 }
 
 /* === A11y: focus-visible + reduced motion === */
-:focus { outline: none; }
+:focus {
+  outline: none;
+}
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 6px;
 }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
@@ -162,14 +164,24 @@ body,
 .chat-input,
 .result-item,
 :root {
-  transition: background-color 220ms ease, color 220ms ease, border-color 220ms ease, box-shadow 220ms ease;
+  transition:
+    background-color 220ms ease,
+    color 220ms ease,
+    border-color 220ms ease,
+    box-shadow 220ms ease;
 }
 
 /* Theme toggle button spin animation */
 @keyframes theme-toggle-spin {
-  from { transform: rotate(0deg) scale(1); }
-  50%  { transform: rotate(180deg) scale(1.15); }
-  to   { transform: rotate(360deg) scale(1); }
+  from {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.15);
+  }
+  to {
+    transform: rotate(360deg) scale(1);
+  }
 }
 
 .theme-toggle-animate {
@@ -336,8 +348,15 @@ body {
 }
 
 @keyframes omni-chip-pulse {
-  0%, 100% { opacity: 0.7; box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent); }
-  50% { opacity: 1; box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent); }
+  0%,
+  100% {
+    opacity: 0.7;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
 }
 
 .chat-msg__tool-badge--active {
@@ -438,7 +457,9 @@ body {
 .omni-ai-textarea::placeholder {
   color: color-mix(in srgb, var(--text) 40%, transparent);
 }
-.omni-ai-textarea::-webkit-scrollbar { width: 6px; }
+.omni-ai-textarea::-webkit-scrollbar {
+  width: 6px;
+}
 .omni-ai-textarea::-webkit-scrollbar-thumb {
   background: var(--surface-2);
   border-radius: 999px;
@@ -446,8 +467,14 @@ body {
 
 /* Brand tagline reveal */
 @keyframes omni-tagline-fadein {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ── Search-bar icon buttons (settings, theme) ──────────────────────────── */
@@ -465,7 +492,10 @@ body {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  transition: opacity 150ms ease, background-color 150ms ease, color 150ms ease;
+  transition:
+    opacity 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
 }
 .omni-icon-btn:hover {
   opacity: 1;
@@ -494,7 +524,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 160ms ease, transform 160ms ease;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
 }
 .omni-stop-glyph__square {
   opacity: 0;
@@ -556,7 +588,10 @@ body {
   gap: 12px;
   padding: 8px 14px;
   cursor: pointer;
-  transition: background-color 150ms ease, transform 120ms ease, border-left-color 150ms ease;
+  transition:
+    background-color 150ms ease,
+    transform 120ms ease,
+    border-left-color 150ms ease;
   border-left: 3px solid transparent;
   animation: omni-fade-in 180ms ease both;
 }
@@ -660,7 +695,11 @@ body {
   padding: 2px 4px;
   border-radius: 6px;
   line-height: 1;
-  transition: opacity 150ms ease, color 150ms ease, background-color 150ms ease, transform 150ms ease;
+  transition:
+    opacity 150ms ease,
+    color 150ms ease,
+    background-color 150ms ease,
+    transform 150ms ease;
 }
 .result-item:hover .result-item__star,
 .result-item--selected .result-item__star,
@@ -683,7 +722,7 @@ body {
 .result-item__kbd {
   font-size: 10px;
   color: var(--sub);
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
   padding: 1px 5px;
   border-radius: 4px;
   border: 1px solid var(--surface-2);
@@ -707,7 +746,10 @@ body {
   border-radius: 5px;
   font-weight: 500;
   white-space: nowrap;
-  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
 }
 .result-item--selected .result-item__action-badge {
   color: var(--accent);
@@ -759,7 +801,9 @@ body {
   padding: 3px 8px;
   border-radius: 6px;
   cursor: default;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 .result-actionbar__primary {
   color: var(--accent);
@@ -783,7 +827,7 @@ body {
   font-weight: 500;
 }
 .result-actionbar__kbd {
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 10px;
   font-weight: 600;
   padding: 1px 5px;
@@ -816,7 +860,9 @@ body {
   color: var(--text);
   cursor: pointer;
   border-radius: 5px;
-  transition: background-color 100ms ease, color 100ms ease;
+  transition:
+    background-color 100ms ease,
+    color 100ms ease;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -917,7 +963,7 @@ body {
 }
 
 .omni-subtitle-rich .md-codeblock {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
   font-size: 11px;
   background: var(--surface);
   border: 1px solid var(--surface-2);
@@ -944,12 +990,18 @@ body {
   height: 3px;
 }
 
-.omni-subtitle-rich strong { font-weight: 600; }
-.omni-subtitle-rich em { font-style: italic; }
-.omni-subtitle-rich del { text-decoration: line-through; }
+.omni-subtitle-rich strong {
+  font-weight: 600;
+}
+.omni-subtitle-rich em {
+  font-style: italic;
+}
+.omni-subtitle-rich del {
+  text-decoration: line-through;
+}
 
 .omni-subtitle-rich .md-inline-code {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
   font-size: 10.5px;
   background: var(--surface-2);
   border-radius: 3px;
@@ -1473,9 +1525,15 @@ mark {
   color: var(--sub);
   animation: omni-fade-in 160ms ease both;
 }
-.omni-status--success { color: var(--success); }
-.omni-status--error { color: var(--error); }
-.omni-status--warning { color: var(--warning); }
+.omni-status--success {
+  color: var(--success);
+}
+.omni-status--error {
+  color: var(--error);
+}
+.omni-status--warning {
+  color: var(--warning);
+}
 
 /* Status dot for dependency / install state. */
 .omni-pill {
@@ -1522,7 +1580,10 @@ mark {
   padding: 7px 10px;
   font-size: 13px;
   font-family: inherit;
-  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background-color 140ms ease;
   outline: none;
   width: 100%;
   box-sizing: border-box;
@@ -1592,7 +1653,9 @@ mark {
   line-height: 1;
   padding: 6px 8px;
   border-radius: 6px;
-  transition: background-color 140ms ease, color 140ms ease;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
 }
 .omni-titlebar__close:hover {
   background: color-mix(in srgb, var(--danger) 14%, transparent);
@@ -1633,7 +1696,10 @@ mark {
   background: transparent;
   color: var(--sub);
   border-left: 2px solid transparent;
-  transition: background-color 140ms ease, color 140ms ease, border-left-color 140ms ease;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    border-left-color 140ms ease;
   text-align: left;
   width: 100%;
   font-family: inherit;
@@ -1675,7 +1741,9 @@ mark {
   font-size: 13px;
   cursor: pointer;
   color: var(--text);
-  transition: background-color 100ms ease, color 100ms ease;
+  transition:
+    background-color 100ms ease,
+    color 100ms ease;
 }
 .settings-popover__item:hover {
   background: var(--accent-hover);
@@ -1784,7 +1852,9 @@ mark {
     0 1px 4px color-mix(in srgb, var(--accent) 8%, transparent),
     0 1px 0 var(--border) inset;
   overflow: hidden;
-  transition: box-shadow 150ms ease, border-color 150ms ease;
+  transition:
+    box-shadow 150ms ease,
+    border-color 150ms ease;
 }
 .skill-card:hover {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--surface-2));
@@ -1901,7 +1971,6 @@ mark {
   opacity: 0.8;
 }
 
-
 /* ============================================================
    Plugin Manager — runtimes, collection cards, plugin rows
    ============================================================ */
@@ -1951,7 +2020,9 @@ mark {
   flex-shrink: 0;
   max-width: 180px;
   font-family: inherit;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
 }
 .plugin-panel__target-select:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--surface-2));
@@ -1968,8 +2039,12 @@ mark {
   min-height: 18px;
   color: var(--sub);
 }
-.plugin-panel__status--success { color: var(--success); }
-.plugin-panel__status--error { color: var(--danger); }
+.plugin-panel__status--success {
+  color: var(--success);
+}
+.plugin-panel__status--error {
+  color: var(--danger);
+}
 .plugin-panel__empty {
   font-size: 13px;
   color: var(--sub);
@@ -2244,7 +2319,9 @@ mark {
   font-size: 13px;
   padding: 0 2px;
   opacity: 0.8;
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
 }
 .omni-favorites__star:hover {
   opacity: 1;

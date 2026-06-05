@@ -59,7 +59,9 @@ export default function FormattedSubtitle({ text, color, isPath }: Props) {
       <div
         className="omni-subtitle-rich"
         style={{ color }}
-        dangerouslySetInnerHTML={{ __html: renderMarkdown(summarizeTables(text)) }}
+        dangerouslySetInnerHTML={{
+          __html: renderMarkdown(summarizeTables(text)),
+        }}
       />
     );
   }

@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+} from "react";
 import FormattedSubtitle from "./FormattedSubtitle";
 
 interface QueryResult {
@@ -34,8 +40,9 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 // Detect mac so we show ⌘ vs Ctrl in the kbd hints.
-const IS_MAC = typeof navigator !== "undefined"
-  && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "");
+const IS_MAC =
+  typeof navigator !== "undefined" &&
+  /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "");
 const MOD_KEY = IS_MAC ? "⌘" : "Ctrl+";
 
 // Keyboard shortcut labels for first 9 results.
@@ -45,10 +52,7 @@ function kbdHint(i: number): string {
 }
 
 function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function highlight(text: string, q: string): string {
@@ -57,7 +61,9 @@ function highlight(text: string, q: string): string {
   if (idx !== -1) {
     return (
       escapeHtml(text.slice(0, idx)) +
-      "<mark>" + escapeHtml(text.slice(idx, idx + q.length)) + "</mark>" +
+      "<mark>" +
+      escapeHtml(text.slice(idx, idx + q.length)) +
+      "</mark>" +
       escapeHtml(text.slice(idx + q.length))
     );
   }
@@ -82,9 +88,7 @@ function highlight(text: string, q: string): string {
  * header label ("File Search", "Calculator"). */
 function prettifySource(s: string | undefined): string {
   if (!s) return "Other";
-  return s
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return s.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /** Group results by `source`, preserving the order in which each source
@@ -137,9 +141,11 @@ export default function ResultList({
 }: Props) {
   const [selected, setSelected] = useState(0);
   const [hovered, setHovered] = useState(-1);
-  const [ctxMenu, setCtxMenu] = useState<
-    { x: number; y: number; item: QueryResult } | null
-  >(null);
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    item: QueryResult;
+  } | null>(null);
   // Favorites are owned by App (backed by the SQLite store). Fall back to an
   // empty set when this list isn't favorites-aware (e.g. slash suggestions).
   const favoriteIds = favorites ?? new Set<string>();
@@ -248,14 +254,23 @@ export default function ResultList({
         ref={listRef}
         className="results"
         role="listbox"
-        aria-activedescendant={selected >= 0 ? `omni-opt-${selected}` : undefined}
+        aria-activedescendant={
+          selected >= 0 ? `omni-opt-${selected}` : undefined
+        }
       >
         {rows.map((row) => {
           if (row.kind === "header") {
             return (
-              <div key={row.key} className="result-group__header" role="presentation">
+              <div
+                key={row.key}
+                className="result-group__header"
+                role="presentation"
+              >
                 <span>{row.label}</span>
-                <span className="result-group__header-rule" aria-hidden="true" />
+                <span
+                  className="result-group__header-rule"
+                  aria-hidden="true"
+                />
               </div>
             );
           }
@@ -269,7 +284,9 @@ export default function ResultList({
           return (
             <div
               key={row.key}
-              ref={(el) => { itemRefs.current[i] = el; }}
+              ref={(el) => {
+                itemRefs.current[i] = el;
+              }}
               id={`omni-opt-${i}`}
               role="option"
               aria-selected={isSelected}
@@ -292,7 +309,9 @@ export default function ResultList({
               <div className="result-item__content">
                 <div
                   className="result-item__title"
-                  dangerouslySetInnerHTML={{ __html: highlight(r.title, query) }}
+                  dangerouslySetInnerHTML={{
+                    __html: highlight(r.title, query),
+                  }}
                 />
               </div>
 
@@ -346,7 +365,10 @@ export default function ResultList({
             <kbd className="result-actionbar__kbd">↵</kbd>
           </span>
           <span className="result-actionbar__sep" aria-hidden="true" />
-          <span className="result-actionbar__secondary" title="Open actions menu (right-click for now)">
+          <span
+            className="result-actionbar__secondary"
+            title="Open actions menu (right-click for now)"
+          >
             <span className="result-actionbar__label">Actions</span>
             <kbd className="result-actionbar__kbd">{IS_MAC ? "⌘" : "Ctrl"}</kbd>
             <kbd className="result-actionbar__kbd">K</kbd>
@@ -374,21 +396,25 @@ export default function ResultList({
               icon: "⎘",
               label: "Copy title",
               action: () => {
-                navigator.clipboard.writeText(ctxMenu.item.title).catch(() => {});
+                navigator.clipboard
+                  .writeText(ctxMenu.item.title)
+                  .catch(() => {});
                 setCtxMenu(null);
               },
             },
             ...(ctxMenu.item.subtitle
-              ? [{
-                  icon: "⎘",
-                  label: "Copy subtitle",
-                  action: () => {
-                    navigator.clipboard
-                      .writeText(ctxMenu.item.subtitle!)
-                      .catch(() => {});
-                    setCtxMenu(null);
+              ? [
+                  {
+                    icon: "⎘",
+                    label: "Copy subtitle",
+                    action: () => {
+                      navigator.clipboard
+                        .writeText(ctxMenu.item.subtitle!)
+                        .catch(() => {});
+                      setCtxMenu(null);
+                    },
                   },
-                }]
+                ]
               : []),
             {
               icon: favoriteIds.has(ctxMenu.item.id) ? "★" : "☆",
@@ -396,10 +422,9 @@ export default function ResultList({
                 ? "Remove from favorites"
                 : "Add to favorites",
               action: () => {
-                toggleFavorite(
-                  ctxMenu.item.id,
-                  { stopPropagation: () => {} } as React.MouseEvent,
-                );
+                toggleFavorite(ctxMenu.item.id, {
+                  stopPropagation: () => {},
+                } as React.MouseEvent);
                 setCtxMenu(null);
               },
             },

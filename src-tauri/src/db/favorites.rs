@@ -62,7 +62,11 @@ pub fn list_favorites() -> Vec<QueryResult> {
 pub fn add_favorite(result: &QueryResult) -> Result<(), String> {
     let conn = open().map_err(|e| format!("DB open failed: {e}"))?;
     let next_pos: i64 = conn
-        .query_row("SELECT COALESCE(MAX(position), -1) + 1 FROM favorites", [], |r| r.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM favorites",
+            [],
+            |r| r.get(0),
+        )
         .unwrap_or(0);
     conn.execute(
         "INSERT INTO favorites

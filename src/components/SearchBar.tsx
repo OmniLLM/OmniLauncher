@@ -226,7 +226,9 @@ export default function SearchBar({
           gap: "10px",
           boxSizing: "border-box",
           border: "1px solid var(--surface-2)",
-          background: isAiMode ? "color-mix(in srgb, var(--surface) 50%, transparent)" : "var(--bg)",
+          background: isAiMode
+            ? "color-mix(in srgb, var(--surface) 50%, transparent)"
+            : "var(--bg)",
           backdropFilter: isAiMode ? "blur(10px)" : undefined,
           WebkitBackdropFilter: isAiMode ? "blur(10px)" : undefined,
           borderRadius: s.wrapRadius,
@@ -269,7 +271,11 @@ export default function SearchBar({
             style={{
               fontSize: s.iconFontSize,
               opacity: s.iconOpacity,
-              color: isAiMode ? "var(--accent)" : compact ? "var(--text)" : undefined,
+              color: isAiMode
+                ? "var(--accent)"
+                : compact
+                  ? "var(--text)"
+                  : undefined,
               flexShrink: 0,
               lineHeight: 1,
               display: "flex",
@@ -284,7 +290,10 @@ export default function SearchBar({
 
         {/* Queue depth badge */}
         {loading && queueDepth > 0 && (
-          <span className="omni-badge omni-badge--outline" title={`${queueDepth} queued`}>
+          <span
+            className="omni-badge omni-badge--outline"
+            title={`${queueDepth} queued`}
+          >
             +{queueDepth}
           </span>
         )}
@@ -373,9 +382,15 @@ export default function SearchBar({
                 e.preventDefault();
                 onSubmit(value, e.ctrlKey || e.metaKey);
               }
-              if (e.key === "ArrowUp" && (value === "" || (historyIdx ?? -1) >= 0)) {
+              if (
+                e.key === "ArrowUp" &&
+                (value === "" || (historyIdx ?? -1) >= 0)
+              ) {
                 e.preventDefault();
-                const newIdx = Math.min((historyIdx ?? -1) + 1, (inputHistory?.length ?? 0) - 1);
+                const newIdx = Math.min(
+                  (historyIdx ?? -1) + 1,
+                  (inputHistory?.length ?? 0) - 1,
+                );
                 if (newIdx >= 0 && inputHistory && inputHistory[newIdx]) {
                   onHistoryNavigate?.(newIdx, inputHistory[newIdx]);
                 }
@@ -407,7 +422,9 @@ export default function SearchBar({
         )}
 
         {/* AI mode badge (right side when fully in AI mode) */}
-        {isAiMode && <span className="omni-badge omni-badge--ai-large">AI</span>}
+        {isAiMode && (
+          <span className="omni-badge omni-badge--ai-large">AI</span>
+        )}
 
         {isAiMode && loading && onCancel && (
           <button
@@ -423,7 +440,8 @@ export default function SearchBar({
               minHeight: "30px",
               padding: "5px 10px",
               borderRadius: "8px",
-              border: "1px solid color-mix(in srgb, var(--accent) 35%, transparent)",
+              border:
+                "1px solid color-mix(in srgb, var(--accent) 35%, transparent)",
               background: "color-mix(in srgb, var(--accent) 18%, transparent)",
               color: "var(--accent)",
               fontSize: "12px",

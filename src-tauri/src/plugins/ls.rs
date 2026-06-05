@@ -75,7 +75,10 @@ impl Plugin for LsPlugin {
                 Ok(o) => {
                     let text = String::from_utf8_lossy(&o.stdout);
                     if text.len() > 6000 {
-                        format!("{}\n... (truncated)", truncate_on_char_boundary(&text, 6000))
+                        format!(
+                            "{}\n... (truncated)",
+                            truncate_on_char_boundary(&text, 6000)
+                        )
                     } else {
                         text.to_string()
                     }

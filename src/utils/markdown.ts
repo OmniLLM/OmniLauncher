@@ -157,12 +157,12 @@ export function renderMarkdown(text: string): string {
  */
 export function hasMarkdown(text: string): boolean {
   return (
-    /^\|.+\|/m.test(text) ||          // table rows
-    /```/.test(text) ||                // fenced code
-    /^#{1,6}\s/m.test(text) ||        // headers
-    /^\s*[-*]\s/m.test(text) ||       // unordered list
-    /^\s*\d+\.\s/m.test(text) ||      // ordered list
-    /\*\*.+\*\*/.test(text) ||        // bold
-    /`[^`]+`/.test(text)              // inline code
+    /^\|.+\|/m.test(text) || // table rows
+    /```/.test(text) || // fenced code
+    /^#{1,6}\s/m.test(text) || // headers
+    /^\s*[-*]\s/m.test(text) || // unordered list
+    /^\s*\d+\.\s/m.test(text) || // ordered list
+    /\*\*.+\*\*/.test(text) || // bold
+    /`[^`]+`/.test(text) // inline code
   );
 }

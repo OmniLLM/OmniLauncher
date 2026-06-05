@@ -1486,7 +1486,9 @@ pub async fn update_plugin_collection_all(
 }
 
 /// Remove every repo in a collection. Absorbs `handleRemoveCollection`.
-pub async fn remove_plugin_collection(repo_dirs: Vec<String>) -> Result<CollectionOpResult, String> {
+pub async fn remove_plugin_collection(
+    repo_dirs: Vec<String>,
+) -> Result<CollectionOpResult, String> {
     let mut removed = Vec::new();
     let mut failed = Vec::new();
     for dir in repo_dirs {
@@ -1553,7 +1555,6 @@ mod tests {
         assert_eq!(normalize_git_remote(None), None);
         assert_eq!(normalize_git_remote(Some("singletoken")), None);
     }
-
 
     #[test]
     fn parse_github_subdir_url_handles_tree_with_trailing_slash() {

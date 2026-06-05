@@ -87,7 +87,10 @@ impl Plugin for GitPlugin {
                     result = format!("{}\n{}", result, stderr);
                 }
                 if result.len() > 6000 {
-                    format!("{}\n... (truncated)", truncate_on_char_boundary(&result, 6000))
+                    format!(
+                        "{}\n... (truncated)",
+                        truncate_on_char_boundary(&result, 6000)
+                    )
                 } else if result.is_empty() {
                     format!("git {} completed (no output)", subcommand)
                 } else {

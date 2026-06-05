@@ -189,7 +189,10 @@ impl Plugin for CodeExecPlugin {
 
         let _ = std::fs::remove_file(&temp_file);
         if result.len() > 4000 {
-            format!("{}\n... (truncated)", truncate_on_char_boundary(&result, 4000))
+            format!(
+                "{}\n... (truncated)",
+                truncate_on_char_boundary(&result, 4000)
+            )
         } else {
             result
         }

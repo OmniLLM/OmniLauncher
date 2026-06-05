@@ -92,7 +92,10 @@ impl Plugin for GrepPlugin {
                 if stdout.is_empty() {
                     "No matches found".to_string()
                 } else if stdout.len() > 6000 {
-                    format!("{}\n... (truncated)", truncate_on_char_boundary(&stdout, 6000))
+                    format!(
+                        "{}\n... (truncated)",
+                        truncate_on_char_boundary(&stdout, 6000)
+                    )
                 } else {
                     stdout.to_string()
                 }

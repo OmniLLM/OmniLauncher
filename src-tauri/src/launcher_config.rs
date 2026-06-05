@@ -39,32 +39,157 @@ pub struct SlashCommandDef {
 /// autocomplete suggestions and the help list.
 pub const SLASH_COMMANDS: &[SlashCommandDef] = &[
     // ── Launcher navigation (handled in the UI) ──────────────────────────────
-    SlashCommandDef { name: "/plugins", shortcut: Some("/pm"), description: "Open external plugin manager", usage: "/plugins" },
-    SlashCommandDef { name: "/skills", shortcut: None, description: "Open skill manager (install, view, delete skills)", usage: "/skills" },
-    SlashCommandDef { name: "/new", shortcut: None, description: "Start a new AI conversation", usage: "/new" },
-    SlashCommandDef { name: "/clear", shortcut: None, description: "Clear the current AI conversation", usage: "/clear" },
-    SlashCommandDef { name: "/help", shortcut: Some("/?"), description: "Show all available commands", usage: "/help" },
+    SlashCommandDef {
+        name: "/plugins",
+        shortcut: Some("/pm"),
+        description: "Open external plugin manager",
+        usage: "/plugins",
+    },
+    SlashCommandDef {
+        name: "/skills",
+        shortcut: None,
+        description: "Open skill manager (install, view, delete skills)",
+        usage: "/skills",
+    },
+    SlashCommandDef {
+        name: "/new",
+        shortcut: None,
+        description: "Start a new AI conversation",
+        usage: "/new",
+    },
+    SlashCommandDef {
+        name: "/clear",
+        shortcut: None,
+        description: "Clear the current AI conversation",
+        usage: "/clear",
+    },
+    SlashCommandDef {
+        name: "/help",
+        shortcut: Some("/?"),
+        description: "Show all available commands",
+        usage: "/help",
+    },
     // ── Operational commands (handled by Router::slash_command) ───────────────
-    SlashCommandDef { name: "/run", shortcut: Some("/r"), description: "Execute a shell command", usage: "/run <command>" },
-    SlashCommandDef { name: "/open", shortcut: Some("/o"), description: "Open app, file, or URL", usage: "/open <target>" },
-    SlashCommandDef { name: "/app", shortcut: Some("/a"), description: "Search & launch applications", usage: "/app <query>" },
-    SlashCommandDef { name: "/find", shortcut: Some("/f"), description: "Search files by name", usage: "/find <name>" },
-    SlashCommandDef { name: "/grep", shortcut: Some("/g"), description: "Search file contents with regex", usage: "/grep <pattern> [path]" },
-    SlashCommandDef { name: "/cat", shortcut: None, description: "Read and display a file", usage: "/cat <file>" },
-    SlashCommandDef { name: "/ls", shortcut: None, description: "List directory contents", usage: "/ls [path]" },
-    SlashCommandDef { name: "/git", shortcut: None, description: "Run git command (default: status)", usage: "/git [subcmd]" },
-    SlashCommandDef { name: "/calc", shortcut: Some("/c"), description: "Quick calculator", usage: "/calc <expr>" },
-    SlashCommandDef { name: "/todo", shortcut: Some("/t"), description: "List todos or add one", usage: "/todo [text]" },
-    SlashCommandDef { name: "/web", shortcut: Some("/w"), description: "Web search (Google)", usage: "/web <query>" },
-    SlashCommandDef { name: "/ip", shortcut: None, description: "Show public IP address", usage: "/ip" },
-    SlashCommandDef { name: "/ports", shortcut: None, description: "Show listening network ports", usage: "/ports" },
-    SlashCommandDef { name: "/ps", shortcut: None, description: "Top processes by CPU usage", usage: "/ps" },
-    SlashCommandDef { name: "/kill", shortcut: None, description: "Kill a process", usage: "/kill <name/pid>" },
-    SlashCommandDef { name: "/env", shortcut: None, description: "Get environment variable value", usage: "/env <var>" },
-    SlashCommandDef { name: "/color", shortcut: None, description: "Convert color formats (hex/rgb/hsl)", usage: "/color <value>" },
-    SlashCommandDef { name: "/sys", shortcut: None, description: "System: lock/sleep/shutdown/restart", usage: "/sys <cmd>" },
-    SlashCommandDef { name: "/clip", shortcut: Some("/cb"), description: "Search clipboard history", usage: "/clip [term]" },
-    SlashCommandDef { name: "/skill", shortcut: None, description: "Manage skills (list/view/install/delete)", usage: "/skill <subcmd>" },
+    SlashCommandDef {
+        name: "/run",
+        shortcut: Some("/r"),
+        description: "Execute a shell command",
+        usage: "/run <command>",
+    },
+    SlashCommandDef {
+        name: "/open",
+        shortcut: Some("/o"),
+        description: "Open app, file, or URL",
+        usage: "/open <target>",
+    },
+    SlashCommandDef {
+        name: "/app",
+        shortcut: Some("/a"),
+        description: "Search & launch applications",
+        usage: "/app <query>",
+    },
+    SlashCommandDef {
+        name: "/find",
+        shortcut: Some("/f"),
+        description: "Search files by name",
+        usage: "/find <name>",
+    },
+    SlashCommandDef {
+        name: "/grep",
+        shortcut: Some("/g"),
+        description: "Search file contents with regex",
+        usage: "/grep <pattern> [path]",
+    },
+    SlashCommandDef {
+        name: "/cat",
+        shortcut: None,
+        description: "Read and display a file",
+        usage: "/cat <file>",
+    },
+    SlashCommandDef {
+        name: "/ls",
+        shortcut: None,
+        description: "List directory contents",
+        usage: "/ls [path]",
+    },
+    SlashCommandDef {
+        name: "/git",
+        shortcut: None,
+        description: "Run git command (default: status)",
+        usage: "/git [subcmd]",
+    },
+    SlashCommandDef {
+        name: "/calc",
+        shortcut: Some("/c"),
+        description: "Quick calculator",
+        usage: "/calc <expr>",
+    },
+    SlashCommandDef {
+        name: "/todo",
+        shortcut: Some("/t"),
+        description: "List todos or add one",
+        usage: "/todo [text]",
+    },
+    SlashCommandDef {
+        name: "/web",
+        shortcut: Some("/w"),
+        description: "Web search (Google)",
+        usage: "/web <query>",
+    },
+    SlashCommandDef {
+        name: "/ip",
+        shortcut: None,
+        description: "Show public IP address",
+        usage: "/ip",
+    },
+    SlashCommandDef {
+        name: "/ports",
+        shortcut: None,
+        description: "Show listening network ports",
+        usage: "/ports",
+    },
+    SlashCommandDef {
+        name: "/ps",
+        shortcut: None,
+        description: "Top processes by CPU usage",
+        usage: "/ps",
+    },
+    SlashCommandDef {
+        name: "/kill",
+        shortcut: None,
+        description: "Kill a process",
+        usage: "/kill <name/pid>",
+    },
+    SlashCommandDef {
+        name: "/env",
+        shortcut: None,
+        description: "Get environment variable value",
+        usage: "/env <var>",
+    },
+    SlashCommandDef {
+        name: "/color",
+        shortcut: None,
+        description: "Convert color formats (hex/rgb/hsl)",
+        usage: "/color <value>",
+    },
+    SlashCommandDef {
+        name: "/sys",
+        shortcut: None,
+        description: "System: lock/sleep/shutdown/restart",
+        usage: "/sys <cmd>",
+    },
+    SlashCommandDef {
+        name: "/clip",
+        shortcut: Some("/cb"),
+        description: "Search clipboard history",
+        usage: "/clip [term]",
+    },
+    SlashCommandDef {
+        name: "/skill",
+        shortcut: None,
+        description: "Manage skills (list/view/install/delete)",
+        usage: "/skill <subcmd>",
+    },
 ];
 
 /// The full launcher rule-set, serialized to the frontend in one call.
@@ -81,7 +206,10 @@ impl LauncherConfig {
     pub fn current() -> Self {
         Self {
             ai_prefixes: AI_PREFIXES.iter().map(|s| s.to_string()).collect(),
-            plugin_manager_aliases: PLUGIN_MANAGER_ALIASES.iter().map(|s| s.to_string()).collect(),
+            plugin_manager_aliases: PLUGIN_MANAGER_ALIASES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             reset_commands: RESET_COMMANDS.iter().map(|s| s.to_string()).collect(),
             help_commands: HELP_COMMANDS.iter().map(|s| s.to_string()).collect(),
             slash_commands: SLASH_COMMANDS.to_vec(),
