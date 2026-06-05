@@ -430,6 +430,7 @@ pub mod plugin_manager_cmd;
 pub mod pomodoro;
 pub mod process_manager;
 pub mod raycast;
+pub mod runtime_deps;
 pub mod scheduler;
 pub mod screenshot;
 pub mod script_runner;

@@ -7,6 +7,7 @@ pub mod launcher_config;
 pub mod live_server;
 pub mod path_config;
 pub mod plugins;
+pub mod python_installer;
 pub mod settings;
 pub mod skills;
 pub mod split_server;
