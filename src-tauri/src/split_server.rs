@@ -600,6 +600,29 @@ async fn handle_request(
                 Err(error) => error,
             }
         }
+        // ─── Slash commands ─────────────────────────────────────────────────
+        ("POST", "/api/slash/preview") => {
+            let body = read_body(request).await;
+            match parse_json::<SlashRequest>(&body) {
+                Ok(input) => {
+                    let pm = state.plugin_manager.lock().await;
+                    json_response(&slash_preview_backend(&input.query, &pm).await)
+                }
+                Err(error) => error,
+            }
+        }
+        ("POST", "/api/slash/execute") => {
+            let body = read_body(request).await;
+            match parse_json::<SlashRequest>(&body) {
+                Ok(input) => {
+                    let pm = state.plugin_manager.lock().await;
+                    let mut skill_mgr = state.skill_manager.lock().await;
+                    let resp = crate::ai::router::Router::slash_command(&input.query, &pm, &mut skill_mgr).await;
+                    json_response(&resp)
+                }
+                Err(error) => error,
+            }
+        }
         _ => LiveResponse::text("404 Not Found", "Not Found".to_string()),
     }
 }
@@ -633,6 +656,177 @@ fn encode_response(response: LiveResponse) -> Vec<u8> {
 pub async fn search_backend(query: String, state: &SplitServerState) -> Vec<QueryResult> {
     let pm = state.plugin_manager.lock().await;
     pm.query_all(&query).await
+}
+
+/// Slash-command preview results. Shared by the split-backend
+/// `/api/slash/preview` endpoint and the Tauri `slash_preview` command so both
+/// surfaces behave identically. `pm` is passed in (already locked by the
+/// caller) to keep this free of `SplitServerState` / `AppState` coupling.
+pub async fn slash_preview_backend(
+    query: &str,
+    pm: &crate::PluginManager,
+) -> Vec<QueryResult> {
+    let lower = query.to_lowercase();
+
+    // Parse command and argument
+    let (cmd, arg) = match query.split_once(' ') {
+        Some((c, a)) => (c.to_lowercase(), a.trim().to_string()),
+        None => (lower.clone(), String::new()),
+    };
+
+    match cmd.as_str() {
+        "/app" | "/a" => {
+            if arg.is_empty() {
+                vec![]
+            } else {
+                pm.query_all(&arg).await
+            }
+        }
+        "/find" | "/f" => {
+            if arg.is_empty() {
+                vec![]
+            } else {
+                pm.query_all(&format!("f {}", arg)).await
+            }
+        }
+        "/open" | "/o" => {
+            if arg.is_empty() {
+                vec![]
+            } else {
+                pm.query_all(&arg).await
+            }
+        }
+        "/run" | "/r" => {
+            if arg.is_empty() {
+                vec![]
+            } else {
+                pm.query_all(&format!("> {}", arg)).await
+            }
+        }
+        "/grep" | "/g" => vec![],
+        "/web" | "/w" => {
+            if arg.is_empty() {
+                return vec![];
+            }
+            // Show web search targets as previews
+            let encoded = arg.replace(' ', "+");
+            vec![
+                QueryResult {
+                    id: "web-google".to_string(),
+                    title: format!("Google: {}", arg),
+                    subtitle: Some("Search with Google".to_string()),
+                    icon: Some("🔍".to_string()),
+                    score: 100,
+                    action_type: "url".to_string(),
+                    action_data: format!("https://www.google.com/search?q={}", encoded),
+                    source: None,
+                },
+                QueryResult {
+                    id: "web-youtube".to_string(),
+                    title: format!("YouTube: {}", arg),
+                    subtitle: Some("Search on YouTube".to_string()),
+                    icon: Some("▶️".to_string()),
+                    score: 90,
+                    action_type: "url".to_string(),
+                    action_data: format!(
+                        "https://www.youtube.com/results?search_query={}",
+                        encoded
+                    ),
+                    source: None,
+                },
+                QueryResult {
+                    id: "web-github".to_string(),
+                    title: format!("GitHub: {}", arg),
+                    subtitle: Some("Search on GitHub".to_string()),
+                    icon: Some("🐙".to_string()),
+                    score: 80,
+                    action_type: "url".to_string(),
+                    action_data: format!("https://github.com/search?q={}", encoded),
+                    source: None,
+                },
+            ]
+        }
+        "/kill" => {
+            if arg.is_empty() {
+                return vec![];
+            }
+            // SECURITY: use the in-process `sysinfo` crate — no shell, no string
+            // interpolation, no possible injection.
+            use sysinfo::System;
+            let needle = arg.to_lowercase();
+            let mut system = System::new_all();
+            system.refresh_all();
+            let mut matches: Vec<(u32, String, u64)> = system
+                .processes()
+                .iter()
+                .filter_map(|(pid, proc)| {
+                    let name = proc.name().to_string();
+                    if name.to_lowercase().contains(&needle) {
+                        Some((pid.as_u32(), name, proc.memory()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            matches.sort_by_key(|m| std::cmp::Reverse(m.2));
+            matches.truncate(10);
+
+            matches
+                .into_iter()
+                .enumerate()
+                .map(|(i, (pid, name, mem_kb))| {
+                    let mem_mb = mem_kb as f64 / 1024.0;
+                    QueryResult {
+                        id: format!("kill-{}", i),
+                        title: format!("{} (PID: {})", name, pid),
+                        subtitle: Some(format!("{:.1} MB", mem_mb)),
+                        icon: Some("💀".to_string()),
+                        score: 100 - i as i32,
+                        action_type: "kill_pid".to_string(),
+                        action_data: pid.to_string(),
+                        source: None,
+                    }
+                })
+                .collect()
+        }
+        "/clip" | "/cb" => pm.query_all(&format!("cb {}", arg)).await,
+        "/calc" | "/c" => pm.query_all(&format!("= {}", arg)).await,
+        "/todo" | "/t" => pm.query_all(query).await,
+        "/env" => pm.query_all(&format!("env {}", arg)).await,
+        "/color" => pm.query_all(&format!("color {}", arg)).await,
+        "/sys" => pm.query_all(&format!("sys {}", arg)).await,
+        "/ps" => pm.query_all("ps ").await,
+        "/ip" => pm.query_all("net ip").await,
+        "/ports" => pm.query_all("net ports").await,
+        "/net" => pm.query_all(&format!("net {}", arg)).await,
+        "/bm" | "/bookmarks" => pm.query_all(&format!("bm {}", arg)).await,
+        "/git" => pm.query_all(&format!("git {}", arg)).await,
+        "/hosts" => pm.query_all(&format!("hosts {}", arg)).await,
+        "/timer" => pm.query_all(&format!("timer {}", arg)).await,
+        "/emoji" => pm.query_all(&format!("emoji {}", arg)).await,
+        "/cron" => pm.query_all(&format!("cron {}", arg)).await,
+        "/pomo" => pm.query_all(&format!("pomo {}", arg)).await,
+        "/sched" => {
+            let sched_query = if arg.is_empty() {
+                "sched".to_string()
+            } else {
+                format!("sched {}", arg)
+            };
+            pm.query_all(&sched_query).await
+        }
+        "/resize" => pm.query_all(&format!("resize {}", arg)).await,
+        "/plugins" | "/pm" => vec![QueryResult {
+            id: "builtin:plugin-manager".to_string(),
+            title: "Manage Plugins".to_string(),
+            subtitle: Some("Install, list, and remove external plugins".to_string()),
+            icon: Some("🔌".to_string()),
+            score: 100,
+            action_type: "open_plugin_manager".to_string(),
+            action_data: String::new(),
+            source: None,
+        }],
+        _ => vec![],
+    }
 }
 
 /// Refresh the in-memory PluginManager after an install/update/remove so newly
