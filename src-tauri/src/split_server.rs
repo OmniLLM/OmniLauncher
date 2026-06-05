@@ -523,6 +523,83 @@ async fn handle_request(
                 Err(error) => error,
             }
         }
+        // ─── Plugins ────────────────────────────────────────────────────────
+        ("GET", "/api/plugins/collections") => {
+            json_response(&crate::plugins::plugin_manager_cmd::list_plugin_collections())
+        }
+        ("GET", "/api/plugins/runtime-deps") => {
+            json_response(&crate::plugins::runtime_deps::list_runtime_dependencies())
+        }
+        ("POST", "/api/plugins/install") => {
+            let body = read_body(request).await;
+            match parse_json::<PluginInstallRequest>(&body) {
+                Ok(input) => {
+                    match crate::plugins::plugin_manager_cmd::install_plugin(input.source, input.target_dir).await {
+                        Ok(msg) => {
+                            reload_external_plugins_state(state).await;
+                            json_response(&msg)
+                        }
+                        Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                    }
+                }
+                Err(error) => error,
+            }
+        }
+        ("POST", "/api/plugins/update") => {
+            let body = read_body(request).await;
+            match parse_json::<PluginNameRequest>(&body) {
+                Ok(input) => match crate::plugins::plugin_manager_cmd::update_plugin(input.name).await {
+                    Ok(msg) => {
+                        reload_external_plugins_state(state).await;
+                        json_response(&msg)
+                    }
+                    Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                },
+                Err(error) => error,
+            }
+        }
+        ("POST", "/api/plugins/collections/update") => {
+            let body = read_body(request).await;
+            match parse_json::<CollectionUpdateRequest>(&body) {
+                Ok(input) => match crate::plugins::plugin_manager_cmd::update_plugin_collection_all(
+                    input.collection_source,
+                    input.repo_dirs,
+                    input.git_repo_dirs,
+                )
+                .await
+                {
+                    Ok(res) => {
+                        reload_external_plugins_state(state).await;
+                        json_response(&res)
+                    }
+                    Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                },
+                Err(error) => error,
+            }
+        }
+        ("POST", "/api/plugins/collections/remove") => {
+            let body = read_body(request).await;
+            match parse_json::<CollectionRemoveRequest>(&body) {
+                Ok(input) => match crate::plugins::plugin_manager_cmd::remove_plugin_collection(input.repo_dirs).await {
+                    Ok(res) => {
+                        reload_external_plugins_state(state).await;
+                        json_response(&res)
+                    }
+                    Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                },
+                Err(error) => error,
+            }
+        }
+        ("POST", "/api/plugins/runtime-deps/install") => {
+            let body = read_body(request).await;
+            match parse_json::<RuntimeDepInstallRequest>(&body) {
+                Ok(input) => match install_runtime_dep_backend(&input.id, state).await {
+                    Ok(msg) => json_response(&msg),
+                    Err(e) => LiveResponse::text("500 Internal Server Error", e),
+                },
+                Err(error) => error,
+            }
+        }
         _ => LiveResponse::text("404 Not Found", "Not Found".to_string()),
     }
 }
@@ -556,6 +633,70 @@ fn encode_response(response: LiveResponse) -> Vec<u8> {
 pub async fn search_backend(query: String, state: &SplitServerState) -> Vec<QueryResult> {
     let pm = state.plugin_manager.lock().await;
     pm.query_all(&query).await
+}
+
+/// Refresh the in-memory PluginManager after an install/update/remove so newly
+/// changed external plugins become visible without restarting the backend.
+async fn reload_external_plugins_state(state: &SplitServerState) {
+    let settings = crate::load_settings();
+    let mut pm = state.plugin_manager.lock().await;
+    pm.reload_external_plugins(&settings.plugin_dirs);
+}
+
+/// Install a plugin runtime dependency (python/node/dotnet), emitting progress
+/// over the SSE bus so the desktop UI's `omnilauncher://plugin-runtime-progress`
+/// listener updates live — mirroring the Tauri command path in `main.rs`.
+async fn install_runtime_dep_backend(id: &str, state: &SplitServerState) -> Result<String, String> {
+    use crate::plugins::runtime_deps::{runtime_install_plan, runtime_label};
+
+    let emit = |message: String| {
+        let bus = state.event_bus.clone();
+        let id = id.to_string();
+        async move {
+            bus.emit_json(
+                "omnilauncher://plugin-runtime-progress",
+                &serde_json::json!({ "id": id, "label": runtime_label(&id), "message": message }),
+            )
+            .await;
+        }
+    };
+
+    match id {
+        "python" => {
+            emit("Starting Python runtime install.".to_string()).await;
+            let exe = crate::python_installer::install_bundled_python_with_progress(|_message| {
+                // Per-line progress is best-effort; the start/end events below
+                // are what the UI relies on. We avoid spawning from this sync
+                // FnMut callback to keep the borrow checker and runtime simple.
+            })
+            .await?;
+            emit("Python runtime installed.".to_string()).await;
+            Ok(format!("Python installed at {}", exe.display()))
+        }
+        "node" | "dotnet" => {
+            let (program, args, display) = runtime_install_plan(id)?;
+            emit(format!("Running: {display}")).await;
+            let output = tokio::process::Command::new(&program)
+                .args(&args)
+                .output()
+                .await
+                .map_err(|e| format!("Failed to run {display}: {e}"))?;
+            if output.status.success() {
+                emit(format!("{} installer completed.", runtime_label(id))).await;
+                Ok(format!("Installed {}", runtime_label(id)))
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let detail = if stderr.is_empty() {
+                    format!("installer exited with status {}", output.status)
+                } else {
+                    stderr
+                };
+                emit(format!("{} installer failed.", runtime_label(id))).await;
+                Err(format!("Failed to install {}: {}", runtime_label(id), detail))
+            }
+        }
+        _ => Err(format!("Unknown plugin runtime dependency: {id}")),
+    }
 }
 
 pub async fn list_models_backend(base_url: String, api_key: String) -> Result<Vec<String>, String> {
