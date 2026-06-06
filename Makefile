@@ -30,13 +30,54 @@ BACKEND_MODE ?= local
 #   make start-backend REBUILD=1    # rebuild, then start
 REBUILD ?= 0
 
+# Set DEBUG=1 or VERBOSE=1 to start the binary with --debug.
+# Both names are aliases for the same underlying --debug CLI flag, which
+# enables trace-level file logging at ~/.omnilauncher/omnilauncher.log.
+#   make restart-backend DEBUG=1
+#   make start           VERBOSE=1
+DEBUG   ?= 0
+VERBOSE ?= 0
+
 ifeq ($(OS),Windows_NT)
   PLATFORM := windows
 else
   PLATFORM := unix
 endif
 
-OPS = powershell -NoProfile -File scripts/ops.ps1
+# -- Platform-specific helper invocations -------------------------------------
+# On Windows we drive the helpers via PowerShell; on Linux/macOS we use bash
+# equivalents (scripts/ops.sh, scripts/logs.sh, scripts/smoke-endpoints.sh,
+# scripts/test-e2e.sh). The scripts intentionally accept the same flag names
+# (--SplitHost / --SplitPort / --BackendUrl / -BaseUrl) so the Makefile body
+# stays platform-agnostic below.
+ifeq ($(PLATFORM),windows)
+  OPS        = powershell -NoProfile -File scripts/ops.ps1
+  LOGS_CMD   = pwsh -NoProfile -File scripts/logs.ps1
+  SMOKE_CMD  = pwsh -NoProfile -File scripts/smoke-endpoints.ps1
+  E2E_CMD    = pwsh -NoProfile -File scripts/test-e2e.ps1
+  # PowerShell binds args by name; pass a named flag for the role positional.
+  OPS_ROLE_FLAG       = -Role
+  OPS_DEBUG_FLAG_NAME = -DebugFlag
+else
+  OPS        = bash scripts/ops.sh
+  LOGS_CMD   = bash scripts/logs.sh
+  SMOKE_CMD  = bash scripts/smoke-endpoints.sh
+  E2E_CMD    = bash scripts/test-e2e.sh
+  # bash takes the role as a trailing positional; --debug is parsed by ops.sh.
+  OPS_ROLE_FLAG       =
+  OPS_DEBUG_FLAG_NAME =
+endif
+
+# DEBUG_FLAG resolves to whatever token the local platform's ops script
+# expects: `--debug` on bash, `-DebugFlag` on PowerShell. Empty when neither
+# DEBUG=1 nor VERBOSE=1 is set.
+ifeq ($(DEBUG),1)
+  DEBUG_FLAG := $(if $(OPS_DEBUG_FLAG_NAME),$(OPS_DEBUG_FLAG_NAME),--debug)
+else ifeq ($(VERBOSE),1)
+  DEBUG_FLAG := $(if $(OPS_DEBUG_FLAG_NAME),$(OPS_DEBUG_FLAG_NAME),--debug)
+else
+  DEBUG_FLAG :=
+endif
 
 # -- Help ---------------------------------------------------------------------
 
@@ -53,12 +94,12 @@ help:
 	$(info   stop-backend      Stop backend process)
 	$(info   stop-all          Stop both)
 	$(info )
-	$(info [Start] use REBUILD=1 to rebuild first)
+	$(info [Start] use REBUILD=1 to rebuild first; DEBUG=1 or VERBOSE=1 for --debug logging)
 	$(info   start-frontend    Start frontend release binary)
 	$(info   start-backend     Start backend release binary)
 	$(info   start             Start both)
 	$(info )
-	$(info [Restart] stop + remove binary + rebuild + start)
+	$(info [Restart] stop + remove binary + rebuild + start; DEBUG=1 or VERBOSE=1 for --debug logging)
 	$(info   restart-frontend  Rebuild and restart frontend)
 	$(info   restart-backend   Rebuild and restart backend)
 	$(info   restart           Rebuild and restart both)
@@ -76,6 +117,7 @@ help:
 	$(info     SPLIT_HOST=<host>              backend bind host)
 	$(info     SPLIT_PORT=<port>              backend bind port)
 	$(info     REBUILD=1                      rebuild before start)
+	$(info     DEBUG=1 or VERBOSE=1           start binary with --debug)
 	$(info )
 	$(info [Test])
 	$(info   test-frontend     Run frontend unit tests via vitest)
@@ -106,11 +148,11 @@ help:
 build-frontend:
 	$(NPM) run build
 	$(NPX) tauri build --no-bundle
-	$(OPS) prepare-binaries
+	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) frontend
 
 build-backend:
 	cd src-tauri && $(CARGO) build --release
-	$(OPS) prepare-binaries
+	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) backend
 
 build: build-frontend build-backend
 
@@ -130,7 +172,7 @@ remove-binary:
 	$(OPS) remove-binary
 
 prepare-binaries:
-	$(OPS) prepare-binaries
+	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) both
 
 # -- Start --------------------------------------------------------------------
 
@@ -140,7 +182,7 @@ maybe-rebuild-backend:
 ifeq ($(REBUILD),1)
 	$(OPS) remove-binary
 	cd src-tauri && $(CARGO) build --release
-	$(OPS) prepare-binaries
+	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) backend
 endif
 
 maybe-rebuild-frontend:
@@ -148,18 +190,18 @@ ifeq ($(REBUILD),1)
 	$(OPS) remove-binary
 	$(NPM) run build
 	$(NPX) tauri build --no-bundle
-	$(OPS) prepare-binaries
+	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) frontend
 endif
 
 # -- Frontend start -----------------------------------------------------------
 
 start-frontend: stop-frontend maybe-rebuild-frontend
-	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)"
+	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)" $(DEBUG_FLAG)
 
 # -- Backend start local ------------------------------------------------------
 
 start-backend: stop-backend maybe-rebuild-backend
-	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
+	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)" $(DEBUG_FLAG)
 
 start: start-backend start-frontend
 
@@ -180,24 +222,24 @@ restart-frontend:
 	$(OPS) remove-binary
 	$(NPM) run build
 	$(NPX) tauri build --no-bundle
-	$(OPS) prepare-binaries
-	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)"
+	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) frontend
+	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)" $(DEBUG_FLAG)
 
 restart-backend:
 	$(OPS) stop-backend
 	$(OPS) remove-binary
 	cd src-tauri && $(CARGO) build --release
-	$(OPS) prepare-binaries
-	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
+	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) backend
+	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)" $(DEBUG_FLAG)
 
 restart:
 	$(OPS) stop-all
 	$(OPS) remove-binary
 	$(NPM) run build
 	$(NPX) tauri build --no-bundle
-	$(OPS) prepare-binaries
-	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
-	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)"
+	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) both
+	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)" $(DEBUG_FLAG)
+	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)" $(DEBUG_FLAG)
 
 # -- Clean --------------------------------------------------------------------
 
@@ -212,7 +254,7 @@ clean: clean-frontend clean-backend
 # -- Logs ---------------------------------------------------------------------
 
 logs:
-	pwsh -NoProfile -File scripts/logs.ps1
+	$(LOGS_CMD)
 
 # -- Status -------------------------------------------------------------------
 
@@ -243,10 +285,10 @@ test-backend:
 test-health: test-backend
 
 test-smoke:
-	pwsh -NoProfile -File scripts/smoke-endpoints.ps1 -BaseUrl "$(BACKEND_URL)"
+	$(SMOKE_CMD) -BaseUrl "$(BACKEND_URL)"
 
 test-e2e:
-	pwsh -NoProfile -File scripts/test-e2e.ps1 -BaseUrl "$(BACKEND_URL)"
+	$(E2E_CMD) -BaseUrl "$(BACKEND_URL)"
 
 test-unit: test-frontend test-rust
 

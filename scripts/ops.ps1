@@ -20,7 +20,9 @@ param(
 
     [string]$SplitHost   = '0.0.0.0',
     [string]$SplitPort    = '1422',
-    [string]$BackendUrl   = 'http://127.0.0.1:1422'
+    [string]$BackendUrl   = 'http://127.0.0.1:1422',
+    [string]$Role         = 'both',
+    [switch]$DebugFlag
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -29,23 +31,44 @@ $baseExe     = Join-Path $binDir 'omnilauncher.exe'
 $frontendExe = Join-Path $binDir 'omnilauncher-frontend.exe'
 $backendExe  = Join-Path $binDir 'omnilauncher-backend.exe'
 
+# Copy the freshly-built omnilauncher binary into role-named file(s) and
+# remove the generic source so we don't ship three identical files.
+#   -Which frontend  -> only omnilauncher-frontend remains
+#   -Which backend   -> only omnilauncher-backend remains
+#   -Which both      -> both role files exist; bare omnilauncher gone
 function Prepare-Binaries {
+    param([string]$Which = 'both')
+    if ($Which -notin @('frontend','backend','both')) {
+        Write-Host "Prepare-Binaries: unknown role '$Which'" -ForegroundColor Red
+        exit 2
+    }
+
     if (-not (Test-Path $baseExe)) {
+        $haveFe = Test-Path $frontendExe
+        $haveBe = Test-Path $backendExe
+        switch ($Which) {
+            'frontend' { if ($haveFe) { return } }
+            'backend'  { if ($haveBe) { return } }
+            'both'     { if ($haveFe -and $haveBe) { return } }
+        }
         Write-Host 'Release binary not found. Run: make build-frontend or make build-backend' -ForegroundColor Red
         exit 1
     }
-    Copy-Item -Force $baseExe $frontendExe
-    Copy-Item -Force $baseExe $backendExe
-    Write-Host "Prepared role binaries:" -ForegroundColor Green
-    Write-Host "  frontend: $frontendExe"
-    Write-Host "  backend:  $backendExe"
+
+    if ($Which -in @('frontend','both')) { Copy-Item -Force $baseExe $frontendExe }
+    if ($Which -in @('backend','both'))  { Copy-Item -Force $baseExe $backendExe }
+    Remove-Item -Force $baseExe -ErrorAction SilentlyContinue
+
+    Write-Host "Prepared role binaries (role=$Which):" -ForegroundColor Green
+    if (Test-Path $frontendExe) { Write-Host "  frontend: $frontendExe" }
+    if (Test-Path $backendExe)  { Write-Host "  backend:  $backendExe" }
 }
 
 function Ensure-RoleBinaries {
     if ((Test-Path $frontendExe) -and (Test-Path $backendExe)) {
         return
     }
-    Prepare-Binaries
+    Prepare-Binaries -Which both
 }
 
 function Remove-Binaries {
@@ -70,14 +93,22 @@ function Stop-Backend {
 function Start-Frontend {
     Ensure-RoleBinaries
     $env:OMNILAUNCHER_BACKEND_URL = $BackendUrl
-    Start-Process -FilePath $frontendExe -WorkingDirectory (Get-Location)
+    $argList = @()
+    if ($DebugFlag) { $argList += '--debug' }
+    if ($argList.Count -gt 0) {
+        Start-Process -FilePath $frontendExe -ArgumentList $argList -WorkingDirectory (Get-Location)
+    } else {
+        Start-Process -FilePath $frontendExe -WorkingDirectory (Get-Location)
+    }
 }
 
 function Start-Backend {
     Ensure-RoleBinaries
     $env:OMNILAUNCHER_SPLIT_HOST = $SplitHost
     $env:OMNILAUNCHER_SPLIT_PORT = $SplitPort
-    Start-Process -FilePath $backendExe -ArgumentList '--split-backend' -WorkingDirectory (Get-Location)
+    $argList = @('--split-backend')
+    if ($DebugFlag) { $argList += '--debug' }
+    Start-Process -FilePath $backendExe -ArgumentList $argList -WorkingDirectory (Get-Location)
 }
 
 function Start-ProdDebugBackend {
@@ -209,7 +240,7 @@ switch ($Action) {
     'restart-wsl-backend'  { Restart-WslBackend }
     'test-backend'         { Test-Backend }
     'status'               { Show-Status }
-    'prepare-binaries'     { Prepare-Binaries }
+    'prepare-binaries'     { Prepare-Binaries -Which $Role }
     'remove-binary'        { Remove-Binaries }
     'clean-frontend'       { Remove-Item -Recurse -Force (Join-Path $PSScriptRoot '..\dist') -ErrorAction SilentlyContinue }
     'clean-backend'        { Remove-Item -Recurse -Force (Join-Path $PSScriptRoot '..\src-tauri\target') -ErrorAction SilentlyContinue }
