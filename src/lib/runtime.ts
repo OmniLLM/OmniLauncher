@@ -4,39 +4,18 @@ import {
   emit as tauriEmit,
 } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow as tauriGetCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { logger, summarizeArgs, type LogLevel } from "./logger";
 
 const isTauriRuntime = () =>
   typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__;
 
-type FrontendLogLevel = "trace" | "debug" | "info" | "warn" | "error";
+type FrontendLogLevel = LogLevel;
 
+// Local thin wrapper so existing call sites keep their `[runtime]` prefix
+// while routing through the centralized logger (level-gated, forwards to
+// the Tauri `frontend_log` command when available).
 function frontendLog(level: FrontendLogLevel, message: string) {
-  const line = `[runtime] ${message}`;
-  const consoleFn = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
-  consoleFn(line);
-
-  if (!isTauriRuntime()) return;
-  tauriInvoke("frontend_log", { level, message: line }).catch(() => {
-    // Logging must never break app behavior.
-  });
-}
-
-function summarizeArgs(args?: Record<string, unknown>): string {
-  if (!args) return "none";
-  try {
-    return JSON.stringify(args, (key, value) => {
-      const lower = key.toLowerCase();
-      if (lower.includes("key") || lower.includes("token") || lower.includes("secret")) {
-        return value ? "[redacted]" : value;
-      }
-      if (typeof value === "string" && value.length > 160) {
-        return `${value.slice(0, 160)}...(${value.length} chars)`;
-      }
-      return value;
-    });
-  } catch {
-    return "[unserializable]";
-  }
+  logger[level](`[runtime] ${message}`);
 }
 
 let lastLoggedBackendUrl = "__unset__";
@@ -100,6 +79,12 @@ export function getBackendMode(): "tauri" | "http" | "mock" {
   if (httpMode()) return "http";
   if (isTauriRuntime()) return "tauri";
   return "mock";
+}
+
+/// Public accessor for the resolved backend URL. Returns an empty string when
+/// the launcher is running in pure-Tauri mode (no HTTP backend configured).
+export function getBackendUrl(): string {
+  return backendUrl();
 }
 
 type EventHandler<T> = (event: { payload: T }) => void;

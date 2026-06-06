@@ -20,7 +20,8 @@ import {
   slashSuggestions,
   helpResults,
 } from "./launcherConfig";
-import { invoke, listen, getCurrentWebviewWindow } from "./lib/runtime";
+import { invoke, listen, getCurrentWebviewWindow, getBackendMode, getBackendUrl } from "./lib/runtime";
+import { logger } from "./lib/logger";
 import SearchBar from "./components/SearchBar";
 import ResultList from "./components/ResultList";
 
@@ -204,6 +205,20 @@ export default function App() {
   }, []);
 
   const isAiMode = aiModeEnabled || isAiPrefix(query);
+
+  // Startup banner — one line on initial mount so the devtools console
+  // and ~/.omnilauncher/omnilauncher.log (via tauri frontend_log) both
+  // show backend wiring at a glance.
+  useEffect(() => {
+    const mode = getBackendMode();
+    const url = mode === "http" ? getBackendUrl() : "(tauri ipc)";
+    const dev = !!(import.meta as any).env?.DEV;
+    logger.info(
+      `OmniLauncher UI mounted backend=${url} mode=${mode} dev=${dev}`,
+    );
+    // Run once on mount; deps intentionally empty.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load settings on mount
   useEffect(() => {
