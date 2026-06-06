@@ -227,7 +227,7 @@ describe("http routing for new endpoints", () => {
 
   it("maps save_settings_cmd to POST /api/settings with settings body", async () => {
     const state = mockBackend();
-    const settings = { ai_base_url: "http://example.com", ai_model: "gpt-4" };
+    const settings = { ai_base_url: "http://example.com", ai_model: "gpt-4", ai_timeout_secs: 300 };
     await invoke("save_settings_cmd", { settings });
     const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
     expect(call).toBeDefined();

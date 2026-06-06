@@ -85,6 +85,8 @@ struct SaveSettingsRequest {
     ai_base_url: String,
     ai_model: String,
     ai_api_key: String,
+    #[serde(default = "crate::settings::default_ai_timeout_secs")]
+    ai_timeout_secs: u64,
     theme: String,
     hotkey: String,
     max_results: usize,
@@ -249,7 +251,11 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
             let started_at = Instant::now();
             log::info!(
                 "→ {} {} from={} query={} bytes={}",
-                method, path, addr, query, read_len
+                method,
+                path,
+                addr,
+                query,
+                read_len
             );
 
             if let Some(event_name) = event_name_from_path(&path) {
@@ -268,7 +274,9 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
                 let elapsed_ms = started_at.elapsed().as_millis();
                 log::info!(
                     "← {} {} status=200 sse_closed elapsed_ms={}",
-                    method, path, elapsed_ms
+                    method,
+                    path,
+                    elapsed_ms
                 );
                 let _ = stream.shutdown().await;
                 return;
@@ -278,7 +286,11 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
             let elapsed_ms = started_at.elapsed().as_millis();
             log::info!(
                 "← {} {} status={} body_bytes={} elapsed_ms={}",
-                method, path, response.status, response.body.len(), elapsed_ms
+                method,
+                path,
+                response.status,
+                response.body.len(),
+                elapsed_ms
             );
             let bytes = encode_response(response);
             let _ = stream.write_all(&bytes).await;
@@ -341,6 +353,7 @@ async fn handle_request(
                         ai_base_url: input.ai_base_url,
                         ai_model: input.ai_model,
                         ai_api_key: input.ai_api_key,
+                        ai_timeout_secs: input.ai_timeout_secs,
                         theme: input.theme,
                         hotkey: input.hotkey,
                         max_results: input.max_results,
@@ -353,10 +366,11 @@ async fn handle_request(
                     }
                     {
                         let mut client = state.ai_client.lock().await;
-                        *client = AiClient::new(
+                        *client = AiClient::with_timeout(
                             updated.ai_base_url.clone(),
                             updated.resolve_ai_api_key(),
                             updated.ai_model.clone(),
+                            updated.ai_timeout_secs,
                         );
                     }
                     let ok = save_settings(&updated);
@@ -1149,6 +1163,7 @@ mod tests {
             "ai_base_url":"http://localhost:11434",
             "ai_model":"gpt-4",
             "ai_api_key":"key",
+            "ai_timeout_secs":300,
             "theme":"dark",
             "hotkey":"Alt+Space",
             "max_results":10,
@@ -1157,6 +1172,7 @@ mod tests {
         let req: SaveSettingsRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.ai_base_url, "http://localhost:11434");
         assert_eq!(req.ai_model, "gpt-4");
+        assert_eq!(req.ai_timeout_secs, 300);
         assert_eq!(req.theme, "dark");
         assert_eq!(req.max_results, 10);
     }

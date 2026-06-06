@@ -94,18 +94,31 @@ pub struct ChatResponse {
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
+
 pub struct AiClient {
     base_url: String,
     api_key: String,
     model: String,
+    request_timeout_secs: u64,
 }
 
 impl AiClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
+        Self::with_timeout(base_url, api_key, model, DEFAULT_REQUEST_TIMEOUT_SECS)
+    }
+
+    pub fn with_timeout(
+        base_url: String,
+        api_key: String,
+        model: String,
+        request_timeout_secs: u64,
+    ) -> Self {
         Self {
             base_url,
             api_key,
             model,
+            request_timeout_secs: request_timeout_secs.max(1),
         }
     }
 
@@ -115,10 +128,13 @@ impl AiClient {
     pub fn model(&self) -> &str {
         &self.model
     }
+    pub fn request_timeout_secs(&self) -> u64 {
+        self.request_timeout_secs
+    }
 
     fn build_client(&self) -> Result<reqwest::Client, AiError> {
         reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(self.request_timeout_secs))
             .build()
             .map_err(|e| AiError::Transport(e.to_string()))
     }
@@ -439,6 +455,23 @@ mod client_tests {
             "test-key".into(),
             "test-model".into(),
         )
+    }
+
+    #[test]
+    fn test_client_default_timeout_is_120_seconds() {
+        let c = make_client();
+        assert_eq!(c.request_timeout_secs(), 120);
+    }
+
+    #[test]
+    fn test_client_accepts_custom_timeout() {
+        let c = AiClient::with_timeout(
+            "http://localhost:9999".into(),
+            "test-key".into(),
+            "test-model".into(),
+            300,
+        );
+        assert_eq!(c.request_timeout_secs(), 300);
     }
 
     #[test]

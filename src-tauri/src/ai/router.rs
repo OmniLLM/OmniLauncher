@@ -1624,7 +1624,10 @@ fn is_continuation_preamble(content: &str) -> bool {
         "i need to ",
         "we need to ",
     ];
-    if continuation_prefixes.iter().any(|prefix| lowercase.starts_with(prefix)) {
+    if continuation_prefixes
+        .iter()
+        .any(|prefix| lowercase.starts_with(prefix))
+    {
         return true;
     }
 

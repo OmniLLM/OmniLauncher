@@ -73,6 +73,7 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           ai_base_url: "http://localhost:5000",
           ai_model: "auto",
           ai_api_key: "",
+          ai_timeout_secs: 120,
           theme: "system",
           hotkey: "Alt+Space",
           max_results: 10,
@@ -274,6 +275,26 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                         )
                       }
                       placeholder="(optional)"
+                    />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Timeout</span>
+                    <input
+                      className="omni-input"
+                      type="number"
+                      min={1}
+                      max={3600}
+                      value={settings.ai_timeout_secs}
+                      onChange={(e) =>
+                        setSettings(
+                          (s) =>
+                            s && {
+                              ...s,
+                              ai_timeout_secs: parseInt(e.target.value) || 120,
+                            },
+                        )
+                      }
+                      title="AI request timeout in seconds"
                     />
                   </div>
                   <div

@@ -433,6 +433,7 @@ export async function invoke<T = unknown>(
       ai_base_url: "",
       ai_api_key: "",
       ai_model: "gpt-4",
+      ai_timeout_secs: 120,
       theme: "system",
       hotkey: "Alt+Space",
       max_results: 10,

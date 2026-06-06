@@ -89,13 +89,19 @@ fn debug_log_path() -> PathBuf {
 fn resolve_backend_url(settings: &AppSettings) -> String {
     if let Ok(url) = std::env::var("OMNILAUNCHER_BACKEND_URL") {
         if !url.trim().is_empty() {
-            log::info!("backend URL resolved from OMNILAUNCHER_BACKEND_URL={}", url.trim());
+            log::info!(
+                "backend URL resolved from OMNILAUNCHER_BACKEND_URL={}",
+                url.trim()
+            );
             return url.trim().to_string();
         }
         log::debug!("OMNILAUNCHER_BACKEND_URL is set but empty; falling back");
     }
     if !settings.backend_url.trim().is_empty() {
-        log::info!("backend URL resolved from settings.backend_url={}", settings.backend_url.trim());
+        log::info!(
+            "backend URL resolved from settings.backend_url={}",
+            settings.backend_url.trim()
+        );
         return settings.backend_url.trim().to_string();
     }
     log::info!("backend URL resolved from built-in default http://127.0.0.1:1422");
@@ -286,10 +292,11 @@ pub fn run() {
         settings.max_results
     );
 
-    let ai_client = AiClient::new(
+    let ai_client = AiClient::with_timeout(
         settings.ai_base_url.clone(),
         settings.resolve_ai_api_key(),
         settings.ai_model.clone(),
+        settings.ai_timeout_secs,
     );
 
     let mut skill_manager = SkillManager::new();
@@ -1255,10 +1262,11 @@ async fn save_settings_cmd(
     *current = settings.clone();
     // Recreate AiClient with new settings
     let mut client = state.ai_client.lock().await;
-    *client = AiClient::new(
+    *client = AiClient::with_timeout(
         settings.ai_base_url.clone(),
         settings.resolve_ai_api_key(),
         settings.ai_model.clone(),
+        settings.ai_timeout_secs,
     );
     Ok(save_settings(&settings))
 }
@@ -1515,9 +1523,11 @@ async fn install_plugin_runtime_dependency(
         "python" => {
             emit_runtime_progress(&window, "python", "Starting Python runtime install.");
             let progress_window = window.clone();
-            let exe = omnilauncher_lib::python_installer::install_bundled_python_with_progress(|message| {
-                emit_runtime_progress(&progress_window, "python", message);
-            })
+            let exe = omnilauncher_lib::python_installer::install_bundled_python_with_progress(
+                |message| {
+                    emit_runtime_progress(&progress_window, "python", message);
+                },
+            )
             .await?;
             emit_runtime_progress(&window, "python", "Python runtime installed.");
             Ok(format!("Python installed at {}", exe.display()))
@@ -1539,7 +1549,9 @@ fn emit_runtime_progress(window: &tauri::WebviewWindow, id: &str, message: &str)
 }
 
 async fn install_system_runtime(id: &str, window: &tauri::WebviewWindow) -> Result<String, String> {
-    use omnilauncher_lib::plugins::runtime_deps::{runtime_install_plan, runtime_label, runtime_manual_command};
+    use omnilauncher_lib::plugins::runtime_deps::{
+        runtime_install_plan, runtime_label, runtime_manual_command,
+    };
     let (program, args, display_command) = runtime_install_plan(id)?;
     emit_runtime_progress(
         window,
@@ -1697,15 +1709,20 @@ fn main() {
         log::info!("Running without debug file logging");
     }
 
-    let role = if split_backend_only { "split-backend" } else { "tauri-shell" };
+    let role = if split_backend_only {
+        "split-backend"
+    } else {
+        "tauri-shell"
+    };
     log_startup_banner(role, debug_enabled);
 
     if split_backend_only {
         let settings = load_settings();
-        let ai_client = AiClient::new(
+        let ai_client = AiClient::with_timeout(
             settings.ai_base_url.clone(),
             settings.resolve_ai_api_key(),
             settings.ai_model.clone(),
+            settings.ai_timeout_secs,
         );
         let mut skill_manager = SkillManager::new();
         skill_manager.load_all();

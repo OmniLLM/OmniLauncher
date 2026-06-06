@@ -35,6 +35,7 @@ export interface AppSettings {
   ai_base_url: string;
   ai_model: string;
   ai_api_key: string;
+  ai_timeout_secs: number;
   theme: string;
   hotkey: string;
   max_results: number;

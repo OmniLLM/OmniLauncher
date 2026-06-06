@@ -269,6 +269,61 @@ test_backend() {
     fi
 }
 
+find_process_pids() {
+    local name="$1"
+
+    # Linux task names are limited to 15 bytes, so `pgrep -x` cannot find long
+    # role names like omnilauncher-backend. Match the executable basename from
+    # the full argv instead.
+    ps -eo pid=,args= 2>/dev/null | awk -v name="$name" '
+        {
+            pid = $1
+            $1 = ""
+            sub(/^[[:space:]]+/, "")
+            split($0, argv, /[[:space:]]+/)
+            exe = argv[1]
+            sub(/^.*\//, "", exe)
+            if (exe == name) print pid
+        }
+    '
+}
+
+find_split_backend_pids() {
+    {
+        find_process_pids omnilauncher-backend
+        ps -eo pid=,args= 2>/dev/null | awk '
+            /[[:space:]]--split-backend([[:space:]]|$)/ {
+                pid = $1
+                $1 = ""
+                sub(/^[[:space:]]+/, "")
+                split($0, argv, /[[:space:]]+/)
+                exe = argv[1]
+                sub(/^.*\//, "", exe)
+                if (exe == "omnilauncher") print pid
+            }
+        '
+    } | awk '!seen[$0]++'
+}
+
+find_listener_pid() {
+    local port="$1"
+    local pid=""
+
+    if command -v lsof >/dev/null 2>&1; then
+        pid="$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
+    fi
+    if [ -z "$pid" ] && command -v ss >/dev/null 2>&1; then
+        pid="$(ss -tlnpH 2>/dev/null | awk -v p=":$port" '
+            $4 ~ p && match($0, /pid=[0-9]+/) {
+                print substr($0, RSTART + 4, RLENGTH - 4)
+                exit
+            }
+        ')"
+    fi
+
+    printf "%s\n" "$pid"
+}
+
 show_status() {
     echo
     info "=== OmniLauncher Status ==="
@@ -294,7 +349,7 @@ show_status() {
     # --- Processes ---
     printf "%b\n" "${YELLOW}--- Processes ---${NC}"
     local fe_pids be_pids
-    fe_pids="$(pgrep -x omnilauncher-frontend 2>/dev/null || true)"
+    fe_pids="$(find_process_pids omnilauncher-frontend)"
     if [ -n "$fe_pids" ]; then
         for pid in $fe_pids; do
             local mem_kb mem_mb
@@ -310,7 +365,10 @@ show_status() {
         err "  frontend: STOPPED"
     fi
 
-    be_pids="$(pgrep -x omnilauncher-backend 2>/dev/null || true)"
+    be_pids="$(find_split_backend_pids)"
+    if [ -z "$be_pids" ]; then
+        be_pids="$(find_listener_pid "$SPLIT_PORT")"
+    fi
     if [ -n "$be_pids" ]; then
         for pid in $be_pids; do
             local mem_kb mem_mb

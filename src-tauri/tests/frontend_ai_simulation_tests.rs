@@ -4,8 +4,8 @@ use tokio::sync::Mutex;
 use omnilauncher_lib::{
     ai::{client::AiClient, router::ConversationContext},
     create_plugin_manager_builtin_only, load_settings,
-    split_server::{ai_query_backend, EventBus, SplitServerState},
     skills::SkillManager,
+    split_server::{ai_query_backend, EventBus, SplitServerState},
 };
 
 fn integration_enabled() -> bool {
@@ -17,7 +17,9 @@ fn integration_enabled() -> bool {
 #[tokio::test]
 async fn frontend_like_ai_query_alibaba_ecs_returns_a_number() {
     if !integration_enabled() {
-        eprintln!("skipping live AI integration test; set OMNILAUNCHER_RUN_LIVE_AI_TESTS=1 to enable");
+        eprintln!(
+            "skipping live AI integration test; set OMNILAUNCHER_RUN_LIVE_AI_TESTS=1 to enable"
+        );
         return;
     }
 

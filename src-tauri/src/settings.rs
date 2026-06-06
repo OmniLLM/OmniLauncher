@@ -69,11 +69,17 @@ impl GitHubServer {
     }
 }
 
+pub fn default_ai_timeout_secs() -> u64 {
+    120
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub ai_base_url: String,
     pub ai_model: String,
     pub ai_api_key: String,
+    #[serde(default = "default_ai_timeout_secs")]
+    pub ai_timeout_secs: u64,
     pub theme: String,
     pub hotkey: String,
     pub max_results: usize,
@@ -131,6 +137,7 @@ impl Default for AppSettings {
             ai_base_url: "http://127.0.0.1:5000".to_string(),
             ai_model: "auto".to_string(),
             ai_api_key: String::new(),
+            ai_timeout_secs: default_ai_timeout_secs(),
             theme: "system".to_string(),
             hotkey: "Alt+Space".to_string(),
             max_results: 10,
@@ -458,5 +465,37 @@ mod settings_tests {
         assert_eq!(s.theme, "system");
         assert_eq!(s.hotkey, "Alt+Space");
         assert_eq!(s.max_results, 10);
+        assert_eq!(s.ai_timeout_secs, 120);
+    }
+
+    #[test]
+    fn test_deserializes_missing_ai_timeout_to_default() {
+        let json = r#"{
+            "ai_base_url": "http://localhost:5000",
+            "ai_model": "auto",
+            "ai_api_key": "",
+            "theme": "system",
+            "hotkey": "Alt+Space",
+            "max_results": 10,
+            "background_url": ""
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.ai_timeout_secs, 120);
+    }
+
+    #[test]
+    fn test_preserves_custom_ai_timeout() {
+        let json = r#"{
+            "ai_base_url": "http://localhost:5000",
+            "ai_model": "auto",
+            "ai_api_key": "",
+            "ai_timeout_secs": 300,
+            "theme": "system",
+            "hotkey": "Alt+Space",
+            "max_results": 10,
+            "background_url": ""
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.ai_timeout_secs, 300);
     }
 }
