@@ -56,23 +56,23 @@ ifeq ($(ROLE),frontend)
 	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)" $(DEBUG_FLAG)
 else ifeq ($(ROLE),backend)
 ifeq ($(BACKEND_MODE),wsl)
-	$(OPS) start-wsl-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)" --BackendUrl "$(BACKEND_URL)"
+	$(OPS) start-wsl-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)" --BackendUrl "$(BACKEND_URL)"
 else ifeq ($(BACKEND_MODE),remote)
 	$(info BACKEND_MODE=remote: not starting backend; using $(BACKEND_URL))
 else ifeq ($(BACKEND_MODE),local)
 	$(MAKE) maybe-rebuild-backend
-	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)" $(DEBUG_FLAG)
+	$(OPS) start-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)" $(DEBUG_FLAG)
 else
 	$(error BACKEND_MODE must be local, wsl, or remote)
 endif
 else ifeq ($(ROLE),both)
 ifeq ($(BACKEND_MODE),wsl)
-	$(OPS) start-wsl-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)" --BackendUrl "$(BACKEND_URL)"
+	$(OPS) start-wsl-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)" --BackendUrl "$(BACKEND_URL)"
 else ifeq ($(BACKEND_MODE),remote)
 	$(info BACKEND_MODE=remote: not starting backend; using $(BACKEND_URL))
 else ifeq ($(BACKEND_MODE),local)
 	$(MAKE) maybe-rebuild-backend
-	$(OPS) start-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)" $(DEBUG_FLAG)
+	$(OPS) start-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)" $(DEBUG_FLAG)
 else
 	$(error BACKEND_MODE must be local, wsl, or remote)
 endif
@@ -88,9 +88,9 @@ restart:
 	$(MAKE) stop ROLE=$(ROLE)
 ifeq ($(BACKEND_MODE),wsl)
 ifeq ($(ROLE),backend)
-	$(OPS) restart-wsl-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
+	$(OPS) restart-wsl-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)"
 else ifeq ($(ROLE),both)
-	$(OPS) restart-wsl-backend --SplitHost "$(SPLIT_HOST)" --SplitPort "$(SPLIT_PORT)"
+	$(OPS) restart-wsl-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)"
 	$(OPS) remove-binary
 	$(MAKE) build-frontend-command
 	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)" $(DEBUG_FLAG)
@@ -150,7 +150,7 @@ logs:
 	$(LOGS_CMD)
 
 status:
-	$(OPS) status --BackendUrl "$(BACKEND_URL)" --SplitPort "$(SPLIT_PORT)"
+	$(OPS) status --BackendUrl "$(BACKEND_URL)" --ServerPort "$(SERVER_PORT)"
 
 remove-binary:
 	$(OPS) remove-binary

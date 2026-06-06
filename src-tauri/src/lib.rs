@@ -10,7 +10,7 @@ pub mod plugins;
 pub mod python_installer;
 pub mod settings;
 pub mod skills;
-pub mod split_server;
+pub mod server;
 
 pub use ai::router::{AiResponse, ConversationContext, Router};
 pub use plugins::{PluginManager, QueryResult};

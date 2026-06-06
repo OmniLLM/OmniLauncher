@@ -3,20 +3,44 @@
 # Mimics the frontend user flow: health, settings, AI upstream probe,
 # search, AI query + SSE wait, favorites, skills, plugins, slash, CORS, 404.
 #
-# Usage:  scripts/test-e2e.sh [-BaseUrl URL] [-AiTimeoutSeconds N]
+# Usage:  scripts/test-e2e.sh [-BaseUrl URL] [-AiTimeoutSeconds N] [--token VALUE] [--token-file PATH]
+#
+# Auth token resolution order: --token > $OMNILAUNCHER_SERVER_TOKEN > --token-file
+# (default token file: ~/.config/omnilauncher/server-token). When a token is
+# resolved it is sent as the X-OmniLauncher-Token header on every request,
+# including the SSE listener connections.
 
 set -uo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:1422}"
 AI_TIMEOUT="${AI_TIMEOUT:-30}"
+TOKEN="${OMNILAUNCHER_SERVER_TOKEN:-}"
+TOKEN_FILE="${HOME}/.config/omnilauncher/server-token"
+TOKEN_FROM_PARAM=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -BaseUrl|--BaseUrl)               BASE_URL="${2:-}"; shift 2 ;;
         -AiTimeoutSeconds|--ai-timeout)   AI_TIMEOUT="${2:-30}"; shift 2 ;;
+        -Token|--token)                   TOKEN_FROM_PARAM="${2:-}"; shift 2 ;;
+        -TokenFile|--token-file)          TOKEN_FILE="${2:-}"; shift 2 ;;
         *) shift ;;
     esac
 done
+
+# Resolve token: param > env > file.
+if [ -n "$TOKEN_FROM_PARAM" ]; then
+    TOKEN="$TOKEN_FROM_PARAM"
+elif [ -z "$TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
+    TOKEN="$(tr -d '\r\n' < "$TOKEN_FILE" 2>/dev/null || true)"
+fi
+
+# Build curl header args (empty when no token resolved). Expanded into each
+# curl invocation with the `+...` guard so it is safe under `set -u`.
+TOKEN_HEADER_ARGS=()
+if [ -n "$TOKEN" ]; then
+    TOKEN_HEADER_ARGS=(-H "X-OmniLauncher-Token: $TOKEN")
+fi
 
 if [ -t 1 ]; then
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; GRAY='\033[0;90m'; NC='\033[0m'
@@ -43,6 +67,7 @@ warn()  { printf "  ${YELLOW}WARN${NC}  %s\n" "$*"; warnings=$((warnings+1)); }
 api() {
     local method="$1" path="$2" body="${3:-}"
     local args=(-sS -o /tmp/oml-e2e-body.$$ -w "%{http_code}" --max-time 10 -X "$method")
+    args+=("${TOKEN_HEADER_ARGS[@]+"${TOKEN_HEADER_ARGS[@]}"}")
     if [ -n "$body" ]; then
         args+=(-H "Content-Type: application/json; charset=utf-8" -d "$body")
     fi
@@ -189,9 +214,9 @@ DONE_FILE="$(mktemp -t oml-e2e-done.XXXXXX)"
 ERR_FILE="$(mktemp -t oml-e2e-err.XXXXXX)"
 done_url="$BASE_URL/api/events/omnilauncher%3A%2F%2Fai-done"
 err_url="$BASE_URL/api/events/omnilauncher%3A%2F%2Fai-error"
-curl -sS --max-time "$AI_TIMEOUT" "$done_url" >"$DONE_FILE" 2>/dev/null &
+curl -sS --max-time "$AI_TIMEOUT" "${TOKEN_HEADER_ARGS[@]+"${TOKEN_HEADER_ARGS[@]}"}" "$done_url" >"$DONE_FILE" 2>/dev/null &
 DONE_PID=$!
-curl -sS --max-time "$AI_TIMEOUT" "$err_url" >"$ERR_FILE" 2>/dev/null &
+curl -sS --max-time "$AI_TIMEOUT" "${TOKEN_HEADER_ARGS[@]+"${TOKEN_HEADER_ARGS[@]}"}" "$err_url" >"$ERR_FILE" 2>/dev/null &
 ERR_PID=$!
 sleep 0.5  # let SSE connect
 
@@ -292,13 +317,14 @@ fi
 
 # 13. CORS
 printf "%b\n" "${YELLOW}--- 13. CORS ---${NC}"
-cors="$(curl -sS -X OPTIONS -D - -o /dev/null --max-time 5 "$BASE_URL/api/settings" 2>/dev/null \
+cors="$(curl -sS -X OPTIONS -D - -o /dev/null --max-time 5 \
+    "${TOKEN_HEADER_ARGS[@]+"${TOKEN_HEADER_ARGS[@]}"}" "$BASE_URL/api/settings" 2>/dev/null \
     | tr -d '\r' | awk -F': ' 'tolower($1)=="access-control-allow-origin"{print $2}')"
 [ "$cors" = "*" ] && pass "OPTIONS CORS headers present" || fail "CORS -> got '$cors'"
 
 # 14. 404
 printf "%b\n" "${YELLOW}--- 14. Error Handling ---${NC}"
-status="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 5 "$BASE_URL/api/nonexistent" 2>/dev/null)" || true
+status="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 5 "${TOKEN_HEADER_ARGS[@]+"${TOKEN_HEADER_ARGS[@]}"}" "$BASE_URL/api/nonexistent" 2>/dev/null)" || true
 [ -z "$status" ] && status="000"
 [ "$status" = "404" ] && pass "GET /api/nonexistent returns 404" || fail "GET /api/nonexistent -> status=$status"
 

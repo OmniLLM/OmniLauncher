@@ -341,9 +341,9 @@ make test           # run all tests (single-threaded)
 > `cargo`, and `npx tauri` commands directly, or run individual targets via
 > `make -f Makefile <target>` after switching `SHELL` to `bash`.
 
-### Split backend/frontend production
+### Server/frontend production
 
-You can also deploy the split architecture in production.
+You can also deploy the headless server + frontend architecture in production.
 
 #### Backend service (WSL / Linux)
 
@@ -351,12 +351,12 @@ You can also deploy the split architecture in production.
 make backend-prod
 ```
 
-This runs the Rust backend in release mode with `--split-backend`.
+This runs the Rust backend in release mode with `--server`.
 
 You can override bind settings:
 
 ```bash
-make backend-prod SPLIT_HOST=0.0.0.0 SPLIT_PORT=15000
+make backend-prod SERVER_HOST=0.0.0.0 SERVER_PORT=15000
 ```
 
 #### Frontend build (Windows or anywhere)
@@ -365,7 +365,7 @@ make backend-prod SPLIT_HOST=0.0.0.0 SPLIT_PORT=15000
 make frontend-prod FRONTEND_BACKEND_URL=http://your-backend-host:1422
 ```
 
-This produces a static web build in `dist/` configured to talk to the split backend.
+This produces a static web build in `dist/` configured to talk to the headless server backend.
 
 #### Local production preview
 
@@ -390,7 +390,7 @@ This starts the Rust backend-only API server on `0.0.0.0:1422` by default.
 Override with:
 
 ```bash
-make backend-dev SPLIT_HOST=0.0.0.0 SPLIT_PORT=15000
+make backend-dev SERVER_HOST=0.0.0.0 SERVER_PORT=15000
 ```
 
 #### 2. Run frontend in Windows
@@ -409,10 +409,10 @@ make frontend-dev FRONTEND_BACKEND_URL=http://127.0.0.1:1422
 
 The browser frontend uses `VITE_OMNILAUNCHER_BACKEND_URL` to talk to the backend over HTTP/SSE instead of Tauri IPC.
 
-#### Split-dev notes
+#### Server-dev notes
 
 - Integrated desktop development still works with `make dev`
-- Split mode is intended for launcher UI + backend logic development without Tauri coupling during iteration
+- Server mode is intended for launcher UI + backend logic development without Tauri coupling during iteration
 - Some desktop-only capabilities remain Tauri-only in browser mode, such as screenshot/vision flows and native window behavior
 
 

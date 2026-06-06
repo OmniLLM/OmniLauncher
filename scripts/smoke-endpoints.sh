@@ -1,19 +1,42 @@
 #!/usr/bin/env bash
 # Linux/macOS counterpart of scripts/smoke-endpoints.ps1.
-# Hits the split-backend HTTP endpoints with curl and asserts status / JSON fields.
+# Hits the server HTTP endpoints with curl and asserts status / JSON fields.
 #
-# Usage:  scripts/smoke-endpoints.sh [-BaseUrl URL]   # the flag mirrors the .ps1 form
+# Usage:  scripts/smoke-endpoints.sh [-BaseUrl URL] [--token VALUE] [--token-file PATH]
 #         BASE_URL=http://127.0.0.1:1422 scripts/smoke-endpoints.sh
+#
+# Auth token resolution order: --token > $OMNILAUNCHER_SERVER_TOKEN > --token-file
+# (default token file: ~/.config/omnilauncher/server-token). When a token is
+# resolved it is sent as the X-OmniLauncher-Token header on every request.
 
 set -uo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:1422}"
+TOKEN="${OMNILAUNCHER_SERVER_TOKEN:-}"
+TOKEN_FILE="${HOME}/.config/omnilauncher/server-token"
+TOKEN_FROM_PARAM=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -BaseUrl|--BaseUrl|--base-url) BASE_URL="${2:-}"; shift 2 ;;
+        -Token|--token)                TOKEN_FROM_PARAM="${2:-}"; shift 2 ;;
+        -TokenFile|--token-file)       TOKEN_FILE="${2:-}"; shift 2 ;;
         *) shift ;;
     esac
 done
+
+# Resolve token: param > env > file.
+if [ -n "$TOKEN_FROM_PARAM" ]; then
+    TOKEN="$TOKEN_FROM_PARAM"
+elif [ -z "$TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
+    TOKEN="$(tr -d '\r\n' < "$TOKEN_FILE" 2>/dev/null || true)"
+fi
+
+# Build curl header args (empty when no token resolved). Expanded into each
+# curl invocation with the `+...` guard so it is safe under `set -u`.
+TOKEN_HEADER_ARGS=()
+if [ -n "$TOKEN" ]; then
+    TOKEN_HEADER_ARGS=(-H "X-OmniLauncher-Token: $TOKEN")
+fi
 
 if [ -t 1 ]; then
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -35,10 +58,13 @@ request() {
     if [ -n "$body" ]; then
         status="$(curl -sS -o /tmp/oml-smoke-body.$$ -w "%{http_code}" \
              -X "$method" -H "Content-Type: application/json" \
+             "${TOKEN_HEADER_ARGS[@]+"${TOKEN_HEADER_ARGS[@]}"}" \
              -d "$body" --max-time 10 "$BASE_URL$path" 2>/dev/null)" || true
     else
         status="$(curl -sS -o /tmp/oml-smoke-body.$$ -w "%{http_code}" \
-             -X "$method" --max-time 10 "$BASE_URL$path" 2>/dev/null)" || true
+             -X "$method" \
+             "${TOKEN_HEADER_ARGS[@]+"${TOKEN_HEADER_ARGS[@]}"}" \
+             --max-time 10 "$BASE_URL$path" 2>/dev/null)" || true
     fi
     [ -z "$status" ] && status="000"
     echo "$status"
@@ -132,7 +158,8 @@ printf "%b\n" "${YELLOW}--- AI Cancel ---${NC}"
 check POST "/api/ai/cancel"
 
 printf "%b\n" "${YELLOW}--- CORS ---${NC}"
-cors_header="$(curl -sS -X OPTIONS -D - -o /dev/null --max-time 5 "$BASE_URL/api/settings" 2>/dev/null \
+cors_header="$(curl -sS -X OPTIONS -D - -o /dev/null --max-time 5 \
+    "${TOKEN_HEADER_ARGS[@]+"${TOKEN_HEADER_ARGS[@]}"}" "$BASE_URL/api/settings" 2>/dev/null \
     | tr -d '\r' | awk -F': ' 'tolower($1)=="access-control-allow-origin"{print $2}')"
 if [ "$cors_header" = "*" ]; then
     printf "${GREEN}OK   OPTIONS /api/settings (CORS headers present)${NC}\n"

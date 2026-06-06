@@ -1,22 +1,39 @@
-param([string]$BaseUrl = "http://127.0.0.1:1422")
+param(
+    [string]$BaseUrl = "http://127.0.0.1:1422",
+    [string]$Token = $env:OMNILAUNCHER_SERVER_TOKEN,
+    [string]$TokenFile = (Join-Path $HOME ".config/omnilauncher/server-token")
+)
 
-# Smoke test for the split backend HTTP endpoints. Start the backend first:
+# Smoke test for the server HTTP endpoints. Start the backend first:
 #   make start-backend      (or)
-#   $env:OMNILAUNCHER_SPLIT_PORT=1422; cargo run --manifest-path src-tauri/Cargo.toml -- --split-backend
+#   $env:OMNILAUNCHER_SERVER_PORT=1422; cargo run --manifest-path src-tauri/Cargo.toml -- --server
 # Then: pwsh -NoProfile -File scripts/smoke-endpoints.ps1
+#
+# Auth token resolution order: -Token > $env:OMNILAUNCHER_SERVER_TOKEN > -TokenFile
+# (default token file: ~/.config/omnilauncher/server-token). When a token is
+# resolved it is sent as the X-OmniLauncher-Token header on every request.
 
 $ErrorActionPreference = "Stop"
 $passed = 0
 $failed = 0
+
+# Resolve token: param/env (already in $Token) > file.
+if (-not $Token -and (Test-Path $TokenFile)) {
+    $Token = (Get-Content -Raw $TokenFile).Trim()
+}
+
+# Header table sent with every request (empty when no token resolved).
+$TokenHeaders = @{}
+if ($Token) { $TokenHeaders["X-OmniLauncher-Token"] = $Token }
 
 function Check($method, $path, $body, $expectedStatus) {
     if (-not $expectedStatus) { $expectedStatus = 200 }
     $uri = "$BaseUrl$path"
     try {
         if ($body) {
-            $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri $uri -ContentType "application/json" -Body $body
+            $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri $uri -ContentType "application/json" -Headers $TokenHeaders -Body $body
         } else {
-            $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri $uri
+            $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri $uri -Headers $TokenHeaders
         }
         if ($r.StatusCode -ne $expectedStatus) {
             Write-Host "FAIL $method $path -> expected $expectedStatus got $($r.StatusCode)" -ForegroundColor Red
@@ -35,9 +52,9 @@ function CheckJsonField($method, $path, $body, $field) {
     $uri = "$BaseUrl$path"
     try {
         if ($body) {
-            $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri $uri -ContentType "application/json" -Body $body
+            $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri $uri -ContentType "application/json" -Headers $TokenHeaders -Body $body
         } else {
-            $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri $uri
+            $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri $uri -Headers $TokenHeaders
         }
         $json = $r.Content | ConvertFrom-Json
         if ($null -eq $json.$field) {
@@ -109,7 +126,7 @@ Check POST "/api/ai/cancel"
 # ─── CORS Preflight ─────────────────────────────────────────────────────
 Write-Host "--- CORS ---" -ForegroundColor Yellow
 try {
-    $r = Invoke-WebRequest -UseBasicParsing -Method OPTIONS -Uri "$BaseUrl/api/settings"
+    $r = Invoke-WebRequest -UseBasicParsing -Method OPTIONS -Uri "$BaseUrl/api/settings" -Headers $TokenHeaders
     if ($r.Headers["Access-Control-Allow-Origin"] -eq "*") {
         Write-Host "OK   OPTIONS /api/settings (CORS headers present)" -ForegroundColor Green
         $passed++
@@ -125,7 +142,7 @@ try {
 # ─── 404 for unknown paths ──────────────────────────────────────────────
 Write-Host "--- Error Handling ---" -ForegroundColor Yellow
 try {
-    $r = Invoke-WebRequest -UseBasicParsing -Method GET -Uri "$BaseUrl/api/nonexistent" -ErrorAction SilentlyContinue
+    $r = Invoke-WebRequest -UseBasicParsing -Method GET -Uri "$BaseUrl/api/nonexistent" -Headers $TokenHeaders -ErrorAction SilentlyContinue
     Write-Host "FAIL GET /api/nonexistent -> expected 404 got $($r.StatusCode)" -ForegroundColor Red
     $failed++
 } catch {

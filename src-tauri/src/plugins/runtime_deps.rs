@@ -1,8 +1,8 @@
 //! Plugin runtime-dependency inventory + installation, shared by the Tauri
-//! binary (`main.rs`) and the split backend (`split_server.rs`).
+//! binary (`main.rs`) and the API server (`server.rs`).
 //!
 //! This logic previously lived in `main.rs`. It was lifted into the library so
-//! the split backend (which lives in the library, not the binary) can serve the
+//! the API server (which lives in the library, not the binary) can serve the
 //! `/api/plugins/runtime-deps*` endpoints with the exact same behavior.
 
 use serde::Serialize;

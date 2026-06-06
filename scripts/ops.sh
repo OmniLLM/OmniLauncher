@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Helper for Makefile targets - start/stop/test the split backend and frontend.
+# Helper for Makefile targets - start/stop/test the server and frontend.
 # Linux/macOS counterpart of scripts/ops.ps1.
 #
 # Called from the Makefile as:
-#   scripts/ops.sh <action> [--SplitHost host] [--SplitPort port] [--BackendUrl url]
+#   scripts/ops.sh <action> [--ServerHost host] [--ServerPort port] [--BackendUrl url]
 #
 # We accept the same flag names as ops.ps1 so the Makefile can stay symmetric.
 
@@ -29,16 +29,16 @@ err()   { printf "${RED}%b${NC}\n" "$*"; }
 ACTION="${1:-}"
 shift || true
 
-SPLIT_HOST="0.0.0.0"
-SPLIT_PORT="1422"
+SERVER_HOST="0.0.0.0"
+SERVER_PORT="1422"
 BACKEND_URL="http://127.0.0.1:1422"
 DEBUG_FLAG=""
 POSITIONALS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --SplitHost)   SPLIT_HOST="${2:-}"; shift 2 ;;
-        --SplitPort)   SPLIT_PORT="${2:-}"; shift 2 ;;
+        --ServerHost)   SERVER_HOST="${2:-}"; shift 2 ;;
+        --ServerPort)   SERVER_PORT="${2:-}"; shift 2 ;;
         --BackendUrl)  BACKEND_URL="${2:-}"; shift 2 ;;
         --debug)       DEBUG_FLAG="--debug"; shift ;;
         --*)           shift ;;  # ignore other unknown flags
@@ -173,10 +173,10 @@ stop_backend() {
     # Free the port if anything else is camped on it.
     local pid_on_port=""
     if command -v lsof >/dev/null 2>&1; then
-        pid_on_port="$(lsof -ti tcp:"$SPLIT_PORT" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
+        pid_on_port="$(lsof -ti tcp:"$SERVER_PORT" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
     fi
     if [ -z "$pid_on_port" ] && command -v ss >/dev/null 2>&1; then
-        pid_on_port="$(ss -tlnpH 2>/dev/null | awk -v p=":$SPLIT_PORT" '$4 ~ p {print $0}' \
+        pid_on_port="$(ss -tlnpH 2>/dev/null | awk -v p=":$SERVER_PORT" '$4 ~ p {print $0}' \
             | grep -oE 'pid=[0-9]+' | head -n 1 | cut -d= -f2 || true)"
     fi
     if [ -n "${pid_on_port:-}" ]; then
@@ -221,22 +221,22 @@ start_frontend() {
 
 start_backend() {
     ensure_role_binaries backend
-    export OMNILAUNCHER_SPLIT_HOST="$SPLIT_HOST"
-    export OMNILAUNCHER_SPLIT_PORT="$SPLIT_PORT"
+    export OMNILAUNCHER_SERVER_HOST="$SERVER_HOST"
+    export OMNILAUNCHER_SERVER_PORT="$SERVER_PORT"
     cd "$REPO_DIR"
     if [ -n "$DEBUG_FLAG" ]; then
-        start_detached "$BACKEND_EXE" "$BACKEND_PID_FILE" --split-backend "$DEBUG_FLAG"
+        start_detached "$BACKEND_EXE" "$BACKEND_PID_FILE" --server "$DEBUG_FLAG"
     else
-        start_detached "$BACKEND_EXE" "$BACKEND_PID_FILE" --split-backend
+        start_detached "$BACKEND_EXE" "$BACKEND_PID_FILE" --server
     fi
 }
 
 start_prod_debug_backend() {
     ensure_role_binaries backend
-    export OMNILAUNCHER_SPLIT_HOST="$SPLIT_HOST"
-    export OMNILAUNCHER_SPLIT_PORT="$SPLIT_PORT"
+    export OMNILAUNCHER_SERVER_HOST="$SERVER_HOST"
+    export OMNILAUNCHER_SERVER_PORT="$SERVER_PORT"
     cd "$REPO_DIR"
-    start_detached "$BACKEND_EXE" "$BACKEND_PID_FILE" --split-backend --debug
+    start_detached "$BACKEND_EXE" "$BACKEND_PID_FILE" --server --debug
 }
 
 start_prod_debug_frontend() {
@@ -288,11 +288,11 @@ find_process_pids() {
     '
 }
 
-find_split_backend_pids() {
+find_server_pids() {
     {
         find_process_pids omnilauncher-backend
         ps -eo pid=,args= 2>/dev/null | awk '
-            /[[:space:]]--split-backend([[:space:]]|$)/ {
+            /[[:space:]]--server([[:space:]]|$)/ {
                 pid = $1
                 $1 = ""
                 sub(/^[[:space:]]+/, "")
@@ -365,9 +365,9 @@ show_status() {
         err "  frontend: STOPPED"
     fi
 
-    be_pids="$(find_split_backend_pids)"
+    be_pids="$(find_server_pids)"
     if [ -z "$be_pids" ]; then
-        be_pids="$(find_listener_pid "$SPLIT_PORT")"
+        be_pids="$(find_listener_pid "$SERVER_PORT")"
     fi
     if [ -n "$be_pids" ]; then
         for pid in $be_pids; do
@@ -388,14 +388,14 @@ show_status() {
     printf "%b\n" "${YELLOW}--- Network ---${NC}"
     local listener=""
     if command -v ss >/dev/null 2>&1; then
-        listener="$(ss -tlnH 2>/dev/null | awk -v p=":$SPLIT_PORT" '$4 ~ p {print; exit}')"
+        listener="$(ss -tlnH 2>/dev/null | awk -v p=":$SERVER_PORT" '$4 ~ p {print; exit}')"
     elif command -v lsof >/dev/null 2>&1; then
-        listener="$(lsof -iTCP:"$SPLIT_PORT" -sTCP:LISTEN 2>/dev/null | sed -n '2p')"
+        listener="$(lsof -iTCP:"$SERVER_PORT" -sTCP:LISTEN 2>/dev/null | sed -n '2p')"
     fi
     if [ -n "$listener" ]; then
-        ok "  port $SPLIT_PORT: LISTENING"
+        ok "  port $SERVER_PORT: LISTENING"
     else
-        err "  port $SPLIT_PORT: NOT LISTENING"
+        err "  port $SERVER_PORT: NOT LISTENING"
     fi
 
     # --- Health ---

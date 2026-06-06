@@ -12,7 +12,7 @@ help:
 	$(info   make status)
 	$(info   make logs)
 	$(info )
-	$(info Defaults: ROLE=both KIND=all BACKEND_MODE=local SPLIT_PORT=$(SPLIT_PORT))
+	$(info Defaults: ROLE=both KIND=all BACKEND_MODE=local SERVER_PORT=$(SERVER_PORT))
 	$(info Run 'make help-advanced' for compatibility aliases and variables.)
 	@:
 
@@ -34,8 +34,8 @@ help-advanced:
 	$(info   BACKEND_MODE=local|remote        default: local)
 	$(info   BACKEND_MODE=wsl                 Windows-only backend helper)
 	$(info   BACKEND_URL=<url>                default: $(BACKEND_URL))
-	$(info   SPLIT_HOST=<host>                default: $(SPLIT_HOST))
-	$(info   SPLIT_PORT=<port>                default: $(SPLIT_PORT))
+	$(info   SERVER_HOST=<host>               default: $(SERVER_HOST))
+	$(info   SERVER_PORT=<port>               default: $(SERVER_PORT))
 	$(info   REBUILD=1                        rebuild before start)
 	$(info   CARGO_TEST_FLAGS=<flags>         default: $(CARGO_TEST_FLAGS))
 	$(info   DEBUG=1 or VERBOSE=1             start binary with --debug)

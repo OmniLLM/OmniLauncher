@@ -15,7 +15,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct SplitServerState {
+pub struct ServerState {
     pub plugin_manager: Arc<Mutex<crate::PluginManager>>,
     pub ai_client: Arc<Mutex<AiClient>>,
     pub settings: Arc<Mutex<AppSettings>>,
@@ -184,7 +184,7 @@ fn json_response<T: Serialize>(value: &T) -> LiveResponse {
 fn parse_json<T: for<'de> Deserialize<'de>>(body: &str) -> Result<T, LiveResponse> {
     serde_json::from_str(body).map_err(|error| {
         log::warn!(
-            "split backend JSON parse error: {} (body_bytes={})",
+            "server JSON parse error: {} (body_bytes={})",
             error,
             body.len()
         );
@@ -292,12 +292,12 @@ async fn read_http_request(
     }
 }
 
-pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16) {
+pub async fn spawn_api_server(state: ServerState, host: String, port: u16) {
     let listener = match TcpListener::bind((host.as_str(), port)).await {
         Ok(listener) => listener,
         Err(error) => {
             log::error!(
-                "failed to bind split backend on {}:{}: {}",
+                "failed to bind server on {}:{}: {}",
                 host,
                 port,
                 error
@@ -306,13 +306,13 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
         }
     };
 
-    log::info!("split backend listening on http://{}:{}", host, port);
+    log::info!("server listening on http://{}:{}", host, port);
 
     loop {
         let (mut stream, addr) = match listener.accept().await {
             Ok(parts) => parts,
             Err(error) => {
-                log::warn!("split backend accept error: {}", error);
+                log::warn!("server accept error: {}", error);
                 continue;
             }
         };
@@ -345,7 +345,7 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
             );
 
             if let Some(event_name) = event_name_from_path(&path) {
-                log::debug!("split backend SSE subscribe from {}: {}", addr, event_name);
+                log::debug!("server SSE subscribe from {}: {}", addr, event_name);
                 let mut receiver = state.event_bus.subscribe(&event_name).await;
                 let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n".to_string();
                 if stream.write_all(headers.as_bytes()).await.is_err() {
@@ -411,7 +411,7 @@ fn extract_auth_header(request: &str) -> Option<&str> {
 }
 
 async fn handle_request(
-    state: &SplitServerState,
+    state: &ServerState,
     method: &str,
     path: &str,
     _query: &str,
@@ -434,7 +434,7 @@ async fn handle_request(
     // ────────────────────────────────────────────────────────────────────────
     if method != "GET" && method != "OPTIONS" {
         log::trace!(
-            "split backend request body: method={} path={} body_bytes={}",
+            "server request body: method={} path={} body_bytes={}",
             method,
             path,
             request_body_len(request)
@@ -453,7 +453,7 @@ async fn handle_request(
         ("GET", "/api/settings") => {
             let settings = state.settings.lock().await.clone();
             log::debug!(
-                "split backend get settings: base_url={} model={} theme={} max_results={} background_url={}",
+                "server get settings: base_url={} model={} theme={} max_results={} background_url={}",
                 settings.ai_base_url,
                 settings.ai_model,
                 settings.theme,
@@ -467,7 +467,7 @@ async fn handle_request(
             match parse_json::<SaveSettingsRequest>(&body) {
                 Ok(input) => {
                     log::debug!(
-                        "split backend save settings request: base_url={} model={} theme={} max_results={} background_url={} api_key_present={}",
+                        "server save settings request: base_url={} model={} theme={} max_results={} background_url={} api_key_present={}",
                         input.ai_base_url,
                         input.ai_model,
                         input.theme,
@@ -501,9 +501,9 @@ async fn handle_request(
                     }
                     let ok = save_settings(&updated);
                     if ok {
-                        log::info!("split backend saved settings successfully");
+                        log::info!("server saved settings successfully");
                     } else {
-                        log::error!("split backend failed to save settings");
+                        log::error!("server failed to save settings");
                     }
                     state
                         .event_bus
@@ -1311,7 +1311,7 @@ mod tests {
 pub async fn vision_analyze_backend(
     prompt: &str,
     image_base64: &str,
-    state: &SplitServerState,
+    state: &ServerState,
 ) -> Result<String, String> {
     let (base_url, api_key, model) = {
         let settings = state.settings.lock().await;
@@ -1378,15 +1378,15 @@ pub async fn vision_analyze_backend(
         .to_string())
 }
 
-pub async fn search_backend(query: String, state: &SplitServerState) -> Vec<QueryResult> {
+pub async fn search_backend(query: String, state: &ServerState) -> Vec<QueryResult> {
     let pm = state.plugin_manager.lock().await;
     pm.query_all(&query).await
 }
 
-/// Slash-command preview results. Shared by the split-backend
+/// Slash-command preview results. Shared by the server's
 /// `/api/slash/preview` endpoint and the Tauri `slash_preview` command so both
 /// surfaces behave identically. `pm` is passed in (already locked by the
-/// caller) to keep this free of `SplitServerState` / `AppState` coupling.
+/// caller) to keep this free of `ServerState` / `AppState` coupling.
 pub async fn slash_preview_backend(query: &str, pm: &crate::PluginManager) -> Vec<QueryResult> {
     let lower = query.to_lowercase();
 
@@ -1553,7 +1553,7 @@ pub async fn slash_preview_backend(query: &str, pm: &crate::PluginManager) -> Ve
 
 /// Refresh the in-memory PluginManager after an install/update/remove so newly
 /// changed external plugins become visible without restarting the backend.
-async fn reload_external_plugins_state(state: &SplitServerState) {
+async fn reload_external_plugins_state(state: &ServerState) {
     let settings = crate::load_settings();
     let mut pm = state.plugin_manager.lock().await;
     pm.reload_external_plugins(&settings.plugin_dirs);
@@ -1562,7 +1562,7 @@ async fn reload_external_plugins_state(state: &SplitServerState) {
 /// Install a plugin runtime dependency (python/node/dotnet), emitting progress
 /// over the SSE bus so the desktop UI's `omnilauncher://plugin-runtime-progress`
 /// listener updates live — mirroring the Tauri command path in `main.rs`.
-async fn install_runtime_dep_backend(id: &str, state: &SplitServerState) -> Result<String, String> {
+async fn install_runtime_dep_backend(id: &str, state: &ServerState) -> Result<String, String> {
     use crate::plugins::runtime_deps::{runtime_install_plan, runtime_label};
 
     let emit = |message: String| {
@@ -1649,7 +1649,7 @@ pub async fn list_models_backend(base_url: String, api_key: String) -> Result<Ve
         .unwrap_or_default())
 }
 
-pub async fn clear_conversation_backend(state: &SplitServerState) -> Result<bool, String> {
+pub async fn clear_conversation_backend(state: &ServerState) -> Result<bool, String> {
     let new_id = crate::db::conversation::start_new_session(None);
     let mut ctx = state.conversation.lock().await;
     ctx.clear();
@@ -1659,7 +1659,7 @@ pub async fn clear_conversation_backend(state: &SplitServerState) -> Result<bool
 
 pub async fn switch_session_backend(
     session_id: i64,
-    state: &SplitServerState,
+    state: &ServerState,
 ) -> Result<Vec<serde_json::Value>, String> {
     crate::db::conversation::touch_for_switch(session_id);
     let msgs = crate::db::conversation::load_recent_for_session(session_id, 200);
@@ -1677,7 +1677,7 @@ pub async fn switch_session_backend(
 
 pub async fn delete_session_backend(
     session_id: i64,
-    state: &SplitServerState,
+    state: &ServerState,
 ) -> Result<i64, String> {
     let ok = crate::db::conversation::delete_session(session_id);
     if !ok {
@@ -1694,7 +1694,7 @@ pub async fn delete_session_backend(
     }
 }
 
-pub async fn ai_cancel_backend(state: &SplitServerState) -> Result<bool, String> {
+pub async fn ai_cancel_backend(state: &ServerState) -> Result<bool, String> {
     let handle = {
         let mut slot = state.current_ai_task.lock().await;
         slot.take()
@@ -1712,7 +1712,7 @@ pub async fn ai_cancel_backend(state: &SplitServerState) -> Result<bool, String>
     }
 }
 
-pub async fn ai_query_backend(query: String, state: SplitServerState) -> Result<(), String> {
+pub async fn ai_query_backend(query: String, state: ServerState) -> Result<(), String> {
     use crate::ai::router::Router;
 
     let permit = state
@@ -1805,7 +1805,7 @@ pub async fn ai_query_backend(query: String, state: SplitServerState) -> Result<
 
 pub async fn execute_result_backend(
     result: QueryResult,
-    state: &SplitServerState,
+    state: &ServerState,
 ) -> Result<bool, String> {
     let action_data = result.action_data.clone();
 

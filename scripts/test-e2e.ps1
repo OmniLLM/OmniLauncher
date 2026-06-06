@@ -1,6 +1,8 @@
 param(
     [string]$BaseUrl = "http://127.0.0.1:1422",
-    [int]$AiTimeoutSeconds = 30
+    [int]$AiTimeoutSeconds = 30,
+    [string]$Token = $env:OMNILAUNCHER_SERVER_TOKEN,
+    [string]$TokenFile = (Join-Path $HOME ".config/omnilauncher/server-token")
 )
 
 <#
@@ -19,12 +21,26 @@ param(
     9. Skills listing
     10. Plugins listing
     11. Slash command preview
+
+    Auth token resolution order: -Token > $env:OMNILAUNCHER_SERVER_TOKEN > -TokenFile
+    (default token file: ~/.config/omnilauncher/server-token). When a token is
+    resolved it is sent as the X-OmniLauncher-Token header on every request,
+    including the SSE listener connections.
 #>
 
 $ErrorActionPreference = "Stop"
 $passed = 0
 $failed = 0
 $warnings = 0
+
+# Resolve token: param/env (already in $Token) > file.
+if (-not $Token -and (Test-Path $TokenFile)) {
+    $Token = (Get-Content -Raw $TokenFile).Trim()
+}
+
+# Header table sent with every request (empty when no token resolved).
+$TokenHeaders = @{}
+if ($Token) { $TokenHeaders["X-OmniLauncher-Token"] = $Token }
 
 function Pass($test) {
     Write-Host "  PASS  $test" -ForegroundColor Green
@@ -48,6 +64,7 @@ function Api($method, $path, $body) {
         Method          = $method
         UseBasicParsing = $true
         TimeoutSec      = 10
+        Headers         = $TokenHeaders
     }
     if ($body) {
         $params.ContentType = "application/json; charset=utf-8"
@@ -179,8 +196,9 @@ try { Api POST "/api/ai/cancel" | Out-Null } catch {}
 
 # Start SSE listeners BEFORE sending the query (like the frontend does)
 $doneJob = Start-Job -ScriptBlock {
-    param($url)
+    param($url, $token)
     $client = [System.Net.WebClient]::new()
+    if ($token) { $client.Headers.Add("X-OmniLauncher-Token", $token) }
     $stream = $client.OpenRead($url)
     $reader = [System.IO.StreamReader]::new($stream)
     $lines = @()
@@ -195,11 +213,12 @@ $doneJob = Start-Job -ScriptBlock {
     }
     $reader.Close(); $stream.Close()
     return ($lines -join "`n")
-} -ArgumentList "$BaseUrl/api/events/omnilauncher%3A%2F%2Fai-done"
+} -ArgumentList "$BaseUrl/api/events/omnilauncher%3A%2F%2Fai-done", $Token
 
 $errorJob = Start-Job -ScriptBlock {
-    param($url)
+    param($url, $token)
     $client = [System.Net.WebClient]::new()
+    if ($token) { $client.Headers.Add("X-OmniLauncher-Token", $token) }
     $stream = $client.OpenRead($url)
     $reader = [System.IO.StreamReader]::new($stream)
     $lines = @()
@@ -214,7 +233,7 @@ $errorJob = Start-Job -ScriptBlock {
     }
     $reader.Close(); $stream.Close()
     return ($lines -join "`n")
-} -ArgumentList "$BaseUrl/api/events/omnilauncher%3A%2F%2Fai-error"
+} -ArgumentList "$BaseUrl/api/events/omnilauncher%3A%2F%2Fai-error", $Token
 
 Start-Sleep -Milliseconds 500  # let SSE connections establish
 
@@ -322,7 +341,7 @@ try {
 # ─────────────────────────────────────────────────────────────────────────────
 Write-Host "--- 13. CORS ---" -ForegroundColor Yellow
 try {
-    $r = Invoke-WebRequest -Uri "$BaseUrl/api/settings" -Method OPTIONS -UseBasicParsing -TimeoutSec 5
+    $r = Invoke-WebRequest -Uri "$BaseUrl/api/settings" -Method OPTIONS -UseBasicParsing -TimeoutSec 5 -Headers $TokenHeaders
     if ($r.Headers["Access-Control-Allow-Origin"] -eq "*") { Pass "OPTIONS CORS headers present" }
     else { Fail "CORS" "missing Access-Control-Allow-Origin header" }
 } catch { Fail "OPTIONS CORS" $_.Exception.Message }
@@ -332,7 +351,7 @@ try {
 # ─────────────────────────────────────────────────────────────────────────────
 Write-Host "--- 14. Error Handling ---" -ForegroundColor Yellow
 try {
-    $r = Invoke-WebRequest -Uri "$BaseUrl/api/nonexistent" -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue
+    $r = Invoke-WebRequest -Uri "$BaseUrl/api/nonexistent" -UseBasicParsing -TimeoutSec 5 -Headers $TokenHeaders -ErrorAction SilentlyContinue
     Fail "GET /api/nonexistent" "expected 404 got $($r.StatusCode)"
 } catch {
     if ($_.Exception.Response.StatusCode.value__ -eq 404) { Pass "GET /api/nonexistent returns 404" }

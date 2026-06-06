@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Helper for Makefile targets - start/stop/test the split backend and frontend.
+    Helper for Makefile targets - start/stop/test the server and frontend.
 .DESCRIPTION
     Called from the Makefile with positional args to avoid $-escaping issues
     with GNU make -> sh -> PowerShell.
@@ -18,8 +18,8 @@ param(
     )]
     [string]$Action,
 
-    [string]$SplitHost   = '0.0.0.0',
-    [string]$SplitPort    = '1422',
+    [string]$ServerHost   = '0.0.0.0',
+    [string]$ServerPort    = '1422',
     [string]$BackendUrl   = 'http://127.0.0.1:1422',
     [string]$Role         = 'both',
     [switch]$DebugFlag
@@ -88,7 +88,7 @@ function Stop-Frontend {
 function Stop-Backend {
     Get-Process omnilauncher-backend -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
-    Get-NetTCPConnection -LocalPort $SplitPort -State Listen -ErrorAction SilentlyContinue |
+    Get-NetTCPConnection -LocalPort $ServerPort -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1 |
         ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 }
@@ -107,18 +107,18 @@ function Start-Frontend {
 
 function Start-Backend {
     Ensure-RoleBinaries -Which backend
-    $env:OMNILAUNCHER_SPLIT_HOST = $SplitHost
-    $env:OMNILAUNCHER_SPLIT_PORT = $SplitPort
-    $argList = @('--split-backend')
+    $env:OMNILAUNCHER_SERVER_HOST = $ServerHost
+    $env:OMNILAUNCHER_SERVER_PORT = $ServerPort
+    $argList = @('--server')
     if ($DebugFlag) { $argList += '--debug' }
     Start-Process -FilePath $backendExe -ArgumentList $argList -WorkingDirectory (Get-Location)
 }
 
 function Start-ProdDebugBackend {
     Ensure-RoleBinaries -Which backend
-    $env:OMNILAUNCHER_SPLIT_HOST = $SplitHost
-    $env:OMNILAUNCHER_SPLIT_PORT = $SplitPort
-    Start-Process -FilePath $backendExe -ArgumentList '--split-backend','--debug' -WorkingDirectory (Get-Location)
+    $env:OMNILAUNCHER_SERVER_HOST = $ServerHost
+    $env:OMNILAUNCHER_SERVER_PORT = $ServerPort
+    Start-Process -FilePath $backendExe -ArgumentList '--server','--debug' -WorkingDirectory (Get-Location)
 }
 
 function Start-ProdDebugFrontend {
@@ -134,8 +134,8 @@ function Start-WslBackend {
         Write-Host 'WSL build failed!' -ForegroundColor Red
         exit 1
     }
-    Write-Host "Starting backend inside WSL on $SplitHost`:$SplitPort..." -ForegroundColor Cyan
-    wsl -e bash -c "OMNILAUNCHER_SPLIT_HOST=$SplitHost OMNILAUNCHER_SPLIT_PORT=$SplitPort nohup /mnt/c/Users/jzhu/repos/OmniLauncher/src-tauri/target/release/omnilauncher --split-backend >/dev/null 2>&1 &"
+    Write-Host "Starting backend inside WSL on $ServerHost`:$ServerPort..." -ForegroundColor Cyan
+    wsl -e bash -c "OMNILAUNCHER_SERVER_HOST=$ServerHost OMNILAUNCHER_SERVER_PORT=$ServerPort nohup /mnt/c/Users/jzhu/repos/OmniLauncher/src-tauri/target/release/omnilauncher --server >/dev/null 2>&1 &"
     Write-Host "WSL backend started. Frontend should connect via BACKEND_URL=$BackendUrl" -ForegroundColor Green
 }
 
@@ -144,7 +144,7 @@ function Restart-WslBackend {
     Stop-Backend
     wsl -e bash -c 'rm -f /mnt/c/Users/jzhu/repos/OmniLauncher/src-tauri/target/release/omnilauncher'
     Write-Host 'Building and starting WSL backend...' -ForegroundColor Cyan
-    wsl -e bash -c 'cd /mnt/c/Users/jzhu/repos/OmniLauncher/src-tauri && cargo build --release && OMNILAUNCHER_SPLIT_HOST=$env:SplitHost OMNILAUNCHER_SPLIT_PORT=$env:SplitPort nohup /mnt/c/Users/jzhu/repos/OmniLauncher/src-tauri/target/release/omnilauncher --split-backend >/dev/null 2>&1 &'
+    wsl -e bash -c 'cd /mnt/c/Users/jzhu/repos/OmniLauncher/src-tauri && cargo build --release && OMNILAUNCHER_SERVER_HOST=$env:ServerHost OMNILAUNCHER_SERVER_PORT=$env:ServerPort nohup /mnt/c/Users/jzhu/repos/OmniLauncher/src-tauri/target/release/omnilauncher --server >/dev/null 2>&1 &'
     Write-Host 'WSL backend restarted.' -ForegroundColor Green
 }
 
@@ -205,11 +205,11 @@ function Show-Status {
 
     # --- Port ---
     Write-Host '--- Network ---' -ForegroundColor Yellow
-    $listener = Get-NetTCPConnection -LocalPort $SplitPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    $listener = Get-NetTCPConnection -LocalPort $ServerPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($listener) {
-        Write-Host "  port $SplitPort`: LISTENING  PID=$($listener.OwningProcess)" -ForegroundColor Green
+        Write-Host "  port $ServerPort`: LISTENING  PID=$($listener.OwningProcess)" -ForegroundColor Green
     } else {
-        Write-Host "  port $SplitPort`: NOT LISTENING" -ForegroundColor Red
+        Write-Host "  port $ServerPort`: NOT LISTENING" -ForegroundColor Red
     }
 
     # --- Health check ---

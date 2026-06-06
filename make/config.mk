@@ -4,9 +4,9 @@ NPM          ?= npm
 NPX          ?= npx
 CARGO        ?= cargo
 CARGO_TEST_FLAGS ?= -- --test-threads=1
-SPLIT_HOST   ?= 0.0.0.0
-SPLIT_PORT   ?= 1422
-BACKEND_URL  ?= http://127.0.0.1:$(SPLIT_PORT)
+SERVER_HOST  ?= 0.0.0.0
+SERVER_PORT  ?= 1422
+BACKEND_URL  ?= http://127.0.0.1:$(SERVER_PORT)
 
 # Canonical command selectors.
 ROLE         ?= both

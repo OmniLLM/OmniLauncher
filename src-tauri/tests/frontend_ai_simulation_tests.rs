@@ -5,7 +5,7 @@ use omnilauncher_lib::{
     ai::{client::AiClient, router::ConversationContext},
     create_plugin_manager_builtin_only, load_settings,
     skills::SkillManager,
-    split_server::{ai_query_backend, EventBus, SplitServerState},
+    server::{ai_query_backend, EventBus, ServerState},
 };
 
 fn integration_enabled() -> bool {
@@ -32,7 +32,7 @@ async fn frontend_like_ai_query_alibaba_ecs_returns_a_number() {
     let mut skill_manager = SkillManager::new();
     skill_manager.reload();
 
-    let state = SplitServerState {
+    let state = ServerState {
         plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
         ai_client: Arc::new(Mutex::new(AiClient::new(
             settings.ai_base_url.clone(),
@@ -46,7 +46,7 @@ async fn frontend_like_ai_query_alibaba_ecs_returns_a_number() {
         skill_manager: Arc::new(Mutex::new(skill_manager)),
         event_bus: EventBus::default(),
         latest_selection: Arc::new(Mutex::new(None)),
-        auth_token: Arc::new(omnilauncher_lib::split_server::generate_auth_token()),
+        auth_token: Arc::new(omnilauncher_lib::server::generate_auth_token()),
     };
 
     let mut done_rx = state.event_bus.subscribe("omnilauncher://ai-done").await;
