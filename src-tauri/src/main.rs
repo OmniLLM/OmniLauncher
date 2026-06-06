@@ -143,6 +143,21 @@ fn init_debug_logging(enable_debug: bool) {
     }
 }
 
+/// Emit a single info-level banner so debug logs and stderr always start
+/// with a clear "what process, in what mode" line. Useful when sifting
+/// through ~/.omnilauncher/omnilauncher.log with multiple sessions appended.
+fn log_startup_banner(role: &str, debug_enabled: bool) {
+    let version = env!("CARGO_PKG_VERSION");
+    let log_target = if debug_enabled {
+        debug_log_path().display().to_string()
+    } else {
+        "stderr".to_string()
+    };
+    log::info!(
+        "OmniLauncher starting role={role} version={version} debug={debug_enabled} log={log_target}"
+    );
+}
+
 pub struct AppState {
     pub plugin_manager: Arc<Mutex<omnilauncher_lib::PluginManager>>,
     pub ai_client: Arc<Mutex<AiClient>>,
@@ -1681,6 +1696,9 @@ fn main() {
     {
         log::info!("Running without debug file logging");
     }
+
+    let role = if split_backend_only { "split-backend" } else { "tauri-shell" };
+    log_startup_banner(role, debug_enabled);
 
     if split_backend_only {
         let settings = load_settings();

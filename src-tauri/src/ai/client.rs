@@ -241,7 +241,7 @@ impl AiClient {
             self.base_url.trim_end_matches('/')
         );
 
-        log::debug!(
+        log::info!(
             "AI request → endpoint={} model={} messages={} tools={} auth={}",
             url,
             self.model,
@@ -296,7 +296,7 @@ impl AiClient {
             return Err(AiError::Api { status, body });
         }
 
-        log::debug!(
+        log::info!(
             "AI response ← status={} in {} ms (model={})",
             status.as_u16(),
             elapsed_ms,

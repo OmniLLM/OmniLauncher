@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -246,13 +246,10 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
             let method = parts.next().unwrap_or("GET");
             let target = parts.next().unwrap_or("/");
             let (path, query) = split_path_query(target);
-            log::debug!(
-                "split backend request from {}: method={} path={} query={} bytes={}",
-                addr,
-                method,
-                path,
-                query,
-                read_len
+            let started_at = Instant::now();
+            log::info!(
+                "→ {} {} from={} query={} bytes={}",
+                method, path, addr, query, read_len
             );
 
             if let Some(event_name) = event_name_from_path(&path) {
@@ -268,18 +265,20 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
                         break;
                     }
                 }
+                let elapsed_ms = started_at.elapsed().as_millis();
+                log::info!(
+                    "← {} {} status=200 sse_closed elapsed_ms={}",
+                    method, path, elapsed_ms
+                );
                 let _ = stream.shutdown().await;
                 return;
             }
 
             let response = handle_request(&state, method, &path, &query, &request).await;
-            log::debug!(
-                "split backend response to {}: method={} path={} status={} body_bytes={}",
-                addr,
-                method,
-                path,
-                response.status,
-                response.body.len()
+            let elapsed_ms = started_at.elapsed().as_millis();
+            log::info!(
+                "← {} {} status={} body_bytes={} elapsed_ms={}",
+                method, path, response.status, response.body.len(), elapsed_ms
             );
             let bytes = encode_response(response);
             let _ = stream.write_all(&bytes).await;
