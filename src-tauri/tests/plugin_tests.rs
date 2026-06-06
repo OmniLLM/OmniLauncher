@@ -641,6 +641,7 @@ async fn test_sysinfo_os() {
 // ============================================================
 
 #[tokio::test]
+#[ignore = "depends on external https://httpbin.org availability"]
 async fn test_http_get() {
     let pm = create_plugin_manager();
     let r = pm

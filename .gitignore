@@ -21,6 +21,7 @@ skill-ui-test.png
 # AI-generated plan/doc directories
 docs/superpowers/
 .claude/
+.serena/
 .env
 *.ico
 *.icns
