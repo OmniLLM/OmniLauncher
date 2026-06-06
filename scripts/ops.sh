@@ -111,11 +111,18 @@ prepare_binaries() {
     [ -f "$BACKEND_EXE" ]  && echo "  backend:  $BACKEND_EXE"
 }
 
+# Make sure the role-named binaries needed by the caller exist. Role-aware
+# so `start_backend` doesn't complain when the frontend hasn't been built
+# yet (and vice versa). Falls through to `prepare_binaries` to copy/rename
+# from the bare omnilauncher if it's still around.
 ensure_role_binaries() {
-    if [ -f "$FRONTEND_EXE" ] && [ -f "$BACKEND_EXE" ]; then
-        return 0
-    fi
-    prepare_binaries both
+    local role="${1:-both}"
+    case "$role" in
+        frontend) [ -f "$FRONTEND_EXE" ] && return 0 ;;
+        backend)  [ -f "$BACKEND_EXE" ] && return 0 ;;
+        both)     [ -f "$FRONTEND_EXE" ] && [ -f "$BACKEND_EXE" ] && return 0 ;;
+    esac
+    prepare_binaries "$role"
 }
 
 remove_binaries() {
@@ -202,7 +209,7 @@ start_detached() {
 }
 
 start_frontend() {
-    ensure_role_binaries
+    ensure_role_binaries frontend
     export OMNILAUNCHER_BACKEND_URL="$BACKEND_URL"
     cd "$REPO_DIR"
     if [ -n "$DEBUG_FLAG" ]; then
@@ -213,7 +220,7 @@ start_frontend() {
 }
 
 start_backend() {
-    ensure_role_binaries
+    ensure_role_binaries backend
     export OMNILAUNCHER_SPLIT_HOST="$SPLIT_HOST"
     export OMNILAUNCHER_SPLIT_PORT="$SPLIT_PORT"
     cd "$REPO_DIR"
@@ -225,7 +232,7 @@ start_backend() {
 }
 
 start_prod_debug_backend() {
-    ensure_role_binaries
+    ensure_role_binaries backend
     export OMNILAUNCHER_SPLIT_HOST="$SPLIT_HOST"
     export OMNILAUNCHER_SPLIT_PORT="$SPLIT_PORT"
     cd "$REPO_DIR"
@@ -233,7 +240,7 @@ start_prod_debug_backend() {
 }
 
 start_prod_debug_frontend() {
-    ensure_role_binaries
+    ensure_role_binaries frontend
     export OMNILAUNCHER_BACKEND_URL="$BACKEND_URL"
     cd "$REPO_DIR"
     start_detached "$FRONTEND_EXE" "$FRONTEND_PID_FILE" --debug

@@ -65,10 +65,13 @@ function Prepare-Binaries {
 }
 
 function Ensure-RoleBinaries {
-    if ((Test-Path $frontendExe) -and (Test-Path $backendExe)) {
-        return
+    param([string]$Which = 'both')
+    switch ($Which) {
+        'frontend' { if (Test-Path $frontendExe) { return } }
+        'backend'  { if (Test-Path $backendExe) { return } }
+        'both'     { if ((Test-Path $frontendExe) -and (Test-Path $backendExe)) { return } }
     }
-    Prepare-Binaries -Which both
+    Prepare-Binaries -Which $Which
 }
 
 function Remove-Binaries {
@@ -91,7 +94,7 @@ function Stop-Backend {
 }
 
 function Start-Frontend {
-    Ensure-RoleBinaries
+    Ensure-RoleBinaries -Which frontend
     $env:OMNILAUNCHER_BACKEND_URL = $BackendUrl
     $argList = @()
     if ($DebugFlag) { $argList += '--debug' }
@@ -103,7 +106,7 @@ function Start-Frontend {
 }
 
 function Start-Backend {
-    Ensure-RoleBinaries
+    Ensure-RoleBinaries -Which backend
     $env:OMNILAUNCHER_SPLIT_HOST = $SplitHost
     $env:OMNILAUNCHER_SPLIT_PORT = $SplitPort
     $argList = @('--split-backend')
@@ -112,14 +115,14 @@ function Start-Backend {
 }
 
 function Start-ProdDebugBackend {
-    Ensure-RoleBinaries
+    Ensure-RoleBinaries -Which backend
     $env:OMNILAUNCHER_SPLIT_HOST = $SplitHost
     $env:OMNILAUNCHER_SPLIT_PORT = $SplitPort
     Start-Process -FilePath $backendExe -ArgumentList '--split-backend','--debug' -WorkingDirectory (Get-Location)
 }
 
 function Start-ProdDebugFrontend {
-    Ensure-RoleBinaries
+    Ensure-RoleBinaries -Which frontend
     $env:OMNILAUNCHER_BACKEND_URL = $BackendUrl
     Start-Process -FilePath $frontendExe -ArgumentList '--debug' -WorkingDirectory (Get-Location)
 }
