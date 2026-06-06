@@ -1,7 +1,6 @@
 use crate::guardrails::{GuardrailAction, Guardrails};
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
-use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -153,7 +152,7 @@ impl Plugin for ShellExecPlugin {
                     .expect("temp_script set on windows")
                     .to_string_lossy()
                     .into_owned();
-                let mut c = Command::new("powershell");
+                let mut c = tokio::process::Command::new("powershell");
                 c.args([
                     "-NoProfile",
                     "-ExecutionPolicy",
@@ -166,7 +165,7 @@ impl Plugin for ShellExecPlugin {
             #[cfg(not(target_os = "windows"))]
             unreachable!()
         } else {
-            let mut c = Command::new("sh");
+            let mut c = tokio::process::Command::new("sh");
             c.args(["-c", command]);
             c
         };
@@ -175,13 +174,21 @@ impl Plugin for ShellExecPlugin {
             cmd.current_dir(dir);
         }
 
-        let output_result = cmd.output();
+        // Run with a 120-second timeout. When the timeout fires the tokio Child
+        // is dropped which reaps the process — no manual kill needed.
+        let output_result =
+            tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output()).await;
 
         // Best-effort cleanup of the temp script regardless of success.
         #[cfg(target_os = "windows")]
         if let Some(p) = &temp_script {
             let _ = std::fs::remove_file(p);
         }
+
+        let output_result = match output_result {
+            Err(_elapsed) => return "Error: command timed out after 120s".to_string(),
+            Ok(r) => r,
+        };
 
         match output_result {
             Ok(output) => {

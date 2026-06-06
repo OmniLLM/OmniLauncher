@@ -25,6 +25,9 @@ pub struct SplitServerState {
     pub skill_manager: Arc<Mutex<SkillManager>>,
     pub event_bus: EventBus,
     pub latest_selection: Arc<Mutex<Option<SelectionPayload>>>,
+    /// Per-launch auth token. Every non-OPTIONS, non-/health request must carry
+    /// `X-OmniLauncher-Token: <token>` or receive a 401.
+    pub auth_token: Arc<String>,
 }
 
 #[derive(Clone, Default)]
@@ -205,6 +208,90 @@ fn request_body_len(request: &str) -> usize {
         .unwrap_or_default()
 }
 
+/// Read a complete HTTP request from `stream`, returning it as a `String`.
+///
+/// * Reads until `\r\n\r\n` (header terminator), with a 64 KiB cap and a
+///   30-second overall timeout — replies 431 if exceeded.
+/// * Parses `Content-Length` and reads exactly that many additional bytes,
+///   rejecting payloads larger than 16 MiB with 413.
+async fn read_http_request(
+    stream: &mut tokio::net::TcpStream,
+) -> Result<String, LiveResponse> {
+    const HEADER_CAP: usize = 64 * 1024;
+    const BODY_CAP: usize = 16 * 1024 * 1024;
+    const TIMEOUT_SECS: u64 = 30;
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(TIMEOUT_SECS),
+        async {
+            // ── Phase 1: read until \r\n\r\n ─────────────────────────────
+            let mut raw: Vec<u8> = Vec::with_capacity(4096);
+            let mut tmp = [0u8; 4096];
+            let header_end = loop {
+                let n = stream.read(&mut tmp).await.map_err(|_| {
+                    LiveResponse::text("400 Bad Request", "read error".to_string())
+                })?;
+                if n == 0 {
+                    return Err(LiveResponse::text("400 Bad Request", "connection closed".to_string()));
+                }
+                raw.extend_from_slice(&tmp[..n]);
+                if raw.len() > HEADER_CAP {
+                    return Err(LiveResponse::text(
+                        "431 Request Header Fields Too Large",
+                        "header too large".to_string(),
+                    ));
+                }
+                // Look for the header terminator.
+                if let Some(pos) = raw
+                    .windows(4)
+                    .position(|w| w == b"\r\n\r\n")
+                {
+                    break pos + 4; // byte offset of the first body byte
+                }
+            };
+
+            // ── Phase 2: parse Content-Length ────────────────────────────
+            let header_bytes = &raw[..header_end];
+            let header_str = String::from_utf8_lossy(header_bytes);
+            let content_length: Option<usize> = header_str
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l["content-length:".len()..].trim().parse().ok());
+
+            // ── Phase 3: read body ────────────────────────────────────────
+            if let Some(cl) = content_length {
+                if cl > BODY_CAP {
+                    return Err(LiveResponse::text(
+                        "413 Payload Too Large",
+                        "request body too large".to_string(),
+                    ));
+                }
+                // We may already have some body bytes in `raw`.
+                let already = raw.len() - header_end;
+                let remaining = cl.saturating_sub(already);
+                if remaining > 0 {
+                    let old_len = raw.len();
+                    raw.resize(old_len + remaining, 0);
+                    stream
+                        .read_exact(&mut raw[old_len..])
+                        .await
+                        .map_err(|_| {
+                            LiveResponse::text("400 Bad Request", "body read error".to_string())
+                        })?;
+                }
+            }
+
+            Ok(String::from_utf8_lossy(&raw).into_owned())
+        },
+    )
+    .await;
+
+    match result {
+        Ok(inner) => inner,
+        Err(_elapsed) => Err(LiveResponse::text("408 Request Timeout", "request timed out".to_string())),
+    }
+}
+
 pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16) {
     let listener = match TcpListener::bind((host.as_str(), port)).await {
         Ok(listener) => listener,
@@ -231,18 +318,17 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
         };
         let state = state.clone();
         tokio::spawn(async move {
-            let mut buf = vec![0_u8; 1024 * 1024];
-            let read_len = match stream.read(&mut buf).await {
-                Ok(size) => size,
-                Err(error) => {
-                    log::debug!("split backend read error from {}: {}", addr, error);
+            // ── Read request (header loop + body) ────────────────────────
+            let request = match read_http_request(&mut stream).await {
+                Ok(r) => r,
+                Err(response) => {
+                    let bytes = encode_response(response);
+                    let _ = stream.write_all(&bytes).await;
+                    let _ = stream.shutdown().await;
                     return;
                 }
             };
-            if read_len == 0 {
-                return;
-            }
-            let request = String::from_utf8_lossy(&buf[..read_len]).to_string();
+            // ─────────────────────────────────────────────────────────────
             let first_line = request.lines().next().unwrap_or_default();
             let mut parts = first_line.split_whitespace();
             let method = parts.next().unwrap_or("GET");
@@ -255,7 +341,7 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
                 path,
                 addr,
                 query,
-                read_len
+                request.len()
             );
 
             if let Some(event_name) = event_name_from_path(&path) {
@@ -299,6 +385,31 @@ pub async fn spawn_split_server(state: SplitServerState, host: String, port: u16
     }
 }
 
+/// Generate a 32-byte random token encoded as lowercase hex (64 chars).
+pub fn generate_auth_token() -> String {
+    let bytes: [u8; 32] = rand::random();
+    bytes.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{:02x}", b);
+        s
+    })
+}
+
+/// Extract the value of the `X-OmniLauncher-Token` header from a raw HTTP
+/// request string (line-based; returns `None` when the header is absent).
+fn extract_auth_header(request: &str) -> Option<&str> {
+    for line in request.lines() {
+        if line.to_ascii_lowercase().starts_with("x-omnilauncher-token:") {
+            return Some(line["x-omnilauncher-token:".len()..].trim());
+        }
+        // Stop at the header/body boundary.
+        if line.is_empty() {
+            break;
+        }
+    }
+    None
+}
+
 async fn handle_request(
     state: &SplitServerState,
     method: &str,
@@ -306,6 +417,21 @@ async fn handle_request(
     _query: &str,
     request: &str,
 ) -> LiveResponse {
+    // ── Auth guard ───────────────────────────────────────────────────────────
+    // OPTIONS (CORS preflight) and /health are exempt; everything else requires
+    // the per-launch token in X-OmniLauncher-Token.
+    if method != "OPTIONS" && path != "/health" {
+        match extract_auth_header(request) {
+            Some(tok) if tok == state.auth_token.as_str() => {}
+            _ => {
+                return LiveResponse::text(
+                    "401 Unauthorized",
+                    "missing or invalid auth token".to_string(),
+                );
+            }
+        }
+    }
+    // ────────────────────────────────────────────────────────────────────────
     if method != "GET" && method != "OPTIONS" {
         log::trace!(
             "split backend request body: method={} path={} body_bytes={}",
@@ -791,7 +917,7 @@ fn normalize_path(path: &str) -> String {
 
 fn encode_response(response: LiveResponse) -> Vec<u8> {
     let header = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         response.status,
         response.content_type,
         response.body.len()
@@ -800,6 +926,7 @@ fn encode_response(response: LiveResponse) -> Vec<u8> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
@@ -813,7 +940,7 @@ mod tests {
         assert!(encoded.starts_with("HTTP/1.1 204 No Content\r\n"));
         assert!(encoded.contains("Access-Control-Allow-Origin: *\r\n"));
         assert!(encoded.contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"));
-        assert!(encoded.contains("Access-Control-Allow-Headers: Content-Type\r\n"));
+        assert!(encoded.contains("Access-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token\r\n"));
     }
 
     #[test]

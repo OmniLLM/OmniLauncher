@@ -413,7 +413,8 @@ impl Router {
 
         inject_skill(&mut messages);
 
-        // Agentic loop: up to 6 iterations
+        // Agentic loop: up to MAX_AGENT_ITERATIONS (10) iterations
+        const MAX_AGENT_ITERATIONS: usize = 10;
         let mut all_tools_used: Vec<String> = vec![];
         let mut loop_messages = messages.clone();
         let mut final_content = String::new();
@@ -429,7 +430,7 @@ impl Router {
         let mut continuation_nudges: usize = 0;
         const MAX_CONTINUATION_NUDGES: usize = 3;
 
-        for _iteration in 0..10 {
+        for _iteration in 0..MAX_AGENT_ITERATIONS {
             // ── Context compression (sliding window) ──────────────────────────
             local_ctx.compress_if_needed();
             // Rebuild loop_messages to reflect any compression that occurred.

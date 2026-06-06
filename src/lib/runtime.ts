@@ -20,6 +20,17 @@ function frontendLog(level: FrontendLogLevel, message: string) {
 
 let lastLoggedBackendUrl = "__unset__";
 
+/// Per-launch auth token for the split backend. Fetched once at module init
+/// (when running inside Tauri) and attached as X-OmniLauncher-Token on every
+/// HTTP request to the split backend. Falls back to "" in browser/mock mode.
+let splitTokenPromise: Promise<string> = Promise.resolve("");
+
+// Kick off the token fetch immediately on module load so it's ready by the
+// time the first `invoke` call arrives.
+if (typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__) {
+  splitTokenPromise = tauriInvoke<string>("get_split_token").catch(() => "");
+}
+
 /// Window/OS-shell commands run in the local Tauri process — only it owns a
 /// window. They bypass HTTP routing entirely even when a backend URL is set.
 const WINDOW_LOCAL_COMMANDS = new Set<string>([
@@ -106,11 +117,14 @@ async function httpJson<T>(path: string, init?: RequestInit): Promise<T> {
   const bodySummary = typeof init?.body === "string" ? `${init.body.length} bytes` : "none";
   frontendLog("debug", `HTTP ${method} ${url} start body=${bodySummary}`);
 
+  const splitToken = await splitTokenPromise;
+
   let response: Response;
   try {
     response = await fetch(url, {
       headers: {
         "Content-Type": "application/json",
+        ...(splitToken ? { "X-OmniLauncher-Token": splitToken } : {}),
         ...(init?.headers ?? {}),
       },
       ...init,
@@ -158,10 +172,14 @@ function ensureHttpEventStream(name: string) {
   const url = buildUrl(`/api/events/${encodeURIComponent(name)}`);
   frontendLog("debug", `SSE subscribe ${name} via ${url}`);
 
-  fetch(url, {
-    signal: controller.signal,
-    headers: { Accept: "text/event-stream" },
-  })
+  splitTokenPromise.then((splitToken) => {
+    fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: "text/event-stream",
+        ...(splitToken ? { "X-OmniLauncher-Token": splitToken } : {}),
+      },
+    })
     .then(async (response) => {
       if (!response.ok || !response.body) {
         throw new Error(`Failed to subscribe: ${response.status}`);
@@ -207,6 +225,7 @@ function ensureHttpEventStream(name: string) {
       frontendLog("debug", `SSE closed ${name}`);
       eventControllers.delete(name);
     });
+  }); // end splitTokenPromise.then
 }
 
 function ensureSelectionPolling() {

@@ -6,8 +6,25 @@ use std::sync::LazyLock;
 
 /// Compiled once at first use instead of recompiling on every `strip_html` call.
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
+        // Cap the redirect chain at 10 hops.
+        if attempt.previous().len() >= 10 {
+            return attempt.stop();
+        }
+        // Re-run guardrails on every redirect target so a public host cannot
+        // 302-bounce us into a loopback/metadata/private address.
+        let url_str = attempt.url().as_str();
+        match crate::guardrails::Guardrails::check_url(url_str) {
+            crate::guardrails::GuardrailAction::Deny(reason) => {
+                attempt.error(format!("guardrail blocked redirect target: {reason}"))
+            }
+            _ => attempt.follow(),
+        }
+    });
+
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
+        .redirect(redirect_policy)
         .build()
         .unwrap_or_default()
 });
@@ -163,5 +180,49 @@ mod truncate_tests {
         let out = truncate_at_char_boundary(&s, 8000);
         assert!(out.len() <= 8000);
         assert_eq!(out.len() % 4, 0);
+    }
+}
+
+#[cfg(test)]
+mod redirect_policy_tests {
+    use crate::guardrails::{GuardrailAction, Guardrails};
+
+    /// Test the redirect-policy logic directly (no real HTTP server needed).
+    /// The production code builds the policy as a closure; we replicate the
+    /// same logic here and assert that a loopback redirect target is blocked.
+    #[test]
+    fn redirect_to_loopback_is_denied() {
+        let redirect_target = "http://127.0.0.1:8080/x";
+        // Simulate what the policy closure does: re-run guardrails.
+        match Guardrails::check_url(redirect_target) {
+            GuardrailAction::Deny(reason) => {
+                // This is the path the policy takes — attempt.error(...)
+                assert!(
+                    reason.contains("loopback") || reason.contains("blocked"),
+                    "expected loopback block reason, got: {reason}"
+                );
+            }
+            other => panic!(
+                "expected Deny for loopback redirect target, got: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn redirect_to_metadata_service_is_denied() {
+        let metadata_url = "http://169.254.169.254/latest/meta-data/";
+        match Guardrails::check_url(metadata_url) {
+            GuardrailAction::Deny(_) => {}
+            other => panic!("expected Deny for metadata URL, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn redirect_to_public_url_is_allowed() {
+        let public_url = "https://example.com/page";
+        match Guardrails::check_url(public_url) {
+            GuardrailAction::Allow => {}
+            other => panic!("expected Allow for public URL, got: {other:?}"),
+        }
     }
 }

@@ -46,6 +46,7 @@ async fn frontend_like_ai_query_alibaba_ecs_returns_a_number() {
         skill_manager: Arc::new(Mutex::new(skill_manager)),
         event_bus: EventBus::default(),
         latest_selection: Arc::new(Mutex::new(None)),
+        auth_token: Arc::new(omnilauncher_lib::split_server::generate_auth_token()),
     };
 
     let mut done_rx = state.event_bus.subscribe("omnilauncher://ai-done").await;
