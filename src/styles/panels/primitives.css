@@ -1,0 +1,210 @@
+/* ============================================================
+   Reusable button + status primitives (Settings / Plugin / Skill)
+   ============================================================ */
+
+/* Generic stateful pill button.
+   Variants: --primary (accent fill), --ghost (transparent border), --danger.
+   Sizes: default, --sm. */
+.omni-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 7px 14px;
+  border-radius: 7px;
+  border: 1px solid var(--surface-2);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease,
+    transform 80ms ease;
+}
+.omni-btn:hover {
+  background: var(--surface-hover);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--surface-2));
+}
+.omni-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-dim);
+  border-color: var(--accent);
+}
+.omni-btn:active {
+  transform: translateY(1px);
+}
+.omni-btn:disabled,
+.omni-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--surface);
+  border-color: var(--surface-2);
+  color: var(--sub);
+  transform: none;
+}
+
+.omni-btn--sm {
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 6px;
+}
+.omni-btn--xs {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+}
+
+.omni-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--user-bubble-text);
+}
+.omni-btn--primary:hover {
+  background: color-mix(in srgb, var(--accent) 85%, white);
+  border-color: color-mix(in srgb, var(--accent) 85%, white);
+}
+.omni-btn--primary:disabled,
+.omni-btn--primary[aria-disabled="true"] {
+  background: color-mix(in srgb, var(--accent) 40%, var(--surface));
+  border-color: transparent;
+  color: var(--user-bubble-text);
+}
+
+.omni-btn--ghost {
+  background: transparent;
+  border-color: var(--border);
+}
+.omni-btn--ghost:hover {
+  background: var(--accent-hover);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  color: var(--accent);
+}
+
+.omni-btn--danger {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  color: var(--danger);
+}
+.omni-btn--danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.omni-btn--danger:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent);
+  border-color: var(--danger);
+}
+
+/* Status text (used by manager panels for "✓ saved" / "✗ failed" lines). */
+.omni-status {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--sub);
+  animation: omni-fade-in 160ms ease both;
+}
+.omni-status--success {
+  color: var(--success);
+}
+.omni-status--error {
+  color: var(--error);
+}
+.omni-status--warning {
+  color: var(--warning);
+}
+
+/* Status dot for dependency / install state. */
+.omni-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--surface-2);
+  background: var(--surface);
+  color: var(--sub);
+  white-space: nowrap;
+}
+.omni-pill--success {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+}
+.omni-pill--warning {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.omni-pill--error,
+.omni-pill--danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.omni-pill--accent {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Standard form input styling (selects, text inputs in manager panels). */
+.omni-input,
+.omni-select {
+  background: var(--surface);
+  border: 1px solid var(--surface-2);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background-color 140ms ease;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.omni-input:hover,
+.omni-select:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--surface-2));
+}
+.omni-input:focus,
+.omni-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.omni-input::placeholder {
+  color: var(--sub);
+  opacity: 0.7;
+}
+
+/* Section card used by the management panels. */
+.omni-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.omni-card__title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 0 0 10px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.omni-card__title-icon {
+  opacity: 0.7;
+  font-size: 14px;
+}
+

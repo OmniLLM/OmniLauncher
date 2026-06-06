@@ -1,0 +1,40 @@
+/* OmniLauncher — Google-style simple dark palette */
+/* Aggregated entry point. Imports below mirror the original styles.css
+   section order so the post-bundle cascade is byte-equivalent. */
+
+/* base */
+@import "./base/variables.css";
+@import "./base/a11y.css";
+@import "./base/animations.css";
+@import "./base/reset.css";
+
+/* layout */
+@import "./layout/launcher.css";
+@import "./layout/chat.css";
+
+/* components (in original section order) */
+@import "./components/chat-bubbles.css";
+@import "./components/input-bar.css";
+@import "./components/badges.css";
+@import "./components/results-list.css";
+@import "./components/accessory.css";
+@import "./components/footer-actions.css";
+@import "./components/context-menu.css";
+@import "./components/markdown-subtitle.css";
+@import "./components/skeleton.css";
+@import "./components/settings-panel.css";
+@import "./components/model-dropdown.css";
+@import "./components/markdown.css";
+@import "./components/slash-dropdown.css";
+@import "./components/loading.css";
+@import "./components/scrollbar.css";
+@import "./components/search-highlight.css";
+
+/* manager panels */
+@import "./panels/primitives.css";
+@import "./panels/chrome.css";
+@import "./panels/skill-manager.css";
+@import "./panels/plugin-manager.css";
+
+/* favorites (was the trailing section in the original) */
+@import "./components/favorites.css";

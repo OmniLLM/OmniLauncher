@@ -1,0 +1,119 @@
+/* === Input Bar === */
+.chat-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg);
+}
+
+.omni-input-wrap {
+  transition:
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    border-radius 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    padding 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    min-height 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 220ms ease;
+}
+
+.omni-input-wrap:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent) !important;
+  box-shadow:
+    0 0 0 3px var(--accent-dim),
+    0 8px 28px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* AI mode placeholder + scrollbar */
+.omni-ai-textarea::placeholder {
+  color: color-mix(in srgb, var(--text) 40%, transparent);
+}
+.omni-ai-textarea::-webkit-scrollbar {
+  width: 6px;
+}
+.omni-ai-textarea::-webkit-scrollbar-thumb {
+  background: var(--surface-2);
+  border-radius: 999px;
+}
+
+/* Brand tagline reveal */
+@keyframes omni-tagline-fadein {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Search-bar icon buttons (settings, theme) ──────────────────────────── */
+.omni-icon-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  color: var(--text);
+  opacity: 0.55;
+  padding: 6px;
+  flex-shrink: 0;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition:
+    opacity 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.omni-icon-btn:hover {
+  opacity: 1;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.omni-icon-btn:focus-visible {
+  opacity: 1;
+}
+
+/* ── Stop / loading glyph crossfade ────────────────────────────────────── */
+.omni-stop-glyph {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.omni-stop-glyph__spinner,
+.omni-stop-glyph__square {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+.omni-stop-glyph__square {
+  opacity: 0;
+  transform: scale(0.6);
+}
+.omni-stop-glyph:hover .omni-stop-glyph__square,
+.omni-stop-glyph:focus-visible .omni-stop-glyph__square {
+  opacity: 1;
+  transform: scale(1);
+}
+.omni-stop-glyph:hover .omni-stop-glyph__spinner,
+.omni-stop-glyph:focus-visible .omni-stop-glyph__spinner {
+  opacity: 0;
+}
+

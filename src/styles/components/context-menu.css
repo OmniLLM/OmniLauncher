@@ -1,0 +1,38 @@
+/* === Context menu === */
+.omni-ctx-menu {
+  position: fixed;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  z-index: 1000;
+  min-width: 160px;
+  overflow: hidden;
+  animation: omni-fade-in 120ms ease both;
+  padding: 4px;
+}
+.omni-ctx-menu__item {
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 5px;
+  transition:
+    background-color 100ms ease,
+    color 100ms ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.omni-ctx-menu__item:hover,
+.omni-ctx-menu__item:focus-visible {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.omni-ctx-menu__item-icon {
+  opacity: 0.7;
+  width: 14px;
+  text-align: center;
+  font-size: 12px;
+}
+

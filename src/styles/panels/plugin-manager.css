@@ -1,0 +1,288 @@
+/* ============================================================
+   Plugin Manager — runtimes, collection cards, plugin rows
+   ============================================================ */
+.plugin-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 10px;
+  gap: 12px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-2) transparent;
+}
+.plugin-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.plugin-panel__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.plugin-panel__install-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.plugin-panel__install-row .omni-input {
+  flex: 1;
+  min-width: 180px;
+  width: auto;
+}
+.plugin-panel__target-select {
+  background: var(--surface);
+  border: 1px solid var(--surface-2);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  max-width: 180px;
+  font-family: inherit;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+.plugin-panel__target-select:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--surface-2));
+}
+.plugin-panel__target-select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.plugin-panel__target-select--placeholder {
+  color: var(--sub);
+}
+.plugin-panel__status {
+  font-size: 12px;
+  min-height: 18px;
+  color: var(--sub);
+}
+.plugin-panel__status--success {
+  color: var(--success);
+}
+.plugin-panel__status--error {
+  color: var(--danger);
+}
+.plugin-panel__empty {
+  font-size: 13px;
+  color: var(--sub);
+  text-align: center;
+  padding: 18px 0;
+}
+.plugin-panel__empty-hint {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.plugin-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Runtimes panel */
+.plugin-runtimes {
+  display: grid;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--surface-2);
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+.plugin-runtimes__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.plugin-runtimes__title {
+  font-size: 11px;
+  color: var(--sub);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.plugin-runtimes__list {
+  display: grid;
+  gap: 5px;
+}
+.plugin-runtimes__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.plugin-runtimes__main {
+  flex: 1;
+  min-width: 0;
+}
+.plugin-runtimes__label {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+}
+.plugin-runtimes__detail {
+  font-size: 11px;
+  color: var(--sub);
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+.plugin-runtimes__pill {
+  flex-shrink: 0;
+}
+.plugin-runtimes__action {
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+/* Collection cards */
+.collection-card {
+  background: var(--surface);
+  border-radius: 10px;
+  border: 1px solid var(--surface-2);
+  transition: border-color 150ms ease;
+}
+.collection-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--surface-2));
+}
+.collection-card__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.collection-card__expand {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.collection-card__main {
+  flex: 1;
+  min-width: 0;
+}
+.collection-card__title-row {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.collection-card__kind {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+.collection-card__count {
+  font-size: 11px;
+  color: var(--sub);
+  font-weight: 500;
+  border: 1px solid var(--surface-2);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.collection-card__git-badge {
+  font-size: 11px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--accent);
+}
+.collection-card__subtitle {
+  font-size: 12px;
+  color: var(--sub);
+  margin-top: 2px;
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+.collection-card__body {
+  display: grid;
+  gap: 6px;
+  padding: 0 12px 12px 48px;
+  border-left: 1px solid var(--surface-2);
+  margin-left: 24px;
+}
+.collection-card__body-title {
+  font-size: 11px;
+  color: var(--sub);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 2px 0;
+}
+
+/* Individual plugin row inside a collection */
+.plugin-row {
+  background: var(--bg);
+  border: 1px solid var(--surface-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.plugin-row__inner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.plugin-row__main {
+  flex: 1;
+  min-width: 0;
+}
+.plugin-row__title-row {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.plugin-row__kind {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--sub);
+  border: 1px solid var(--surface-2);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+.plugin-row__version {
+  color: var(--sub);
+  font-weight: 400;
+}
+.plugin-row__keyword {
+  font-size: 10px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--accent);
+}
+.plugin-row__desc {
+  font-size: 12px;
+  color: var(--sub);
+  margin-top: 2px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.plugin-row__action {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+

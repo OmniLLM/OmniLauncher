@@ -1,0 +1,109 @@
+/* Rich Markdown subtitle — used by FormattedSubtitle when Markdown is detected */
+.omni-subtitle-rich {
+  font-size: 12px;
+  margin-top: 3px;
+  line-height: 1.5;
+  overflow: hidden;
+  max-height: 160px; /* cap so a huge table doesn't blow up the row */
+  /* Fade out the bottom edge where content is clipped by max-height. */
+  -webkit-mask-image: linear-gradient(to bottom, black 70%, transparent);
+  mask-image: linear-gradient(to bottom, black 70%, transparent);
+}
+
+.omni-subtitle-rich .md-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 2px 0;
+  font-size: 11px;
+}
+
+.omni-subtitle-rich .md-table th,
+.omni-subtitle-rich .md-table td {
+  border: 1px solid var(--surface-2);
+  padding: 2px 6px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.omni-subtitle-rich .md-table thead {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.omni-subtitle-rich .md-table tbody tr:nth-child(even) {
+  background: var(--surface);
+}
+
+.omni-subtitle-rich .md-codeblock {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 11px;
+  background: var(--surface);
+  border: 1px solid var(--surface-2);
+  border-radius: 4px;
+  padding: 4px 8px;
+  overflow-x: hidden;
+  margin: 2px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.omni-subtitle-rich .md-list {
+  padding-left: 14px;
+  margin: 2px 0;
+  font-size: 11px;
+}
+
+.omni-subtitle-rich .md-p {
+  margin: 1px 0;
+  font-size: 11px;
+}
+
+.omni-subtitle-rich .md-spacer {
+  height: 3px;
+}
+
+.omni-subtitle-rich strong {
+  font-weight: 600;
+}
+.omni-subtitle-rich em {
+  font-style: italic;
+}
+.omni-subtitle-rich del {
+  text-decoration: line-through;
+}
+
+.omni-subtitle-rich .md-inline-code {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 10.5px;
+  background: var(--surface-2);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+/* When the result row has a rich subtitle, allow it to expand vertically */
+.result-item:has(.omni-subtitle-rich) {
+  align-items: flex-start;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.result-item__badge {
+  font-size: 11px;
+  color: var(--sub);
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-weight: 500;
+  transition:
+    color 150ms,
+    background 150ms;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+}
+
+.result-item--selected .result-item__badge {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+

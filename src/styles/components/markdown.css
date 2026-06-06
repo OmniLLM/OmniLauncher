@@ -1,0 +1,115 @@
+/* === Markdown Rendering === */
+.md-p {
+  margin: 0 0 0.25em 0;
+  line-height: 1.55;
+}
+
+.md-p:last-child {
+  margin-bottom: 0;
+}
+
+.md-h1,
+.md-h2,
+.md-h3,
+.md-h4,
+.md-h5,
+.md-h6 {
+  margin: 0.3em 0 0.15em 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.md-h1 {
+  font-size: 1.4em;
+}
+.md-h2 {
+  font-size: 1.2em;
+}
+.md-h3 {
+  font-size: 1.1em;
+}
+
+.md-inline-code {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 0.88em;
+  color: var(--accent);
+}
+
+.md-codeblock {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 6px 0;
+  overflow-x: auto;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 0.84em;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.md-codeblock code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.md-list {
+  margin: 4px 0;
+  padding-left: 1.5em;
+}
+
+.md-list li {
+  margin: 2px 0;
+  line-height: 1.5;
+}
+
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 6px 0;
+  font-size: 0.9em;
+}
+
+.md-table th,
+.md-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.md-table th {
+  background: var(--surface);
+  font-weight: 600;
+}
+
+.md-table tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.md-hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+.md-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.md-link:hover {
+  text-decoration: underline;
+}
+
+.md-spacer {
+  height: 0.15em;
+}
+
+.md-spacer + .md-spacer {
+  display: none;
+}
+

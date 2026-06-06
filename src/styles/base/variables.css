@@ -1,0 +1,54 @@
+/* === Theme Variables === */
+:root,
+[data-theme="dark"] {
+  --bg: #202124;
+  --bg-elevated: #292a2d;
+  --surface: #303134;
+  --surface-2: #3c3f43;
+  --surface-hover: #45474b;
+  --text: #e8eaed;
+  --text-secondary: #bdc1c6;
+  --sub: #9aa0a6;
+  --accent: #8ab4f8;
+  --accent-dim: rgba(138, 180, 248, 0.15);
+  --accent-hover: rgba(138, 180, 248, 0.08);
+  --border: rgba(255, 255, 255, 0.12);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.4);
+  --user-bubble: #1a73e8;
+  --user-bubble-text: #ffffff;
+  --ai-bubble: #303134;
+  --ai-text: #e8eaed;
+  --success: #34a853;
+  --error: #ea4335;
+  --warning: #fbbc04;
+  --danger: #ea4335;
+  --radius: 8px;
+}
+
+[data-theme="light"] {
+  --bg: #eff1f5;
+  --bg-elevated: #e6e9ef;
+  --surface: #ccd0da;
+  --surface-2: #bcc0cc;
+  --surface-hover: #c5c9d4;
+  --text: #4c4f69;
+  --text-secondary: #5c5f77;
+  /* --sub: darkened from #9ca0b0 → #5c5f77 for ~5.5:1 contrast on --bg (WCAG AA) */
+  --sub: #5c5f77;
+  /* accent: unified to the same blue hue as dark (#8ab4f8), tuned darker/saturated for light bg */
+  --accent: #1a73e8;
+  --accent-dim: rgba(26, 115, 232, 0.1);
+  --accent-hover: rgba(26, 115, 232, 0.06);
+  --border: rgba(26, 115, 232, 0.12);
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --user-bubble: #1a73e8;
+  --user-bubble-text: #eff1f5;
+  --ai-bubble: #ccd0da;
+  --ai-text: #4c4f69;
+  --success: #40a02b;
+  --error: #d20f39;
+  --warning: #df8e1d;
+  --danger: #d20f39;
+  --radius: 14px;
+}
+

@@ -1,0 +1,142 @@
+/* ============================================================
+   Settings / Plugin / Skill window chrome
+   ============================================================ */
+.omni-titlebar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  justify-content: space-between;
+}
+.omni-titlebar__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.omni-titlebar__close {
+  background: transparent;
+  border: none;
+  color: var(--sub);
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+.omni-titlebar__close:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+.omni-titlebar__close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+/* Section header / card layout used by Preferences panels */
+.settings-section-header {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.settings-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 0;
+  margin-bottom: 20px;
+}
+
+/* Sidebar tabs */
+.settings-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--sub);
+  border-left: 2px solid transparent;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    border-left-color 140ms ease;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+}
+.settings-tab:hover {
+  background: var(--accent-hover);
+  color: var(--text);
+}
+.settings-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.settings-tab--active,
+.settings-tab--active:hover {
+  background: var(--accent-dim);
+  color: var(--text);
+  border-left-color: var(--accent);
+}
+
+/* Model dropdown popovers */
+.settings-popover {
+  position: absolute;
+  z-index: 100;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-2) transparent;
+  animation: omni-fade-in 140ms ease both;
+}
+.settings-popover__item {
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text);
+  transition:
+    background-color 100ms ease,
+    color 100ms ease;
+}
+.settings-popover__item:hover {
+  background: var(--accent-hover);
+}
+.settings-popover__item--active {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.settings-popover__empty {
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--sub);
+}
+
+/* Active state for omni-btn (e.g. expand toggle on skill cards) */
+.omni-btn.is-active,
+.omni-btn--ghost.is-active {
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--accent);
+}
+

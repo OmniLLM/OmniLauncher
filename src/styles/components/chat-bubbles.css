@@ -1,0 +1,117 @@
+/* Chat bubbles */
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  animation: omni-fade-in 200ms ease both;
+}
+
+.chat-msg--user {
+  align-items: flex-end;
+}
+
+.chat-msg--assistant {
+  align-items: flex-start;
+}
+
+/* Tool chips row */
+.chat-msg__tools {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding-left: 4px;
+}
+
+.chat-msg__tool-badge {
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--surface-2);
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: var(--sub);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.chat-msg__tool-badge--skill {
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent);
+}
+
+@keyframes omni-chip-pulse {
+  0%,
+  100% {
+    opacity: 0.7;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+
+.chat-msg__tool-badge--active {
+  animation: omni-chip-pulse 1.4s ease-in-out infinite;
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent);
+}
+
+/* Bubble */
+.chat-msg__user-bubble {
+  background: var(--user-bubble);
+  color: var(--user-bubble-text);
+  padding: 9px 14px;
+  border-radius: 16px 16px 4px 16px;
+  max-width: 78%;
+  font-size: 14px;
+  line-height: 1.65;
+  word-break: break-word;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.chat-msg__ai-bubble {
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 4px 16px 16px 16px;
+  max-width: 78%;
+  font-size: 14px;
+  line-height: 1.65;
+  word-break: break-word;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+/* Streaming cursor */
+.omni-cursor::after {
+  content: "|";
+  animation: omni-blink 1s step-start infinite;
+  color: var(--accent);
+  margin-left: 1px;
+}
+
+/* Loading dots */
+.chat-msg__thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  height: 20px;
+}
+
+.loading__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sub);
+  animation: omni-dot-pulse 1.4s ease-in-out infinite;
+}
+.loading__dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.loading__dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+

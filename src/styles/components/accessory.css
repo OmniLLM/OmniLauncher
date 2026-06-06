@@ -1,0 +1,110 @@
+/* === Right-aligned accessory (Raycast-style subtitle) ===
+   The accessory replaces the old below-title subtitle so every row has the
+   same height regardless of subtitle content. Long subtitles are ellipsized
+   to a hard max width — full text is exposed via the row's title attribute
+   and remains readable in the bottom action bar. */
+.result-item__accessory {
+  font-size: 12px;
+  color: var(--sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+  flex-shrink: 1;
+  text-align: right;
+  opacity: 0.85;
+}
+.result-item--selected .result-item__accessory {
+  opacity: 1;
+}
+/* Force any rich-markdown subtitle inside the accessory back to a single
+   line — the old multi-line layout broke row alignment in grouped lists. */
+.result-item__accessory .omni-subtitle-rich {
+  display: inline-block;
+  max-height: 1.3em;
+  margin-top: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.result-item__trailing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.result-item__star {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--sub);
+  opacity: 0;
+  padding: 2px 4px;
+  border-radius: 6px;
+  line-height: 1;
+  transition:
+    opacity 150ms ease,
+    color 150ms ease,
+    background-color 150ms ease,
+    transform 150ms ease;
+}
+.result-item:hover .result-item__star,
+.result-item--selected .result-item__star,
+.result-item__star:focus-visible {
+  opacity: 0.5;
+}
+.result-item__star:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  transform: scale(1.1);
+}
+.result-item__star--on,
+.result-item__star--on:hover,
+.result-item:hover .result-item__star--on,
+.result-item--selected .result-item__star--on {
+  opacity: 1;
+  color: #f5c842;
+}
+
+.result-item__kbd {
+  font-size: 10px;
+  color: var(--sub);
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--surface-2);
+  background: var(--surface);
+  opacity: 0.7;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.result-item--selected .result-item__kbd {
+  opacity: 0.9;
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+}
+
+.result-item__action-badge {
+  font-size: 11px;
+  color: var(--sub);
+  background: var(--surface);
+  border: 1px solid var(--surface-2);
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+.result-item--selected .result-item__action-badge {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+

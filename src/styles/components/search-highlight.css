@@ -1,0 +1,8 @@
+/* === Search highlight === */
+mark {
+  background: var(--accent-dim);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+

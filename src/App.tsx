@@ -18,7 +18,7 @@ import { useGlobalKeyboard } from "./hooks/useGlobalKeyboard";
 import { useSubmitAndExecute } from "./hooks/useSubmitAndExecute";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
 
-// Theme colors are defined in styles.css via [data-theme] attributes; components
+// Theme colors are defined in styles/index.css via [data-theme] attributes; components
 // read them via var(--bg), var(--accent), etc.
 
 export default function App() {

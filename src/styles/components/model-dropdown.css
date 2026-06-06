@@ -1,0 +1,52 @@
+/* === Model Dropdown === */
+.settings__model-field {
+  position: relative;
+}
+
+.settings__model-loading {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.settings__model-error {
+  color: var(--error);
+  font-size: 11px;
+}
+
+.settings__model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 4px;
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.settings__model-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  transition: background 0.1s;
+}
+
+.settings__model-option:hover {
+  background: var(--surface-2);
+}
+
+.settings__model-option--selected {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.settings__model-option--empty {
+  opacity: 0.5;
+  cursor: default;
+}
+
