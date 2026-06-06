@@ -465,12 +465,10 @@ impl Router {
                         // The model sometimes narrates its next step (e.g. "Now let
                         // me find any parent groups that contain these:") but emits
                         // it as plain text with NO tool call. Treating that as the
-                        // final answer makes the agent stop mid-task. Ask the model
-                        // itself to classify whether the message is a final answer
-                        // or just a preamble — this is language-agnostic and avoids
-                        // brittle hardcoded phrase lists.
+                        // final answer makes the agent stop mid-task, so detect those
+                        // transitional messages locally and nudge the model to act.
                         if continuation_nudges < MAX_CONTINUATION_NUDGES
-                            && is_continuation_preamble(ai_client, &content).await
+                            && is_continuation_preamble(&content)
                         {
                             continuation_nudges += 1;
                             let assistant_msg = Message::assistant(&content);
@@ -1588,45 +1586,80 @@ fn needs_output_formatting(content: &str) -> bool {
 /// intended to keep working but forgot to emit the tool call. When this returns
 /// `true`, the agentic loop nudges the model to actually invoke a tool.
 ///
-/// Rather than matching a hardcoded list of English phrases (brittle and
-/// language-specific), this asks the model itself to classify the message.
-/// On any error the function returns `false` so the loop ends safely instead
-/// of spinning.
-async fn is_continuation_preamble(ai_client: &AiClient, content: &str) -> bool {
+/// This uses a local heuristic instead of asking the model to classify itself.
+/// A classifier can mislabel an obvious continuation as a final answer and stop
+/// the loop early.
+fn has_structured_content(content: &str) -> bool {
+    content.contains('|')
+        || content.contains("```")
+        || content.lines().any(|l| {
+            let s = l.trim_start();
+            s.starts_with("- ") || s.starts_with("* ") || s.starts_with("• ")
+        })
+}
+
+fn is_continuation_preamble(content: &str) -> bool {
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return false;
     }
 
-    // Fast path: messages with structured content (tables, code blocks, bullet
-    // lists) are real answers — skip the extra model call entirely.
-    let has_structure = trimmed.contains('|')
-        || trimmed.contains("```")
-        || trimmed.lines().any(|l| {
-            let s = l.trim_start();
-            s.starts_with("- ") || s.starts_with("* ") || s.starts_with("• ")
-        });
-    if has_structure {
+    if has_structured_content(trimmed) {
         return false;
     }
 
-    let classifier_msgs = vec![
-        Message::system(
-            "You classify a single assistant message taken from a multi-step, tool-using agent. \
-             Decide whether the message is the FINAL answer to the user, or merely a PREAMBLE that \
-             announces an action the agent still intends to perform (but for which it has not yet \
-             called a tool). Consider any language. Reply with exactly one word: FINAL or CONTINUE.",
-        ),
-        Message::user(&format!(
-            "--- ASSISTANT MESSAGE ---\n{}\n--- END ---\n\nAnswer with one word: FINAL or CONTINUE.",
-            trimmed
-        )),
+    let lowercase = trimmed.to_ascii_lowercase();
+
+    let continuation_prefixes = [
+        "now ",
+        "next,",
+        "next ",
+        "then ",
+        "first,",
+        "first ",
+        "i'll ",
+        "i will ",
+        "let me ",
+        "i'm going to ",
+        "i need to ",
+        "we need to ",
+    ];
+    if continuation_prefixes.iter().any(|prefix| lowercase.starts_with(prefix)) {
+        return true;
+    }
+
+    let continuation_phrases = [
+        "let me check",
+        "let me find",
+        "let me look",
+        "let me inspect",
+        "let me search",
+        "i'll check",
+        "i'll inspect",
+        "i'll look",
+        "i'll search",
+        "i will check",
+        "i will inspect",
+        "i will look",
+        "i will search",
+        "next i'll",
+        "next i will",
+        "the next step",
+        "to verify",
+        "to confirm",
+        "need to check",
+        "need to inspect",
+        "need to look",
+        "need to search",
     ];
 
-    match ai_client.chat(classifier_msgs).await {
-        Ok(reply) => reply.trim().to_uppercase().contains("CONTINUE"),
-        Err(_) => false,
-    }
+    continuation_phrases.iter().any(|phrase| {
+        lowercase.contains(phrase)
+            && (trimmed.ends_with(':')
+                || trimmed.ends_with("...")
+                || trimmed.ends_with('.')
+                || trimmed.ends_with('!'))
+    })
 }
 
 #[cfg(test)]
@@ -1659,22 +1692,44 @@ mod tests {
 
     #[test]
     fn test_strip_prefix() {
-        assert_eq!(Router::strip_ai_prefix("?hello"), "hello");
-        assert_eq!(Router::strip_ai_prefix("? hello"), "hello");
-        assert_eq!(Router::strip_ai_prefix("ai help me"), "help me");
-        assert_eq!(Router::strip_ai_prefix("AI help me"), "help me");
-        assert_eq!(Router::strip_ai_prefix("chrome"), "chrome");
+        for (input, expected) in [
+            ("?hello", "hello"),
+            ("? hello", "hello"),
+            ("ai help me", "help me"),
+            ("AI help me", "help me"),
+            ("chrome", "chrome"),
+            ("ai 🦀 hello", "🦀 hello"),
+            ("AI hello world", "hello world"),
+            ("Ai tell me something", "tell me something"),
+        ] {
+            assert_eq!(Router::strip_ai_prefix(input), expected);
+        }
     }
 
     #[test]
-    fn test_strip_prefix_multibyte_safe() {
-        // "ai " followed by a multi-byte emoji — must not panic
-        assert_eq!(Router::strip_ai_prefix("ai 🦀 hello"), "🦀 hello");
-        assert_eq!(Router::strip_ai_prefix("AI hello world"), "hello world");
-        // Mixed case
-        assert_eq!(
-            Router::strip_ai_prefix("Ai tell me something"),
-            "tell me something"
-        );
+    fn test_has_structured_content() {
+        assert!(has_structured_content("| a | b |\n|---|---|\n| 1 | 2 |"));
+        assert!(has_structured_content("```rust\nfn demo() {}\n```"));
+        assert!(has_structured_content("- item one\n- item two"));
+        assert!(!has_structured_content("plain sentence without structure"));
+    }
+
+    #[test]
+    fn test_continuation_preamble_detection() {
+        assert!(is_continuation_preamble(
+            "Now let me find any parent groups that contain these:"
+        ));
+        assert!(is_continuation_preamble(
+            "I'll inspect the config files next."
+        ));
+        assert!(is_continuation_preamble(
+            "Next, I need to check the tool output."
+        ));
+        assert!(!is_continuation_preamble(
+            "Here is the final result: the service is running normally."
+        ));
+        assert!(!is_continuation_preamble(
+            "| Name | Status |\n|---|---|\n| api | ok |"
+        ));
     }
 }
