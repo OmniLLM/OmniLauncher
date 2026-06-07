@@ -109,6 +109,19 @@ pub struct AppSettings {
     #[serde(default)]
     pub backend_url: String,
 
+    /// Bearer/auth token the desktop shell sends to the separated backend.
+    /// Used when the backend runs on a different machine (e.g. WSL backend +
+    /// Windows shell) and the per-launch token file under `~/.config` is not
+    /// readable by the shell. Resolution order on the shell side:
+    ///   1. `OMNILAUNCHER_AUTH_TOKEN` env override
+    ///   2. this field
+    ///   3. `~/.config/omnilauncher/server-token` (legacy same-machine path)
+    /// On the backend side, when `OMNILAUNCHER_AUTH_TOKEN` is set it pins the
+    /// per-launch token to that value (instead of a fresh random one), so both
+    /// ends can agree on a stable, user-configured token.
+    #[serde(default)]
+    pub backend_token: String,
+
     // ── legacy single-server fields (migrated on first load) ──────────────────
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub github_token: String,
@@ -146,6 +159,7 @@ impl Default for AppSettings {
             github_servers: vec![],
             capture_selection_on_open: false,
             backend_url: String::new(),
+            backend_token: String::new(),
             github_token: String::new(),
             github_server: String::new(),
             github_orgs: vec![],

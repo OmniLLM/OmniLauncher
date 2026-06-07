@@ -78,6 +78,8 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           hotkey: "Alt+Space",
           max_results: 10,
           background_url: "",
+          backend_url: "",
+          backend_token: "",
         });
         setModelFilter("auto");
         setLoading(false);
@@ -463,6 +465,36 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                               ...s,
                               max_results: parseInt(e.target.value) || 10,
                             },
+                        )
+                      }
+                    />
+                  </div>
+                  <div style={rowStyle(true)}>
+                    <span style={rowLabelStyle}>Backend URL</span>
+                    <input
+                      className="omni-input"
+                      type="text"
+                      placeholder="http://127.0.0.1:1422 (default)"
+                      value={settings.backend_url}
+                      onChange={(e) =>
+                        setSettings(
+                          (s) => s && { ...s, backend_url: e.target.value },
+                        )
+                      }
+                    />
+                  </div>
+                  <div style={rowStyle(true)}>
+                    <span style={rowLabelStyle}>Backend Token</span>
+                    <input
+                      className="omni-input"
+                      type="password"
+                      placeholder="auto (same-machine) / paste cross-machine token"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={settings.backend_token}
+                      onChange={(e) =>
+                        setSettings(
+                          (s) => s && { ...s, backend_token: e.target.value },
                         )
                       }
                     />

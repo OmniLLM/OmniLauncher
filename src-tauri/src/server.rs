@@ -94,6 +94,13 @@ struct SaveSettingsRequest {
     hotkey: String,
     max_results: usize,
     background_url: String,
+    /// Mirrored from settings.rs so the desktop shell can edit these via the
+    /// /api/settings round-trip without losing them on save. Both default to
+    /// empty so existing clients (and legacy posts) remain compatible.
+    #[serde(default)]
+    backend_url: String,
+    #[serde(default)]
+    backend_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -395,19 +402,33 @@ pub fn generate_auth_token() -> String {
     })
 }
 
-/// Extract the value of the `X-OmniLauncher-Token` header from a raw HTTP
-/// request string (line-based; returns `None` when the header is absent).
+/// Extract the auth token from a raw HTTP request string.
+///
+/// Accepts EITHER of two header forms so both the desktop shell (which uses
+/// the custom `X-OmniLauncher-Token` header) and standard HTTP clients
+/// (browsers, `curl`, scripts using `Authorization: Bearer <token>`) work.
+/// When both are present, `X-OmniLauncher-Token` wins (it's the project's
+/// canonical form).
 fn extract_auth_header(request: &str) -> Option<&str> {
+    let mut bearer: Option<&str> = None;
     for line in request.lines() {
-        if line.to_ascii_lowercase().starts_with("x-omnilauncher-token:") {
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("x-omnilauncher-token:") {
             return Some(line["x-omnilauncher-token:".len()..].trim());
+        }
+        if bearer.is_none() && lower.starts_with("authorization:") {
+            let value = line["authorization:".len()..].trim();
+            // Case-insensitive "Bearer " prefix check — RFC 6750 §2.1.
+            if value.len() >= 7 && value[..7].eq_ignore_ascii_case("bearer ") {
+                bearer = Some(value[7..].trim());
+            }
         }
         // Stop at the header/body boundary.
         if line.is_empty() {
             break;
         }
     }
-    None
+    bearer
 }
 
 async fn handle_request(
@@ -484,6 +505,8 @@ async fn handle_request(
                         hotkey: input.hotkey,
                         max_results: input.max_results,
                         background_url: input.background_url,
+                        backend_url: input.backend_url,
+                        backend_token: input.backend_token,
                         ..state.settings.lock().await.clone()
                     };
                     {
@@ -917,7 +940,7 @@ fn normalize_path(path: &str) -> String {
 
 fn encode_response(response: LiveResponse) -> Vec<u8> {
     let header = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token, Authorization\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         response.status,
         response.content_type,
         response.body.len()
@@ -940,7 +963,7 @@ mod tests {
         assert!(encoded.starts_with("HTTP/1.1 204 No Content\r\n"));
         assert!(encoded.contains("Access-Control-Allow-Origin: *\r\n"));
         assert!(encoded.contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"));
-        assert!(encoded.contains("Access-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token\r\n"));
+        assert!(encoded.contains("Access-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token, Authorization\r\n"));
     }
 
     #[test]
@@ -1302,6 +1325,95 @@ mod tests {
         assert_eq!(req.ai_timeout_secs, 300);
         assert_eq!(req.theme, "dark");
         assert_eq!(req.max_results, 10);
+    }
+
+    // ── extract_auth_header tests ──────────────────────────────────────
+    // Covers the dual-header form (custom X-OmniLauncher-Token preferred,
+    // Authorization: Bearer accepted as a fallback for standard HTTP
+    // clients) added for the cross-machine WSL↔Windows deployment path.
+
+    fn req_with_headers(headers: &[&str]) -> String {
+        let mut s = String::from("GET /search HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+        for h in headers {
+            s.push_str(h);
+            s.push_str("\r\n");
+        }
+        s.push_str("\r\n");
+        s
+    }
+
+    #[test]
+    fn extract_auth_header_returns_none_when_no_auth_present() {
+        let req = req_with_headers(&[]);
+        assert_eq!(extract_auth_header(&req), None);
+    }
+
+    #[test]
+    fn extract_auth_header_reads_custom_header() {
+        let req = req_with_headers(&["X-OmniLauncher-Token: secret-abc"]);
+        assert_eq!(extract_auth_header(&req), Some("secret-abc"));
+    }
+
+    #[test]
+    fn extract_auth_header_custom_header_is_case_insensitive() {
+        let req = req_with_headers(&["x-omnilauncher-TOKEN: secret-abc"]);
+        assert_eq!(extract_auth_header(&req), Some("secret-abc"));
+    }
+
+    #[test]
+    fn extract_auth_header_reads_authorization_bearer() {
+        let req = req_with_headers(&["Authorization: Bearer my-token-xyz"]);
+        assert_eq!(extract_auth_header(&req), Some("my-token-xyz"));
+    }
+
+    #[test]
+    fn extract_auth_header_bearer_prefix_is_case_insensitive() {
+        let req = req_with_headers(&["Authorization: BEARER my-token-xyz"]);
+        assert_eq!(extract_auth_header(&req), Some("my-token-xyz"));
+        let req = req_with_headers(&["authorization: bearer my-token-xyz"]);
+        assert_eq!(extract_auth_header(&req), Some("my-token-xyz"));
+    }
+
+    #[test]
+    fn extract_auth_header_rejects_non_bearer_authorization() {
+        // Basic auth shouldn't masquerade as a token.
+        let req = req_with_headers(&["Authorization: Basic dXNlcjpwYXNz"]);
+        assert_eq!(extract_auth_header(&req), None);
+    }
+
+    #[test]
+    fn extract_auth_header_custom_wins_when_both_present() {
+        // When both forms appear, X-OmniLauncher-Token is the canonical one.
+        let req = req_with_headers(&[
+            "Authorization: Bearer bearer-token",
+            "X-OmniLauncher-Token: custom-token",
+        ]);
+        assert_eq!(extract_auth_header(&req), Some("custom-token"));
+
+        // Order shouldn't matter — even if Authorization comes after, the
+        // custom header still wins because we early-return on the first
+        // match we see *and* the impl prefers the custom name.
+        let req = req_with_headers(&[
+            "X-OmniLauncher-Token: custom-token",
+            "Authorization: Bearer bearer-token",
+        ]);
+        assert_eq!(extract_auth_header(&req), Some("custom-token"));
+    }
+
+    #[test]
+    fn extract_auth_header_trims_surrounding_whitespace() {
+        let req = req_with_headers(&["X-OmniLauncher-Token:    spaced-token   "]);
+        assert_eq!(extract_auth_header(&req), Some("spaced-token"));
+        let req = req_with_headers(&["Authorization: Bearer    bearer-spaced   "]);
+        assert_eq!(extract_auth_header(&req), Some("bearer-spaced"));
+    }
+
+    #[test]
+    fn extract_auth_header_stops_at_body_boundary() {
+        // A token in the body must NOT be treated as a header.
+        let mut req = req_with_headers(&[]);
+        req.push_str("X-OmniLauncher-Token: smuggled\r\n");
+        assert_eq!(extract_auth_header(&req), None);
     }
 }
 

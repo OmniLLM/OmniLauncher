@@ -20,15 +20,34 @@ function frontendLog(level: FrontendLogLevel, message: string) {
 
 let lastLoggedBackendUrl = "__unset__";
 
-/// Per-launch auth token for the API server. Fetched once at module init
-/// (when running inside Tauri) and attached as X-OmniLauncher-Token on every
-/// HTTP request to the API server. Falls back to "" in browser/mock mode.
+/// Per-launch auth token for the API server. Source priority (matches the
+/// shell-side `resolve_auth_token` in main.rs):
+///   1. `window.__OMNILAUNCHER_TOKEN__` injected by the Tauri shell at setup.
+///      This is the only path that works for cross-machine deployments (WSL
+///      backend + Windows shell) because the shell can't read the WSL-side
+///      same-machine token file.
+///   2. `tauriInvoke("get_server_token")` — same-machine fallback for the
+///      legacy desktop case where the shell didn't inject (older builds /
+///      `--no-default-features`). Reads the local token file.
+///   3. Empty string — browser / mock / no-auth mode.
+///
+/// Fetched once at module init and attached as X-OmniLauncher-Token (and
+/// Authorization: Bearer, accepted by the server) on every HTTP request.
 let serverTokenPromise: Promise<string> = Promise.resolve("");
 
 // Kick off the token fetch immediately on module load so it's ready by the
-// time the first `invoke` call arrives.
-if (typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__) {
-  serverTokenPromise = tauriInvoke<string>("get_server_token").catch(() => "");
+// time the first `invoke` call arrives. We resolve through the priority
+// chain above. Note: window-injected tokens may be `""` on purpose (the
+// shell ran but had nothing to inject) — that empty string still wins over
+// the `get_server_token` fallback so we don't fall back to a stale local
+// token in the cross-machine case where the local file would be wrong.
+if (typeof window !== "undefined") {
+  const injected = (window as any).__OMNILAUNCHER_TOKEN__;
+  if (typeof injected === "string") {
+    serverTokenPromise = Promise.resolve(injected);
+  } else if ((window as any).__TAURI_INTERNALS__) {
+    serverTokenPromise = tauriInvoke<string>("get_server_token").catch(() => "");
+  }
 }
 
 /// Window/OS-shell commands run in the local Tauri process — only it owns a

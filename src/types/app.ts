@@ -40,6 +40,14 @@ export interface AppSettings {
   hotkey: string;
   max_results: number;
   background_url: string;
+  /** Base URL of the separated backend the desktop shell connects to. Empty =
+   * env override / built-in default `http://127.0.0.1:1422`. */
+  backend_url: string;
+  /** Bearer/auth token the desktop shell sends to the separated backend.
+   * Required for cross-machine deployments (e.g. WSL backend + Windows shell)
+   * where the shell can't read the backend's same-machine token file. Empty =
+   * fall back to env / local token file. */
+  backend_token: string;
 }
 
 export interface PluginInfo {
