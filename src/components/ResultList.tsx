@@ -100,7 +100,10 @@ type Row =
   | { kind: "header"; key: string; label: string }
   | { kind: "item"; key: string; result: QueryResult; flatIndex: number };
 
-function buildRows(results: QueryResult[]): { rows: Row[]; itemRows: Row[] } {
+function buildRows(
+  results: QueryResult[],
+  groupTitle?: string,
+): { rows: Row[]; itemRows: Row[] } {
   const byGroup = new Map<string, QueryResult[]>();
   const order: string[] = [];
   for (const r of results) {
@@ -115,8 +118,13 @@ function buildRows(results: QueryResult[]): { rows: Row[]; itemRows: Row[] } {
   const rows: Row[] = [];
   const itemRows: Row[] = [];
   let flatIndex = 0;
-  // If only one group, skip the header (looks redundant for a single section).
-  const showHeaders = order.length > 1;
+  // If only one group, skip the auto-derived per-source header (it looks
+  // redundant). An explicit `groupTitle` from the caller (e.g. "★ Favorites")
+  // always wins — render it once at the top and suppress per-source headers.
+  if (groupTitle) {
+    rows.push({ kind: "header", key: "h:explicit", label: groupTitle });
+  }
+  const showHeaders = !groupTitle && order.length > 1;
   for (const g of order) {
     if (showHeaders) {
       rows.push({ kind: "header", key: `h:${g}`, label: prettifySource(g) });
@@ -153,7 +161,10 @@ export default function ResultList({
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
 
-  const { rows } = useMemo(() => buildRows(results), [results]);
+  const { rows } = useMemo(
+    () => buildRows(results, groupTitle),
+    [results, groupTitle],
+  );
 
   const toggleFavorite = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
