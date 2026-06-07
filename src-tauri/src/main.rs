@@ -417,9 +417,14 @@ pub fn run() {
             // "shell tried but had nothing" vs. "running in a browser".
             let auth_token = resolve_auth_token(&settings_for_url);
             if auth_token.is_empty() {
-                log::warn!("desktop shell has no auth token — backend requests will be unauthenticated");
+                log::warn!(
+                    "desktop shell has no auth token — backend requests will be unauthenticated"
+                );
             } else {
-                log::info!("desktop shell will send X-OmniLauncher-Token header (len={})", auth_token.len());
+                log::info!(
+                    "desktop shell will send X-OmniLauncher-Token header (len={})",
+                    auth_token.len()
+                );
             }
             let _ = window.eval(format!(
                 "window.__OMNILAUNCHER_TOKEN__ = {};",
@@ -1789,11 +1794,7 @@ fn main() {
         log::info!("Running without debug file logging");
     }
 
-    let role = if server_mode {
-        "server"
-    } else {
-        "tauri-shell"
-    };
+    let role = if server_mode { "server" } else { "tauri-shell" };
     log_startup_banner(role, debug_enabled);
 
     if server_mode {
@@ -1816,13 +1817,19 @@ fn main() {
         // same-machine shell continues to work with zero configuration.
         let (auth_token, token_source) = match std::env::var("OMNILAUNCHER_AUTH_TOKEN") {
             Ok(t) if !t.trim().is_empty() => (t.trim().to_string(), "OMNILAUNCHER_AUTH_TOKEN env"),
-            _ => (server::generate_auth_token(), "freshly generated random token"),
+            _ => (
+                server::generate_auth_token(),
+                "freshly generated random token",
+            ),
         };
         log::info!("server auth token sourced from {token_source}");
         if let Err(e) = std::fs::write(server_token_path(), auth_token.as_bytes()) {
             log::warn!("failed to persist server auth token: {e}");
         } else {
-            log::info!("server auth token written to {}", server_token_path().display());
+            log::info!(
+                "server auth token written to {}",
+                server_token_path().display()
+            );
         }
 
         let mut conversation = ConversationContext::default();

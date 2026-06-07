@@ -202,9 +202,7 @@ mod redirect_policy_tests {
                     "expected loopback block reason, got: {reason}"
                 );
             }
-            other => panic!(
-                "expected Deny for loopback redirect target, got: {other:?}"
-            ),
+            other => panic!("expected Deny for loopback redirect target, got: {other:?}"),
         }
     }
 

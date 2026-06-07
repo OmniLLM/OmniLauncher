@@ -132,8 +132,7 @@ impl MockLlm {
                         let _ = reader.read_exact(&mut buf).await;
                     }
                     let body_str = String::from_utf8_lossy(&buf).to_string();
-                    let body_json: Value =
-                        serde_json::from_str(&body_str).unwrap_or(Value::Null);
+                    let body_json: Value = serde_json::from_str(&body_str).unwrap_or(Value::Null);
 
                     captures.lock().unwrap().push(CapturedRequest {
                         method,
@@ -143,11 +142,9 @@ impl MockLlm {
                     });
 
                     // ── Hand out the next scripted response ────────────────
-                    let resp = script
-                        .lock()
-                        .unwrap()
-                        .next()
-                        .unwrap_or_else(|| ScriptedResponse::http(500, "no more scripted responses"));
+                    let resp = script.lock().unwrap().next().unwrap_or_else(|| {
+                        ScriptedResponse::http(500, "no more scripted responses")
+                    });
 
                     let response = format!(
                         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -162,10 +159,7 @@ impl MockLlm {
             }
         });
 
-        MockLlm {
-            base_url,
-            captures,
-        }
+        MockLlm { base_url, captures }
     }
 
     fn requests(&self) -> Vec<CapturedRequest> {
@@ -250,9 +244,12 @@ fn one_tool(name: &str, description: &str) -> Value {
 
 #[tokio::test]
 async fn happy_path_text_reply_no_tools() {
-    let mock =
-        MockLlm::start(vec![ScriptedResponse::ok(text_response("Hello from mock"))]).await;
-    let client = AiClient::new(mock.base_url.clone(), "".to_string(), "mock-model".to_string());
+    let mock = MockLlm::start(vec![ScriptedResponse::ok(text_response("Hello from mock"))]).await;
+    let client = AiClient::new(
+        mock.base_url.clone(),
+        "".to_string(),
+        "mock-model".to_string(),
+    );
 
     let resp = client
         .chat_with_tools(vec![Message::user("hi")], vec![])
@@ -271,7 +268,11 @@ async fn happy_path_text_reply_no_tools() {
 #[tokio::test]
 async fn request_body_shape_has_model_messages_tools_and_tool_choice() {
     let mock = MockLlm::start(vec![ScriptedResponse::ok(text_response("ok"))]).await;
-    let client = AiClient::new(mock.base_url.clone(), "".to_string(), "my-model".to_string());
+    let client = AiClient::new(
+        mock.base_url.clone(),
+        "".to_string(),
+        "my-model".to_string(),
+    );
 
     let _ = client
         .chat_with_tools(
@@ -571,6 +572,10 @@ async fn five_hundred_is_treated_as_permanent_and_not_retried() {
         .expect_err("500 should hard-fail");
 
     let msg = format!("{:?}", err);
-    assert!(msg.contains("500"), "expected 500-derived error, got {}", msg);
+    assert!(
+        msg.contains("500"),
+        "expected 500-derived error, got {}",
+        msg
+    );
     assert_eq!(mock.requests().len(), 1, "500 must not retry");
 }

@@ -343,7 +343,11 @@ pub fn validate_tool_schema(schema: &serde_json::Value) -> Result<(), String> {
     if function.get("name").and_then(|n| n.as_str()).is_none() {
         return Err("tool_schema.function.name must be a string".to_string());
     }
-    if function.get("description").and_then(|d| d.as_str()).is_none() {
+    if function
+        .get("description")
+        .and_then(|d| d.as_str())
+        .is_none()
+    {
         return Err("tool_schema.function.description must be a string".to_string());
     }
     if !function.get("parameters").is_some_and(|p| p.is_object()) {
@@ -384,10 +388,7 @@ pub fn load_manifest(dir: &Path) -> Option<PluginManifest> {
         }
     };
     if let Err(reason) = validate_manifest(&manifest) {
-        log::warn!(
-            "Invalid plugin.json in {}: {reason}",
-            dir.display()
-        );
+        log::warn!("Invalid plugin.json in {}: {reason}", dir.display());
         return None;
     }
     Some(manifest)

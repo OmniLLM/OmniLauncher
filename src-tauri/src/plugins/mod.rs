@@ -493,7 +493,6 @@ impl PluginManager {
     }
 }
 
-
 #[cfg(test)]
 mod plugin_manager_tests {
     use super::*;

@@ -221,81 +221,77 @@ fn request_body_len(request: &str) -> usize {
 ///   30-second overall timeout — replies 431 if exceeded.
 /// * Parses `Content-Length` and reads exactly that many additional bytes,
 ///   rejecting payloads larger than 16 MiB with 413.
-async fn read_http_request(
-    stream: &mut tokio::net::TcpStream,
-) -> Result<String, LiveResponse> {
+async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Result<String, LiveResponse> {
     const HEADER_CAP: usize = 64 * 1024;
     const BODY_CAP: usize = 16 * 1024 * 1024;
     const TIMEOUT_SECS: u64 = 30;
 
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(TIMEOUT_SECS),
-        async {
-            // ── Phase 1: read until \r\n\r\n ─────────────────────────────
-            let mut raw: Vec<u8> = Vec::with_capacity(4096);
-            let mut tmp = [0u8; 4096];
-            let header_end = loop {
-                let n = stream.read(&mut tmp).await.map_err(|_| {
-                    LiveResponse::text("400 Bad Request", "read error".to_string())
-                })?;
-                if n == 0 {
-                    return Err(LiveResponse::text("400 Bad Request", "connection closed".to_string()));
-                }
-                raw.extend_from_slice(&tmp[..n]);
-                if raw.len() > HEADER_CAP {
-                    return Err(LiveResponse::text(
-                        "431 Request Header Fields Too Large",
-                        "header too large".to_string(),
-                    ));
-                }
-                // Look for the header terminator.
-                if let Some(pos) = raw
-                    .windows(4)
-                    .position(|w| w == b"\r\n\r\n")
-                {
-                    break pos + 4; // byte offset of the first body byte
-                }
-            };
-
-            // ── Phase 2: parse Content-Length ────────────────────────────
-            let header_bytes = &raw[..header_end];
-            let header_str = String::from_utf8_lossy(header_bytes);
-            let content_length: Option<usize> = header_str
-                .lines()
-                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
-                .and_then(|l| l["content-length:".len()..].trim().parse().ok());
-
-            // ── Phase 3: read body ────────────────────────────────────────
-            if let Some(cl) = content_length {
-                if cl > BODY_CAP {
-                    return Err(LiveResponse::text(
-                        "413 Payload Too Large",
-                        "request body too large".to_string(),
-                    ));
-                }
-                // We may already have some body bytes in `raw`.
-                let already = raw.len() - header_end;
-                let remaining = cl.saturating_sub(already);
-                if remaining > 0 {
-                    let old_len = raw.len();
-                    raw.resize(old_len + remaining, 0);
-                    stream
-                        .read_exact(&mut raw[old_len..])
-                        .await
-                        .map_err(|_| {
-                            LiveResponse::text("400 Bad Request", "body read error".to_string())
-                        })?;
-                }
+    let result = tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_SECS), async {
+        // ── Phase 1: read until \r\n\r\n ─────────────────────────────
+        let mut raw: Vec<u8> = Vec::with_capacity(4096);
+        let mut tmp = [0u8; 4096];
+        let header_end = loop {
+            let n = stream
+                .read(&mut tmp)
+                .await
+                .map_err(|_| LiveResponse::text("400 Bad Request", "read error".to_string()))?;
+            if n == 0 {
+                return Err(LiveResponse::text(
+                    "400 Bad Request",
+                    "connection closed".to_string(),
+                ));
             }
+            raw.extend_from_slice(&tmp[..n]);
+            if raw.len() > HEADER_CAP {
+                return Err(LiveResponse::text(
+                    "431 Request Header Fields Too Large",
+                    "header too large".to_string(),
+                ));
+            }
+            // Look for the header terminator.
+            if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4; // byte offset of the first body byte
+            }
+        };
 
-            Ok(String::from_utf8_lossy(&raw).into_owned())
-        },
-    )
+        // ── Phase 2: parse Content-Length ────────────────────────────
+        let header_bytes = &raw[..header_end];
+        let header_str = String::from_utf8_lossy(header_bytes);
+        let content_length: Option<usize> = header_str
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+            .and_then(|l| l["content-length:".len()..].trim().parse().ok());
+
+        // ── Phase 3: read body ────────────────────────────────────────
+        if let Some(cl) = content_length {
+            if cl > BODY_CAP {
+                return Err(LiveResponse::text(
+                    "413 Payload Too Large",
+                    "request body too large".to_string(),
+                ));
+            }
+            // We may already have some body bytes in `raw`.
+            let already = raw.len() - header_end;
+            let remaining = cl.saturating_sub(already);
+            if remaining > 0 {
+                let old_len = raw.len();
+                raw.resize(old_len + remaining, 0);
+                stream.read_exact(&mut raw[old_len..]).await.map_err(|_| {
+                    LiveResponse::text("400 Bad Request", "body read error".to_string())
+                })?;
+            }
+        }
+
+        Ok(String::from_utf8_lossy(&raw).into_owned())
+    })
     .await;
 
     match result {
         Ok(inner) => inner,
-        Err(_elapsed) => Err(LiveResponse::text("408 Request Timeout", "request timed out".to_string())),
+        Err(_elapsed) => Err(LiveResponse::text(
+            "408 Request Timeout",
+            "request timed out".to_string(),
+        )),
     }
 }
 
@@ -303,12 +299,7 @@ pub async fn spawn_api_server(state: ServerState, host: String, port: u16) {
     let listener = match TcpListener::bind((host.as_str(), port)).await {
         Ok(listener) => listener,
         Err(error) => {
-            log::error!(
-                "failed to bind server on {}:{}: {}",
-                host,
-                port,
-                error
-            );
+            log::error!("failed to bind server on {}:{}: {}", host, port, error);
             return;
         }
     };
@@ -963,7 +954,9 @@ mod tests {
         assert!(encoded.starts_with("HTTP/1.1 204 No Content\r\n"));
         assert!(encoded.contains("Access-Control-Allow-Origin: *\r\n"));
         assert!(encoded.contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"));
-        assert!(encoded.contains("Access-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token, Authorization\r\n"));
+        assert!(encoded.contains(
+            "Access-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token, Authorization\r\n"
+        ));
     }
 
     #[test]
@@ -1787,10 +1780,7 @@ pub async fn switch_session_backend(
         .collect())
 }
 
-pub async fn delete_session_backend(
-    session_id: i64,
-    state: &ServerState,
-) -> Result<i64, String> {
+pub async fn delete_session_backend(session_id: i64, state: &ServerState) -> Result<i64, String> {
     let ok = crate::db::conversation::delete_session(session_id);
     if !ok {
         return Err("Failed to delete session".to_string());

@@ -4,8 +4,8 @@ use tokio::sync::Mutex;
 use omnilauncher_lib::{
     ai::{client::AiClient, router::ConversationContext},
     create_plugin_manager_builtin_only, load_settings,
-    skills::SkillManager,
     server::{ai_query_backend, EventBus, ServerState},
+    skills::SkillManager,
 };
 
 fn integration_enabled() -> bool {

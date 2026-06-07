@@ -1702,8 +1702,7 @@ fi
 "#;
         write_plugin(tmp.path(), script);
 
-        let plugins =
-            load_external_plugins_from(&[tmp.path().to_string_lossy().to_string()]);
+        let plugins = load_external_plugins_from(&[tmp.path().to_string_lossy().to_string()]);
         let plugin = plugins
             .iter()
             .find(|p| p.name() == "e2e-plugin")
@@ -1724,8 +1723,7 @@ fi
         let script = "#!/usr/bin/env bash\nexit 1\n";
         write_plugin(tmp.path(), script);
 
-        let plugins =
-            load_external_plugins_from(&[tmp.path().to_string_lossy().to_string()]);
+        let plugins = load_external_plugins_from(&[tmp.path().to_string_lossy().to_string()]);
         let plugin = plugins
             .iter()
             .find(|p| p.name() == "e2e-plugin")
