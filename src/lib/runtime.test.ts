@@ -6,8 +6,8 @@ import { isWindowLocalCommand, invoke, getBackendMode, listen, emit } from "./ru
 // ---------------------------------------------------------------------------
 
 /** Set up a mock backend URL and fetch spy. Returns the captured request info. */
-function mockBackend(): { calls: { url: string; method: string; body?: string }[] } {
-  const state = { calls: [] as { url: string; method: string; body?: string }[] };
+function mockBackend(): { calls: { url: string; method: string; body?: string; headers: Record<string, string> }[] } {
+  const state = { calls: [] as { url: string; method: string; body?: string; headers: Record<string, string> }[] };
   (globalThis as any).window = {
     __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
     addEventListener: () => {},
@@ -18,6 +18,7 @@ function mockBackend(): { calls: { url: string; method: string; body?: string }[
       url: String(url),
       method: init?.method ?? "GET",
       body: typeof init?.body === "string" ? init.body : undefined,
+      headers: Object.fromEntries(new Headers(init?.headers).entries()),
     });
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
@@ -232,6 +233,34 @@ describe("http routing for new endpoints", () => {
     const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
     expect(call).toBeDefined();
     expect(JSON.parse(call!.body!)).toEqual(settings);
+  });
+
+  it("uses the typed backend token when saving settings", async () => {
+    const state = mockBackend();
+    const settings = {
+      ai_base_url: "http://example.com",
+      ai_model: "gpt-4",
+      ai_timeout_secs: 300,
+      backend_token: "new-backend-token",
+    };
+    await invoke("save_settings_cmd", { settings });
+    const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
+    expect(call).toBeDefined();
+    expect(call!.headers["x-omnilauncher-token"]).toBe("new-backend-token");
+  });
+
+  it("updates the in-page backend token after saving settings", async () => {
+    mockBackend();
+    (globalThis as any).window.__OMNILAUNCHER_TOKEN__ = "old-token";
+    await invoke("save_settings_cmd", {
+      settings: {
+        ai_base_url: "http://example.com",
+        ai_model: "gpt-4",
+        ai_timeout_secs: 300,
+        backend_token: "new-backend-token",
+      },
+    });
+    expect((globalThis as any).window.__OMNILAUNCHER_TOKEN__).toBe("new-backend-token");
   });
 
   it("maps list_models to POST /api/models with base_url and api_key", async () => {

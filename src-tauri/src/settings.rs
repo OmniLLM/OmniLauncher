@@ -144,6 +144,33 @@ impl AppSettings {
     }
 }
 
+/// Resolve the backend auth token in the same order used by the desktop shell
+/// and the HTTP server:
+///   1. `OMNILAUNCHER_AUTH_TOKEN` env override
+///   2. `settings.backend_token`
+///   3. `~/.config/omnilauncher/server-token` (same-machine fallback)
+///
+/// The helper is shared by the shell and server so a settings save can rotate
+/// the live token without duplicating precedence logic.
+pub fn resolve_backend_auth_token(settings: &AppSettings) -> String {
+    if let Ok(token) = std::env::var("OMNILAUNCHER_AUTH_TOKEN") {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let from_settings = settings.backend_token.trim();
+    if !from_settings.is_empty() {
+        return from_settings.to_string();
+    }
+    settings_path()
+        .with_file_name("server-token")
+        .to_str()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {

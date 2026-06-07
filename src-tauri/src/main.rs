@@ -135,43 +135,7 @@ fn resolve_backend_url(settings: &AppSettings) -> String {
 /// already noticed the empty token (logged) or are running in browser/mock
 /// mode where token-less requests are expected.
 fn resolve_auth_token(settings: &AppSettings) -> String {
-    if let Ok(token) = std::env::var("OMNILAUNCHER_AUTH_TOKEN") {
-        let trimmed = token.trim();
-        if !trimmed.is_empty() {
-            log::info!("auth token resolved from OMNILAUNCHER_AUTH_TOKEN env");
-            return trimmed.to_string();
-        }
-        log::debug!("OMNILAUNCHER_AUTH_TOKEN is set but empty; falling back");
-    }
-    let from_settings = settings.backend_token.trim();
-    if !from_settings.is_empty() {
-        log::info!("auth token resolved from settings.backend_token");
-        return from_settings.to_string();
-    }
-    match std::fs::read_to_string(server_token_path()) {
-        Ok(s) => {
-            let t = s.trim().to_string();
-            if !t.is_empty() {
-                log::info!(
-                    "auth token resolved from local file {}",
-                    server_token_path().display()
-                );
-            } else {
-                log::warn!(
-                    "auth token file {} is empty — backend requests will be unauthenticated",
-                    server_token_path().display()
-                );
-            }
-            t
-        }
-        Err(e) => {
-            log::warn!(
-                "auth token unavailable (env unset, settings empty, file {} unreadable: {e}) — backend requests will be unauthenticated",
-                server_token_path().display()
-            );
-            String::new()
-        }
-    }
+    omnilauncher_lib::settings::resolve_backend_auth_token(settings)
 }
 
 fn init_debug_logging(enable_debug: bool) {

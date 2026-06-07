@@ -31,23 +31,19 @@ let lastLoggedBackendUrl = "__unset__";
 ///      `--no-default-features`). Reads the local token file.
 ///   3. Empty string — browser / mock / no-auth mode.
 ///
-/// Fetched once at module init and attached as X-OmniLauncher-Token (and
-/// Authorization: Bearer, accepted by the server) on every HTTP request.
-let serverTokenPromise: Promise<string> = Promise.resolve("");
-
-// Kick off the token fetch immediately on module load so it's ready by the
-// time the first `invoke` call arrives. We resolve through the priority
-// chain above. Note: window-injected tokens may be `""` on purpose (the
-// shell ran but had nothing to inject) — that empty string still wins over
-// the `get_server_token` fallback so we don't fall back to a stale local
-// token in the cross-machine case where the local file would be wrong.
-if (typeof window !== "undefined") {
-  const injected = (window as any).__OMNILAUNCHER_TOKEN__;
-  if (typeof injected === "string") {
-    serverTokenPromise = Promise.resolve(injected);
-  } else if ((window as any).__TAURI_INTERNALS__) {
-    serverTokenPromise = tauriInvoke<string>("get_server_token").catch(() => "");
+/// Read lazily on each request so settings changes can rotate the token
+/// without restarting the app.
+async function resolveServerToken(): Promise<string> {
+  if (typeof window !== "undefined") {
+    const injected = (window as any).__OMNILAUNCHER_TOKEN__;
+    if (typeof injected === "string") {
+      return injected;
+    }
+    if ((window as any).__TAURI_INTERNALS__) {
+      return tauriInvoke<string>("get_server_token").catch(() => "");
+    }
   }
+  return "";
 }
 
 /// Window/OS-shell commands run in the local Tauri process — only it owns a
@@ -136,7 +132,7 @@ async function httpJson<T>(path: string, init?: RequestInit): Promise<T> {
   const bodySummary = typeof init?.body === "string" ? `${init.body.length} bytes` : "none";
   frontendLog("debug", `HTTP ${method} ${url} start body=${bodySummary}`);
 
-  const serverToken = await serverTokenPromise;
+  const serverToken = await resolveServerToken();
 
   let response: Response;
   try {
@@ -191,7 +187,7 @@ function ensureHttpEventStream(name: string) {
   const url = buildUrl(`/api/events/${encodeURIComponent(name)}`);
   frontendLog("debug", `SSE subscribe ${name} via ${url}`);
 
-  serverTokenPromise.then((serverToken) => {
+  resolveServerToken().then((serverToken) => {
     fetch(url, {
       signal: controller.signal,
       headers: {
@@ -288,11 +284,24 @@ export async function invoke<T = unknown>(
         });
       case "get_settings":
         return httpJson<T>("/api/settings");
-      case "save_settings_cmd":
-        return httpJson<T>("/api/settings", {
+      case "save_settings_cmd": {
+        const settings = args?.settings as { backend_token?: unknown } | undefined;
+        const backendToken =
+          typeof settings?.backend_token === "string"
+            ? settings.backend_token.trim()
+            : "";
+        const result = await httpJson<T>("/api/settings", {
           method: "POST",
-          body: JSON.stringify(args?.settings ?? {}),
+          headers: backendToken
+            ? { "X-OmniLauncher-Token": backendToken }
+            : undefined,
+          body: JSON.stringify(settings ?? {}),
         });
+        if (backendToken && typeof window !== "undefined") {
+          (window as any).__OMNILAUNCHER_TOKEN__ = backendToken;
+        }
+        return result;
+      }
       case "list_models":
         return httpJson<T>("/api/models", {
           method: "POST",
