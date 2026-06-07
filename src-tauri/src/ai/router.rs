@@ -323,6 +323,21 @@ impl Router {
         let mut system_prompt = build_system_prompt(&os_info, tool_names.len(), &tool_list);
         system_prompt.push_str(&skills_inventory_suffix);
 
+        // Load durable AGENT.md context the user has dropped in known spots
+        // (config dir → cwd walking upward → home). Built once before the
+        // agentic loop and re-appended on every rebuild so the context stays
+        // visible across tool iterations.
+        let agent_files = crate::ai::agent_context::collect_live();
+        let agent_context_suffix = crate::ai::agent_context::format_suffix(&agent_files);
+        if !agent_files.is_empty() {
+            log::debug!(
+                "ai_route: loaded {} AGENT.md file(s) into system prompt ({} bytes)",
+                agent_files.len(),
+                agent_context_suffix.len()
+            );
+        }
+        system_prompt.push_str(&agent_context_suffix);
+
         // Find relevant skills
         let relevant_skills = skill_manager.find_relevant(query);
         let mut skills_used: Vec<String> = relevant_skills
@@ -443,6 +458,7 @@ impl Router {
                 let mut system_prompt_rebuild =
                     build_system_prompt(&os_info, tool_names.len(), &tool_list);
                 system_prompt_rebuild.push_str(&skills_inventory_suffix);
+                system_prompt_rebuild.push_str(&agent_context_suffix);
                 let mut rebuilt = local_ctx.get_messages_with_system(&system_prompt_rebuild);
                 inject_skill(&mut rebuilt);
                 rebuilt

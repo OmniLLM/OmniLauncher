@@ -1,3 +1,4 @@
+pub mod agent_context;
 pub mod client;
 pub mod errors;
 pub mod router;
