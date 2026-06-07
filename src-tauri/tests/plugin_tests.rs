@@ -1283,6 +1283,16 @@ async fn test_scheduler_list_empty_or_jobs() {
 
 #[tokio::test]
 async fn test_scheduler_add_and_delete() {
+    // Race fix: scheduler writes job files under `~/.omnilauncher/scheduler/`
+    // by default. When other tests in the suite temporarily set
+    // OMNILAUNCHER_CONFIG_DIR (process-global) and then remove it, this
+    // test can race against them and read from the wrong dir → empty list.
+    // Pin to our own temp dir up-front so we own the data dir for the
+    // lifetime of this test.
+    let dir = temp_config_dir("scheduler_add_delete");
+    unsafe {
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &dir);
+    }
     let pm = create_plugin_manager();
     let add = pm
         .execute_tool(
@@ -1313,6 +1323,9 @@ async fn test_scheduler_add_and_delete() {
             )
             .await;
         assert!(!del.to_lowercase().contains("error"), "delete: {}", del);
+    }
+    unsafe {
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
     }
 }
 
