@@ -1,136 +1,133 @@
-# OmniLauncher
+<p align="center">
+  <h1 align="center">OmniLauncher</h1>
+</p>
+<p align="center">A keyboard-first launcher with local search, AI mode, plugins, and slash commands.</p>
+<p align="center">
+  <a href="https://github.com/OmniLLM/OmniLauncher/actions/workflows/ci.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/OmniLLM/OmniLauncher/ci.yml?style=flat-square&branch=main" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/OmniLLM/OmniLauncher?style=flat-square" /></a>
+  <a href="https://github.com/OmniLLM/OmniLauncher/releases"><img alt="Release" src="https://img.shields.io/github/v/release/OmniLLM/OmniLauncher?style=flat-square&include_prereleases" /></a>
+</p>
 
-OmniLauncher is a keyboard-first launcher with local search, AI mode, plugins, and slash commands.
-
-- **Alt+Space** opens the launcher
-- Type normal text for app search and built-in actions
-- Type **`?`** or **`ai `** for AI mode
-- Type **`/`** for structured slash commands
-- Press **Ctrl+,** for Settings
+![OmniLauncher Chat UI](screenshot-chat-ui.png)
 
 ---
 
-## Quick Start
+### Installation
 
-### 1) Install
-
-Install the project dependencies:
+OmniLauncher is built from source today (Tauri + Rust + a small Node frontend). Clone the repo, install deps, and start the app:
 
 ```bash
+git clone https://github.com/OmniLLM/OmniLauncher.git
+cd OmniLauncher
+
+# Install JS deps and prefetch Rust crates
 npm install
-cd src-tauri && cargo fetch
-```
+cd src-tauri && cargo fetch && cd ..
 
-For day-to-day development you can run:
-
-```bash
+# Day-to-day dev: start frontend + backend together
 make start
 ```
 
-### 2) Configure the backend token first
+> [!TIP]
+> Press **Alt+Space** to open the launcher, **Ctrl+,** to open Settings, and **Esc** to close.
 
-If you are using a separate backend, set the backend token on the backend machine **before** configuring the UI.
+### Backend Token
 
-Backend example:
+If your backend runs on a separate machine, set its token **before** configuring the UI.
 
 ```bash
-export OMNILAUNCHER_AUTH_TOKEN="your-shared-backend-token"
+# On the backend machine
+export OMNILAUNCHER_AUTH_TOKEN=<paste-your-token-here>
 make start-backend
 ```
 
-Notes:
+| Behavior                           | Setting                                         |
+| ---------------------------------- | ----------------------------------------------- |
+| Use a shared token (split-machine) | export `OMNILAUNCHER_AUTH_TOKEN` on the backend |
+| Single-machine dev                 | leave it unset — a random one is generated      |
+| Token file fallback                | `~/.config/omnilauncher/server-token`           |
 
-- If `OMNILAUNCHER_AUTH_TOKEN` is set, that value is used by the backend
-- If it is not set, the backend generates a random token on startup
-- That random token is fine for same-machine use, but not for split-machine setups
+In the UI press **Ctrl+,**, open **General**, set **Backend URL** + **Backend Token**, then open **AI** and set **Provider URL**, **API Key**, and **Model**. Click **Save Settings**.
 
-### 3) Configure the UI
+> [!IMPORTANT]
+> **Backend Token** authenticates OmniLauncher itself. **API Key** authenticates your LLM provider. They are separate — configure the backend token first.
 
-Open OmniLauncher, then press **Ctrl+,**:
+### Modes
 
-1. Open the **General** tab
-2. Set **Backend URL** to your backend address
-3. Set **Backend Token** to the same token you set on the backend
-4. Click **Save Settings**
-5. Open the **AI** tab
-6. Set your LLM provider values:
-   - **Provider URL**
-   - **API Key**
-   - **Model**
+OmniLauncher switches mode based on the prefix you type.
 
-Important:
+- **Launcher** — bare text. Apps, files, URLs, built-in actions.
+- **AI** — type `?` or `ai `. Explanations, summaries, code help, tool-assisted tasks.
+- **Slash** — type `/`. Structured commands.
 
-- **Backend Token** authenticates OmniLauncher itself
-- **API Key** authenticates your LLM provider
-- Configure **Backend Token first**, then configure the LLM token in the UI
+Common slash commands:
 
----
+| Command                 | Purpose                         |
+| ----------------------- | ------------------------------- |
+| `/app`                  | launch an app                   |
+| `/run`                  | run a shell command             |
+| `/open`                 | open a file, app, or URL        |
+| `/find`, `/grep`, `/ls` | search and inspect files        |
+| `/todo`                 | manage todos                    |
+| `/web`                  | search the web                  |
+| `/skills`               | manage AI skills                |
+| `/plugins`              | install, update, remove plugins |
 
-## Everyday Use
+### AGENT.md Context
 
-### Launcher mode
+Drop an `AGENT.md` file in any of the following spots and the AI mode picks it up automatically as durable, project-specific context (load order — most general first, most specific last):
 
-- Type an app name, file path, command, or query
-- Use the arrow keys to select a result
-- Press **Enter** to run it
-- Press **Esc** to close or clear
+1. `~/.config/omnilauncher/AGENT.md` — global app config
+2. `AGENT.md` walking upward from the current working directory — project context
+3. `~/AGENT.md` — user-global
 
-### AI mode
+Missing files are silently skipped. See [`src-tauri/src/ai/agent_context.rs`](src-tauri/src/ai/agent_context.rs) for the loader.
 
-- Start a query with **`?`** or **`ai `**
-- Ask for explanations, summaries, code help, or tool-assisted tasks
-- AI responses can call built-in tools automatically
-
-### Slash commands
-
-Type **`/`** to use structured commands such as:
-
-- `/app` — launch an app
-- `/run` — run a shell command
-- `/open` — open a file, app, or URL
-- `/find` / `/grep` / `/ls` — search and inspect files
-- `/todo` — manage todos
-- `/web` — search the web
-
-### Other operations
-
-- **Plugins** — install, update, and remove external plugins
-- **Skills** — manage AI skills
-- **Sessions** — switch or clear AI conversations
-- **Dashboard** — inspect backend data in a browser
-
----
-
-## Common commands
+### Common Commands
 
 ```bash
-make start       # start the app
-make stop        # stop the app
-make test        # run the full test suite
-make status      # show backend status
-make logs        # show logs
+make start         # start frontend + backend
+make stop          # stop everything
+make restart       # restart everything
+make status        # show backend status
+make logs          # tail logs
+make test          # run the full test suite
 ```
+
+Run `make help` for the full target list.
+
+### Config Files
+
+| Path                                   | Purpose                            |
+| -------------------------------------- | ---------------------------------- |
+| `~/.config/omnilauncher/settings.json` | Main settings (UI-editable)        |
+| `~/.config/omnilauncher/server-token`  | Backend token fallback             |
+| `~/.config/omnilauncher/AGENT.md`      | Global AI agent context            |
+| `~/.omnilauncher/`                     | Runtime data (DB, plugins, skills) |
+
+### Troubleshooting
+
+- **Settings won't save** — backend token mismatch between UI and backend. Re-set both.
+- **AI requests fail** — check **AI** tab values (Provider URL, API Key, Model).
+- **UI reaches backend but saves still fail** — backend wasn't started with the same `OMNILAUNCHER_AUTH_TOKEN`.
+- **`make start` fails** — try `make stop` first, then `make start` again.
+
+### Documentation
+
+More detail in [`docs/`](./docs) and in [`SOURCE_FILES_MANIFEST.md`](./SOURCE_FILES_MANIFEST.md).
+
+### Contributing
+
+PRs welcome. Please run `make test` (or at least `cargo test --lib` + `npm test`) before submitting, and keep new behavior covered by tests.
+
+### Security
+
+Report security issues per [`SECURITY.md`](./SECURITY.md). Don't open public issues for vulnerabilities.
+
+### Building on OmniLauncher
+
+If you're shipping a project that uses "omnilauncher" in its name (e.g. `omnilauncher-plugin-foo`), please add a note to your README clarifying that it isn't built by the OmniLauncher team and isn't affiliated with us.
 
 ---
 
-## Config files
-
-Main settings:
-
-```text
-~/.config/omnilauncher/settings.json
-```
-
-Backend token fallback file:
-
-```text
-~/.config/omnilauncher/server-token
-```
-
----
-
-## Troubleshooting
-
-- If settings do not save, confirm the backend token matches on both sides
-- If AI requests fail, check the **AI** tab values
-- If the UI can reach the backend but saving still fails, verify the backend was started with the same `OMNILAUNCHER_AUTH_TOKEN`
+**Project** [OmniLLM/OmniLauncher](https://github.com/OmniLLM/OmniLauncher) · **License** see [LICENSE](./LICENSE)
