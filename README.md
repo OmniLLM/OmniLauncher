@@ -415,11 +415,147 @@ The browser frontend uses `VITE_OMNILAUNCHER_BACKEND_URL` to talk to the backend
 - Server mode is intended for launcher UI + backend logic development without Tauri coupling during iteration
 - Some desktop-only capabilities remain Tauri-only in browser mode, such as screenshot/vision flows and native window behavior
 
+### 🔐 Cross-machine deployment (Token auth)
+
+Whenever the `--server` backend runs on a different machine than the frontend
+(WSL backend ↔ Windows shell, Docker backend ↔ desktop, remote VM ↔ laptop),
+the shell can't read the per-launch token file the backend writes locally and
+auth will fail. The cross-machine flow is built on a single shared secret you
+pin on both sides.
+
+#### ⚠️ Two distinct credentials in Settings — don't mix them up
+
+OmniLauncher's Settings panel has **two separate password-style fields**.
+They go to completely different places and you almost always want to leave
+one of them empty:
+
+| Field in Settings | Underlying key | What it is | Sent to | When to set |
+|---|---|---|---|---|
+| **API Key** | `ai_api_key` | Your **LLM provider** key (OpenAI / Anthropic-compat / etc.) | `ai_base_url` (third-party AI endpoint) | When using a paid / hosted LLM provider. Leave empty for local Ollama / LM Studio. |
+| **Backend Token** | `backend_token` | OmniLauncher's **own backend** auth token | `backend_url` (your `--server` instance) | **Only** when frontend and backend run on different machines. Leave empty for the default single-process Tauri build. |
+
+Symptom of confusing them: pasting your OpenAI key into Backend Token → every
+launcher request gets HTTP 401 from your own backend; pasting your backend
+token into API Key → your LLM provider returns 401/invalid-key on AI mode.
+
+#### Authentication model (Backend Token)
+
+- Every backend request must carry the token, either as
+  `X-OmniLauncher-Token: <token>` (canonical) **or** `Authorization: Bearer <token>`
+  (so plain `curl` / browser fetch / scripted clients work without a custom header).
+- Exempt endpoints: `OPTIONS *` (CORS preflight) and `GET /health`.
+- The token is resolved with the same three-tier precedence on both ends:
+  1. `OMNILAUNCHER_AUTH_TOKEN` environment variable
+  2. `backend_token` field in `~/.config/omnilauncher/settings.json` (UI: Settings → General → Backend Token)
+  3. `~/.config/omnilauncher/server-token` file (same-machine fallback that
+     the backend writes at startup — **only meaningful when shell and backend
+     share a filesystem**)
+
+When `OMNILAUNCHER_AUTH_TOKEN` is set on the backend, the `--server` process
+pins to it and **skips overwriting** the local token file. That's how both
+ends end up agreeing on the same value.
+
+#### Backend (WSL / Linux) — pin a stable token
+
+```bash
+# Generate once, reuse forever
+export OMNILAUNCHER_AUTH_TOKEN=$(openssl rand -hex 32)
+export OMNILAUNCHER_SERVER_HOST=0.0.0.0          # default; allow non-loopback
+export OMNILAUNCHER_SERVER_PORT=1422             # default
+
+# Persist to ~/.bashrc / ~/.zshrc so it survives reboots
+echo "export OMNILAUNCHER_AUTH_TOKEN=$OMNILAUNCHER_AUTH_TOKEN" >> ~/.bashrc
+
+make start-backend    # or: target/release/omnilauncher-backend --server
+echo "Share this token with the frontend: $OMNILAUNCHER_AUTH_TOKEN"
+```
+
+> If you forget to set the env var, the backend will generate a random token
+> on every launch and write it to `~/.config/omnilauncher/server-token` —
+> fine for same-machine, useless for cross-machine because the value changes
+> every restart.
+
+#### Frontend (Windows desktop shell) — two ways
+
+**Option A — Settings UI (recommended, no restart required)**
+
+1. Start the Tauri shell once (it'll fail auth, that's fine)
+2. Press **Ctrl+,** → **General** tab
+3. **Backend URL** → `http://<wsl-host>:1422` (e.g. `http://172.17.0.1:1422` or
+   whatever `ip addr show eth0` reports in WSL; `http://127.0.0.1:1422` also
+   works if you have WSL2 `localhostForwarding`)
+4. **Backend Token** → paste the value from the backend export above
+5. **Save** → close & reopen the shell window so the values get injected
+   into `window.__OMNILAUNCHER_BACKEND_URL__` / `window.__OMNILAUNCHER_TOKEN__`
+
+**Option B — Environment variables (CI / scripted / portable)**
+
+```powershell
+$env:OMNILAUNCHER_BACKEND_URL = "http://<wsl-host>:1422"
+$env:OMNILAUNCHER_AUTH_TOKEN  = "<token-from-backend>"
+.\target\release\omnilauncher.exe
+```
+
+Env values always win over `settings.json`, so this overrides whatever's in
+the UI without modifying it.
+
+#### Browser frontend (static build)
+
+When you ship the `make frontend-prod` static bundle, the served HTML needs
+the token injected before the first request. Two patterns:
+
+- Reverse proxy injects `window.__OMNILAUNCHER_TOKEN__ = "..."` into the
+  served `index.html` per-session
+- The user pastes the token into Settings → Backend Token once; `runtime.ts`
+  falls back to the saved settings value
+
+#### Scripted / `curl` access
+
+```bash
+TOKEN=$(cat ~/.config/omnilauncher/server-token)   # same-machine
+# or just hardcode the pinned value cross-machine
+
+# Custom header (canonical)
+curl -H "X-OmniLauncher-Token: $TOKEN" http://wsl-host:1422/dashboard/data
+
+# Standard Bearer (works the same — useful for tools that don't allow custom headers)
+curl -H "Authorization: Bearer $TOKEN" http://wsl-host:1422/dashboard/data
+
+# Health probe needs no auth
+curl http://wsl-host:1422/health
+```
+
+The bundled `scripts/smoke-endpoints.sh` resolves the token via
+`--token` arg → `OMNILAUNCHER_AUTH_TOKEN` env → local file, in that order.
+
+#### Threat model & caveats
+
+- **No TLS.** Path C currently assumes the frontend ↔ backend hop is trusted
+  (same physical host via loopback / WSL vEthernet, or a private LAN). Don't
+  expose `OMNILAUNCHER_SERVER_HOST=0.0.0.0` to the public internet without
+  putting nginx/Caddy in front for HTTPS termination + token rate-limiting.
+- **Token comparison is not constant-time.** Acceptable for now (single
+  secret, no online brute force given the 256-bit entropy when generated
+  from `openssl rand -hex 32`); revisit if you reduce token length.
+- **Don't commit your token.** It belongs in env / settings / a vault, never
+  in repo files or screenshots.
+
+---
+
+## ⚙️ AI Provider Configuration
+
+> Configures the **third-party LLM** (OpenAI / Ollama / any OpenAI-compatible
+> server) the launcher talks to in AI mode. This is **separate** from the
+> `backend_token` used by the OmniLauncher backend itself — see
+> [🔐 Cross-machine deployment](#-cross-machine-deployment-token-auth)
+> if you also need to configure that.
 
 1. Press **Ctrl+,** to open Settings (or click the ⚙ gear icon)
 2. **API Base URL** — e.g. `https://api.openai.com`, a local Ollama endpoint,
    or any OpenAI-compatible server
-3. **API Key** — leave empty for local endpoints
+3. **API Key** — your **LLM provider's** key (OpenAI sk-…, Anthropic, etc.).
+   Leave empty for local endpoints like Ollama / LM Studio. **Not** the same
+   field as Backend Token.
 4. **Model** — pick from the dropdown (auto-fetched from `/v1/models`)
 5. **Save** — the `AiClient` is rebuilt at runtime, no restart needed
 
@@ -434,6 +570,8 @@ Settings are stored at `~/.config/omnilauncher/settings.json`:
   "hotkey": "Alt+Space",
   "max_results": 10,
   "background_url": "",
+  "backend_url": "",
+  "backend_token": "",
   "plugin_dirs": [],
   "github_servers": [
     {
@@ -446,6 +584,16 @@ Settings are stored at `~/.config/omnilauncher/settings.json`:
   "capture_selection_on_open": false
 }
 ```
+
+> `backend_url` / `backend_token` are only needed for the **cross-machine**
+> deployment path (e.g. WSL backend + Windows shell). See [🔐 Cross-machine
+> deployment (Token auth)](#-cross-machine-deployment-token-auth) above. Both
+> can be left empty for the default integrated Tauri build.
+>
+> **`backend_token` ≠ `ai_api_key`.** The former authenticates against the
+> OmniLauncher backend; the latter is your LLM provider key. The Settings UI
+> labels them **Backend Token** and **API Key** respectively.
+
 
 > The `hotkey` field in `~/.config/omnilauncher/settings.json` controls the
 > global shortcut. Default is **Alt+Space**. Tokens are `+`-separated and
