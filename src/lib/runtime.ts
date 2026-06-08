@@ -284,24 +284,11 @@ export async function invoke<T = unknown>(
         });
       case "get_settings":
         return httpJson<T>("/api/settings");
-      case "save_settings_cmd": {
-        const settings = args?.settings as { backend_token?: unknown } | undefined;
-        const backendToken =
-          typeof settings?.backend_token === "string"
-            ? settings.backend_token.trim()
-            : "";
-        const result = await httpJson<T>("/api/settings", {
+      case "save_settings_cmd":
+        return httpJson<T>("/api/settings", {
           method: "POST",
-          headers: backendToken
-            ? { "X-OmniLauncher-Token": backendToken }
-            : undefined,
-          body: JSON.stringify(settings ?? {}),
+          body: JSON.stringify(args?.settings ?? {}),
         });
-        if (backendToken && typeof window !== "undefined") {
-          (window as any).__OMNILAUNCHER_TOKEN__ = backendToken;
-        }
-        return result;
-      }
       case "list_models":
         return httpJson<T>("/api/models", {
           method: "POST",

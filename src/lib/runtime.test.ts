@@ -235,8 +235,9 @@ describe("http routing for new endpoints", () => {
     expect(JSON.parse(call!.body!)).toEqual(settings);
   });
 
-  it("uses the typed backend token when saving settings", async () => {
+  it("authenticates settings saves with the current backend token, not the edited token", async () => {
     const state = mockBackend();
+    (globalThis as any).window.__OMNILAUNCHER_TOKEN__ = "current-backend-token";
     const settings = {
       ai_base_url: "http://example.com",
       ai_model: "gpt-4",
@@ -246,12 +247,12 @@ describe("http routing for new endpoints", () => {
     await invoke("save_settings_cmd", { settings });
     const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
     expect(call).toBeDefined();
-    expect(call!.headers["x-omnilauncher-token"]).toBe("new-backend-token");
+    expect(call!.headers["x-omnilauncher-token"]).toBe("current-backend-token");
   });
 
-  it("updates the in-page backend token after saving settings", async () => {
+  it("keeps the in-page backend token after saving settings", async () => {
     mockBackend();
-    (globalThis as any).window.__OMNILAUNCHER_TOKEN__ = "old-token";
+    (globalThis as any).window.__OMNILAUNCHER_TOKEN__ = "current-backend-token";
     await invoke("save_settings_cmd", {
       settings: {
         ai_base_url: "http://example.com",
@@ -260,7 +261,28 @@ describe("http routing for new endpoints", () => {
         backend_token: "new-backend-token",
       },
     });
-    expect((globalThis as any).window.__OMNILAUNCHER_TOKEN__).toBe("new-backend-token");
+    expect((globalThis as any).window.__OMNILAUNCHER_TOKEN__).toBe("current-backend-token");
+  });
+
+  it("keeps authenticating later requests with the current token after saving settings", async () => {
+    const state = mockBackend();
+    (globalThis as any).window.__OMNILAUNCHER_TOKEN__ = "current-backend-token";
+
+    await invoke("save_settings_cmd", {
+      settings: {
+        ai_base_url: "http://example.com",
+        ai_model: "gpt-4",
+        ai_timeout_secs: 300,
+        backend_token: "new-backend-token",
+      },
+    });
+    await invoke("get_settings");
+
+    const settingsCalls = state.calls.filter((c) => c.url.endsWith("/api/settings"));
+    expect(settingsCalls.map((c) => c.headers["x-omnilauncher-token"])).toEqual([
+      "current-backend-token",
+      "current-backend-token",
+    ]);
   });
 
   it("maps list_models to POST /api/models with base_url and api_key", async () => {

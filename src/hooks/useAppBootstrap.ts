@@ -24,7 +24,7 @@ export interface UseAppBootstrapArgs {
  * and listen for settings updates from the standalone settings window.
  */
 export function useAppBootstrap(args: UseAppBootstrapArgs): void {
-  const { setSettings, setBackgroundUrl, setTheme, setShowSettings } = args;
+  const { setSettings, setBackgroundUrl, setTheme } = args;
 
   // Startup banner — one line on initial mount so the devtools console
   // and ~/.omnilauncher/omnilauncher.log (via tauri frontend_log) both
@@ -63,7 +63,6 @@ export function useAppBootstrap(args: UseAppBootstrapArgs): void {
         setTheme(parseThemeMode(e.payload.theme));
         setBackgroundUrl(e.payload.background_url ?? "");
         setSettings(e.payload);
-        setShowSettings(false);
       },
     );
     return () => {

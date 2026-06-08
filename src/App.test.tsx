@@ -74,6 +74,8 @@ vi.mock("./lib/runtime", () => ({
             hotkey: "Cmd+Space",
             max_results: 30,
             background_url: "",
+            backend_url: "",
+            backend_token: "",
           } as AppSettings as T;
         case "search":
           return searchResults as T;
@@ -119,6 +121,9 @@ vi.mock("./lib/runtime", () => ({
       }
     },
   ),
+  emit: vi.fn(async <T,>(eventName: string, payload: T): Promise<void> => {
+    emit(eventName, payload);
+  }),
   listen: vi.fn(
     async <T,>(
       eventName: string,
@@ -249,8 +254,23 @@ describe("App — bootstrap", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Human-like typing: search flow
+// Settings
 // ---------------------------------------------------------------------------
+
+describe("App — settings", () => {
+  it("shows a saved confirmation after saving settings", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Open settings" }));
+    await screen.findByText("Preferences");
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    const savedLabels = await screen.findAllByText("✓ Saved");
+    expect(savedLabels.length).toBeGreaterThan(0);
+    expect(screen.getByText("Preferences")).toBeInTheDocument();
+  });
+});
 
 describe("App — search flow (human typing)", () => {
   it("types into the input character-by-character and triggers a debounced search", async () => {
