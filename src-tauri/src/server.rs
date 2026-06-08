@@ -297,16 +297,8 @@ async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Result<String,
     }
 }
 
-pub async fn spawn_api_server(state: ServerState, host: String, port: u16) {
-    let listener = match TcpListener::bind((host.as_str(), port)).await {
-        Ok(listener) => listener,
-        Err(error) => {
-            log::error!("failed to bind server on {}:{}: {}", host, port, error);
-            return;
-        }
-    };
-
-    log::info!("server listening on http://{}:{}", host, port);
+async fn serve_api_listener(listener: TcpListener, state: ServerState) {
+    log::info!("server listening on {}", listener.local_addr().map(|a| a.to_string()).unwrap_or_else(|_| "unknown".to_string()));
 
     loop {
         let (mut stream, addr) = match listener.accept().await {
@@ -344,28 +336,30 @@ pub async fn spawn_api_server(state: ServerState, host: String, port: u16) {
                 request.len()
             );
 
-            if let Some(event_name) = event_name_from_path(&path) {
-                log::debug!("server SSE subscribe from {}: {}", addr, event_name);
-                let mut receiver = state.event_bus.subscribe(&event_name).await;
-                let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n".to_string();
-                if stream.write_all(headers.as_bytes()).await.is_err() {
+            if method == "GET" {
+                if let Some(event_name) = event_name_from_path(&path) {
+                    log::debug!("server SSE subscribe from {}: {}", addr, event_name);
+                    let mut receiver = state.event_bus.subscribe(&event_name).await;
+                    let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n".to_string();
+                    if stream.write_all(headers.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    while let Ok(message) = receiver.recv().await {
+                        let payload = format!("data: {}\n\n", message);
+                        if stream.write_all(payload.as_bytes()).await.is_err() {
+                            break;
+                        }
+                    }
+                    let elapsed_ms = started_at.elapsed().as_millis();
+                    log::info!(
+                        "← {} {} status=200 sse_closed elapsed_ms={}",
+                        method,
+                        path,
+                        elapsed_ms
+                    );
+                    let _ = stream.shutdown().await;
                     return;
                 }
-                while let Ok(message) = receiver.recv().await {
-                    let payload = format!("data: {}\n\n", message);
-                    if stream.write_all(payload.as_bytes()).await.is_err() {
-                        break;
-                    }
-                }
-                let elapsed_ms = started_at.elapsed().as_millis();
-                log::info!(
-                    "← {} {} status=200 sse_closed elapsed_ms={}",
-                    method,
-                    path,
-                    elapsed_ms
-                );
-                let _ = stream.shutdown().await;
-                return;
             }
 
             let response = handle_request(&state, method, &path, &query, &request).await;
@@ -383,6 +377,18 @@ pub async fn spawn_api_server(state: ServerState, host: String, port: u16) {
             let _ = stream.shutdown().await;
         });
     }
+}
+
+pub async fn spawn_api_server(state: ServerState, host: String, port: u16) {
+    let listener = match TcpListener::bind((host.as_str(), port)).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            log::error!("failed to bind server on {}:{}: {}", host, port, error);
+            return;
+        }
+    };
+
+    serve_api_listener(listener, state).await;
 }
 
 /// Generate a 32-byte random token encoded as lowercase hex (64 chars).
@@ -955,6 +961,51 @@ fn encode_response(response: LiveResponse) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    async fn spawn_test_server(state: ServerState) -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(serve_api_listener(listener, state));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        port
+    }
+
+    fn test_server_state() -> ServerState {
+        let settings = AppSettings::default();
+        ServerState {
+            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
+            ai_client: Arc::new(Mutex::new(AiClient::new(
+                settings.ai_base_url.clone(),
+                settings.resolve_ai_api_key(),
+                settings.ai_model.clone(),
+            ))),
+            settings: Arc::new(Mutex::new(settings)),
+            conversation: Arc::new(Mutex::new(ConversationContext::default())),
+            ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
+            current_ai_task: Arc::new(Mutex::new(None)),
+            skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+            event_bus: EventBus::default(),
+            latest_selection: Arc::new(Mutex::new(None)),
+            auth_token: Arc::new("test-token".to_string()),
+        }
+    }
+
+    async fn send_raw_request(port: u16, request: &[u8]) -> String {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        stream.write_all(request).await.unwrap();
+
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            stream.read(&mut buf),
+        )
+        .await
+        .expect("server should respond promptly")
+        .unwrap();
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
     // ── encode_response tests ──────────────────────────────────────────
 
     #[test]
@@ -1325,6 +1376,95 @@ mod tests {
             event_name_from_path("/api/events/omnilauncher%3A%2F%2Fai-done"),
             Some("omnilauncher://ai-done".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn ai_event_stream_options_preflights_return_cors_204_without_opening_sse() {
+        let port = spawn_test_server(test_server_state()).await;
+
+        for event_path in [
+            "/api/events/omnilauncher%3A%2F%2Fai-done",
+            "/api/events/omnilauncher%3A%2F%2Fai-error",
+            "/api/events/omnilauncher%3A%2F%2Fai-tool-call",
+        ] {
+            let request = format!(
+                "OPTIONS {event_path} HTTP/1.1\r\n\
+Host: 127.0.0.1\r\n\
+Access-Control-Request-Method: GET\r\n\
+Access-Control-Request-Headers: x-omnilauncher-token\r\n\r\n"
+            );
+            let response = send_raw_request(port, request.as_bytes()).await;
+
+            assert!(
+                response.starts_with("HTTP/1.1 204 No Content"),
+                "event-stream preflight must be handled as CORS OPTIONS for {event_path}, got: {response}"
+            );
+            assert!(response.contains("Access-Control-Allow-Origin: *"));
+            assert!(response.contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS"));
+            assert!(response.contains("Access-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token, Authorization"));
+            assert!(!response.contains("Content-Type: text/event-stream"));
+        }
+    }
+
+    #[tokio::test]
+    async fn event_stream_get_subscribes_and_delivers_messages() {
+        let state = test_server_state();
+        let bus = state.event_bus.clone();
+        let port = spawn_test_server(state).await;
+
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        stream
+            .write_all(
+                b"GET /api/events/omnilauncher%3A%2F%2Fai-done HTTP/1.1\r\n\
+Host: 127.0.0.1\r\n\
+X-OmniLauncher-Token: test-token\r\n\r\n",
+            )
+            .await
+            .unwrap();
+
+        let mut initial = vec![0u8; 1024];
+        let header_len = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            stream.read(&mut initial),
+        )
+        .await
+        .expect("SSE GET should return headers promptly")
+        .unwrap();
+        let headers = String::from_utf8_lossy(&initial[..header_len]);
+        assert!(headers.starts_with("HTTP/1.1 200 OK"));
+        assert!(headers.contains("Content-Type: text/event-stream"));
+
+        bus.emit_json("omnilauncher://ai-done", &serde_json::json!({ "content": "ok" }))
+            .await;
+        let mut event = vec![0u8; 1024];
+        let event_len = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            stream.read(&mut event),
+        )
+        .await
+        .expect("SSE event should arrive promptly")
+        .unwrap();
+        let event_payload = String::from_utf8_lossy(&event[..event_len]);
+        assert!(event_payload.starts_with("data: "));
+        assert!(event_payload.contains("\"content\":\"ok\""));
+    }
+
+    #[tokio::test]
+    async fn non_get_event_stream_methods_do_not_open_sse() {
+        let port = spawn_test_server(test_server_state()).await;
+        let response = send_raw_request(
+            port,
+            b"POST /api/events/omnilauncher%3A%2F%2Fai-done HTTP/1.1\r\n\
+Host: 127.0.0.1\r\n\
+X-OmniLauncher-Token: test-token\r\n\
+Content-Length: 0\r\n\r\n",
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 404 Not Found"));
+        assert!(!response.contains("Content-Type: text/event-stream"));
     }
 
     // ── SelectionPayload tests ─────────────────────────────────────────

@@ -578,6 +578,86 @@ describe("window-local commands in HTTP mode bypass HTTP", () => {
   });
 });
 
+describe("AI event streams in HTTP mode", () => {
+  afterEach(cleanupGlobals);
+
+  it("subscribes ai-error through backend SSE with the current token", async () => {
+    let captured: { url: string; headers: Record<string, string> } | null = null;
+    (globalThis as any).window = {
+      __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+      __OMNILAUNCHER_TOKEN__: "current-token",
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    (globalThis as any).fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      captured = {
+        url: String(url),
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      };
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      );
+    });
+
+    const unlisten = await listen("omnilauncher://ai-error", () => {});
+    unlisten();
+    await vi.waitFor(() => expect(captured).not.toBeNull());
+
+    expect(captured!.url).toBe(
+      "http://test.local/api/events/omnilauncher%3A%2F%2Fai-error",
+    );
+    expect(captured!.headers.accept).toBe("text/event-stream");
+    expect(captured!.headers["x-omnilauncher-token"]).toBe("current-token");
+  });
+
+  it("dispatches backend ai-done SSE payloads to listeners", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    (globalThis as any).window = {
+      __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    (globalThis as any).fetch = vi.fn(async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          controller = c;
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    });
+
+    const received: unknown[] = [];
+    const unlisten = await listen("omnilauncher://ai-done", (event) => {
+      received.push(event.payload);
+    });
+
+    await vi.waitFor(() => expect(controller).toBeDefined());
+    controller.enqueue(
+      new TextEncoder().encode(
+        'data: {"content":"ok","tools_used":[],"results":[],"is_ai":true}\n\n',
+      ),
+    );
+
+    await vi.waitFor(() =>
+      expect(received).toEqual([
+        { content: "ok", tools_used: [], results: [], is_ai: true },
+      ]),
+    );
+    unlisten();
+  });
+});
+
 // ===========================================================================
 // 7b. Local Tauri events in HTTP mode
 // ===========================================================================
