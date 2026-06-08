@@ -55,6 +55,7 @@ let nextAiResponse: AiResponse = {
   is_ai: true,
 };
 const invokeCalls: Array<{ cmd: string; args?: Record<string, unknown> }> = [];
+let failNextSettingsSave = false;
 
 vi.mock("./lib/runtime", () => ({
   invoke: vi.fn(
@@ -112,6 +113,11 @@ vi.mock("./lib/runtime", () => ({
         case "ai_cancel":
           return undefined as T;
         case "save_settings_cmd":
+          if (failNextSettingsSave) {
+            failNextSettingsSave = false;
+            throw new Error("mock save failure");
+          }
+          return undefined as T;
         case "save_window_position":
         case "set_window_geometry":
         case "set_window_size_centered":
@@ -186,6 +192,7 @@ beforeEach(() => {
   favorites = [];
   searchResults = [];
   invokeCalls.length = 0;
+  failNextSettingsSave = false;
   nextAiResponse = {
     content: "default mock answer",
     tools_used: [],
@@ -269,6 +276,19 @@ describe("App — settings", () => {
     const savedLabels = await screen.findAllByText("✓ Saved");
     expect(savedLabels.length).toBeGreaterThan(0);
     expect(screen.getByText("Preferences")).toBeInTheDocument();
+  });
+
+  it("shows a save failed message when saving settings fails", async () => {
+    failNextSettingsSave = true;
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Open settings" }));
+    await screen.findByText("Preferences");
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    expect(await screen.findByText("✗ Save failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Settings" })).toBeEnabled();
   });
 });
 

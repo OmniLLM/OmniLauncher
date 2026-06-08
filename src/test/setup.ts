@@ -49,9 +49,30 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 // jsdom polyfills
 // ---------------------------------------------------------------------------
 
+if (typeof window !== "undefined") {
+  // Some Node/Vitest launches expose a partial localStorage object. Install the
+  // Storage methods the app uses so tests see normal browser behavior.
+  const localStorageData = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: vi.fn((key: string) => localStorageData.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        localStorageData.set(key, String(value));
+      }),
+      removeItem: vi.fn((key: string) => {
+        localStorageData.delete(key);
+      }),
+      clear: vi.fn(() => {
+        localStorageData.clear();
+      }),
+    },
+  });
+}
+
 // Several components call window.matchMedia for theme detection. jsdom
 // doesn't implement it; fake a permanent "doesn't match" response.
-if (!window.matchMedia) {
+if (typeof window !== "undefined" && !window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
     value: (query: string) => ({
@@ -79,7 +100,9 @@ if (!Element.prototype.scrollIntoView) {
 
 beforeEach(() => {
   // Don't let one test's localStorage state seep into the next.
-  localStorage.clear();
+  if (typeof window !== "undefined") {
+    window.localStorage.clear();
+  }
 });
 
 afterEach(() => {

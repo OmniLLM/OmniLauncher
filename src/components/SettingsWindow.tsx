@@ -34,6 +34,7 @@ const TABS = [
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
+type SaveStatus = "idle" | "success" | "error";
 
 interface Props {
   onClose?: () => void;
@@ -41,7 +42,7 @@ interface Props {
 
 export default function SettingsWindow({ onClose }: Props = {}) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("ai");
 
@@ -137,13 +138,15 @@ export default function SettingsWindow({ onClose }: Props = {}) {
 
   const handleSave = async () => {
     if (!settings) return;
+    setSaveStatus("idle");
     try {
       await invoke("save_settings_cmd", { settings });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setSaveStatus("success");
+      setTimeout(() => setSaveStatus("idle"), 2000);
       emit("omnilauncher://settings-saved", settings).catch(() => {});
     } catch (e) {
       console.error("Save error:", e);
+      setSaveStatus("error");
     }
   };
 
@@ -516,17 +519,22 @@ export default function SettingsWindow({ onClose }: Props = {}) {
               gap: 10,
             }}
           >
-            {saved && (
+            {saveStatus === "success" && (
               <span className="omni-status omni-status--success">✓ Saved</span>
+            )}
+            {saveStatus === "error" && (
+              <span className="omni-status omni-status--error">
+                ✗ Save failed
+              </span>
             )}
             <button
               type="button"
               className="omni-btn omni-btn--primary"
               onClick={handleSave}
-              disabled={saved}
-              aria-disabled={saved}
+              disabled={saveStatus === "success"}
+              aria-disabled={saveStatus === "success"}
             >
-              {saved ? "✓ Saved" : "Save Settings"}
+              {saveStatus === "success" ? "✓ Saved" : "Save Settings"}
             </button>
           </div>
         </div>
