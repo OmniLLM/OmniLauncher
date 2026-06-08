@@ -39,7 +39,7 @@ async function resolveServerToken(): Promise<string> {
     if (typeof injected === "string") {
       return injected;
     }
-    if ((window as any).__TAURI_INTERNALS__) {
+    if (isTauriRuntime()) {
       return tauriInvoke<string>("get_server_token").catch(() => "");
     }
   }
@@ -54,6 +54,11 @@ const WINDOW_LOCAL_COMMANDS = new Set<string>([
   "save_window_position",
   "capture_vision_screenshot",
 ]);
+
+/// Commands that have authoritative native implementations in the desktop shell.
+/// Prefer local Tauri for these when available so desktop settings saves do not
+/// depend on a reachable HTTP backend.
+const TAURI_NATIVE_COMMANDS = new Set<string>(["save_settings_cmd"]);
 
 export function isWindowLocalCommand(cmd: string): boolean {
   return WINDOW_LOCAL_COMMANDS.has(cmd);
@@ -272,6 +277,11 @@ export async function invoke<T = unknown>(
   // owns a window. They bypass HTTP routing entirely.
   if (isWindowLocalCommand(cmd) && isTauriRuntime()) {
     frontendLog("debug", `invoke ${cmd} routed to local Tauri command`);
+    return tauriInvoke<T>(cmd, args);
+  }
+
+  if (TAURI_NATIVE_COMMANDS.has(cmd) && isTauriRuntime()) {
+    frontendLog("debug", `invoke ${cmd} routed to native Tauri command`);
     return tauriInvoke<T>(cmd, args);
   }
 

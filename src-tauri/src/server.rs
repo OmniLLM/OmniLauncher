@@ -11,7 +11,9 @@ use crate::{
     launcher_config::LauncherConfig,
     live_server::LiveResponse,
     plugins::QueryResult,
-    save_settings, AppSettings, SkillManager,
+    save_settings,
+    settings::resolve_backend_auth_token,
+    AppSettings, SkillManager,
 };
 
 #[derive(Clone)]
@@ -433,8 +435,17 @@ async fn handle_request(
     // OPTIONS (CORS preflight) and /health are exempt; everything else requires
     // the per-launch token in X-OmniLauncher-Token.
     if method != "OPTIONS" && path != "/health" {
+        let expected_token = {
+            let settings = state.settings.lock().await;
+            let resolved = resolve_backend_auth_token(&settings);
+            if resolved.is_empty() {
+                state.auth_token.as_str().to_string()
+            } else {
+                resolved
+            }
+        };
         match extract_auth_header(request) {
-            Some(tok) if tok == state.auth_token.as_str() => {}
+            Some(tok) if tok == expected_token => {}
             _ => {
                 return LiveResponse::text(
                     "401 Unauthorized",
@@ -1173,6 +1184,75 @@ mod tests {
         let response = json_response(&items);
         assert!(response.body.contains("["));
         assert!(response.body.contains("\"a\""));
+    }
+
+    #[tokio::test]
+    async fn handle_request_accepts_token_resolved_from_current_settings() {
+        let previous_env = std::env::var("OMNILAUNCHER_AUTH_TOKEN").ok();
+        std::env::remove_var("OMNILAUNCHER_AUTH_TOKEN");
+
+        let mut settings = AppSettings::default();
+        settings.backend_token = "current-settings-token".to_string();
+        let state = ServerState {
+            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
+            ai_client: Arc::new(Mutex::new(AiClient::new(
+                settings.ai_base_url.clone(),
+                settings.resolve_ai_api_key(),
+                settings.ai_model.clone(),
+            ))),
+            settings: Arc::new(Mutex::new(settings)),
+            conversation: Arc::new(Mutex::new(ConversationContext::default())),
+            ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
+            current_ai_task: Arc::new(Mutex::new(None)),
+            skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+            event_bus: EventBus::default(),
+            latest_selection: Arc::new(Mutex::new(None)),
+            auth_token: Arc::new("stale-startup-token".to_string()),
+        };
+        let request =
+            "GET /api/settings HTTP/1.1\r\nX-OmniLauncher-Token: current-settings-token\r\n\r\n";
+
+        let response = handle_request(&state, "GET", "/api/settings", "", request).await;
+
+        if let Some(token) = previous_env {
+            std::env::set_var("OMNILAUNCHER_AUTH_TOKEN", token);
+        }
+        assert_eq!(response.status, "200 OK");
+        assert!(response.body.contains("current-settings-token"));
+    }
+
+    #[tokio::test]
+    async fn handle_request_rejects_mismatched_settings_token() {
+        let previous_env = std::env::var("OMNILAUNCHER_AUTH_TOKEN").ok();
+        std::env::remove_var("OMNILAUNCHER_AUTH_TOKEN");
+
+        let mut settings = AppSettings::default();
+        settings.backend_token = "current-settings-token".to_string();
+        let state = ServerState {
+            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
+            ai_client: Arc::new(Mutex::new(AiClient::new(
+                settings.ai_base_url.clone(),
+                settings.resolve_ai_api_key(),
+                settings.ai_model.clone(),
+            ))),
+            settings: Arc::new(Mutex::new(settings)),
+            conversation: Arc::new(Mutex::new(ConversationContext::default())),
+            ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
+            current_ai_task: Arc::new(Mutex::new(None)),
+            skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+            event_bus: EventBus::default(),
+            latest_selection: Arc::new(Mutex::new(None)),
+            auth_token: Arc::new("stale-startup-token".to_string()),
+        };
+        let request =
+            "GET /api/settings HTTP/1.1\r\nX-OmniLauncher-Token: stale-startup-token\r\n\r\n";
+
+        let response = handle_request(&state, "GET", "/api/settings", "", request).await;
+
+        if let Some(token) = previous_env {
+            std::env::set_var("OMNILAUNCHER_AUTH_TOKEN", token);
+        }
+        assert_eq!(response.status, "401 Unauthorized");
     }
 
     // ── EventBus tests ─────────────────────────────────────────────────
