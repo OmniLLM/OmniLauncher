@@ -139,9 +139,9 @@ export default function SettingsWindow({ onClose }: Props = {}) {
     if (!settings) return;
     try {
       await invoke("save_settings_cmd", { settings });
-      await emit("omnilauncher://settings-saved", settings);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+      emit("omnilauncher://settings-saved", settings).catch(() => {});
     } catch (e) {
       console.error("Save error:", e);
     }
