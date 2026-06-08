@@ -1388,7 +1388,7 @@ mod tests {
             "ai_api_key":"key",
             "ai_timeout_secs":300,
             "theme":"dark",
-            "hotkey":"Alt+Space",
+            "hotkey":"Ctrl+Shift+O",
             "max_results":10,
             "background_url":""
         }"#;

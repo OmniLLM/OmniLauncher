@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use omnilauncher_lib::{
     ai::{
         client::AiClient,
@@ -367,7 +369,7 @@ pub fn run() {
         live_server_port,
     };
 
-    // Parse the configured hotkey from settings (default "Alt+Space"). On parse
+    // Parse the configured hotkey from settings (default "Ctrl+Shift+O"). On parse
     // failure we log + fall back to Ctrl+Shift+O so the launcher is always
     // reachable.
     let settings_for_hotkey = omnilauncher_lib::settings::load_settings();
@@ -1873,9 +1875,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_shortcut_accepts_default_alt_space() {
+    fn parse_shortcut_accepts_default_ctrl_shift_o() {
         // The default shipped in settings.rs MUST parse without falling back.
-        assert!(parse_shortcut("Alt+Space").is_some());
+        assert!(parse_shortcut("Ctrl+Shift+O").is_some());
     }
 
     #[test]

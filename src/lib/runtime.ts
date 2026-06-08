@@ -64,13 +64,14 @@ export function isWindowLocalCommand(cmd: string): boolean {
   return WINDOW_LOCAL_COMMANDS.has(cmd);
 }
 
-/// Events emitted by the local Tauri process (window/hotkey/selection origin).
+/// Events emitted by the local Tauri process (window/hotkey/selection/settings origin).
 /// In the desktop shell these must use `tauriListen`; everything else
-/// (ai-done, ai-error, ai-tool-call, plugin-runtime-progress, settings-saved)
+/// (ai-done, ai-error, ai-tool-call, plugin-runtime-progress)
 /// originates on the remote backend and arrives over the SSE event stream.
 const WINDOW_LOCAL_EVENTS = new Set<string>([
   "omnilauncher://shown",
   "omnilauncher://selection",
+  "omnilauncher://settings-saved",
 ]);
 
 /// Resolve the backend base URL lazily (read at call time, not module load) so
@@ -479,7 +480,7 @@ export async function invoke<T = unknown>(
       ai_model: "gpt-4",
       ai_timeout_secs: 120,
       theme: "system",
-      hotkey: "Alt+Space",
+      hotkey: "Ctrl+Shift+O",
       max_results: 10,
       background_url: "",
     } as T;

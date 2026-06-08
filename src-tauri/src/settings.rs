@@ -179,7 +179,7 @@ impl Default for AppSettings {
             ai_api_key: String::new(),
             ai_timeout_secs: default_ai_timeout_secs(),
             theme: "system".to_string(),
-            hotkey: "Alt+Space".to_string(),
+            hotkey: "Ctrl+Shift+O".to_string(),
             max_results: 10,
             background_url: String::new(),
             plugin_dirs: vec![],
@@ -504,7 +504,7 @@ mod settings_tests {
     fn test_default_settings_values() {
         let s = AppSettings::default();
         assert_eq!(s.theme, "system");
-        assert_eq!(s.hotkey, "Alt+Space");
+        assert_eq!(s.hotkey, "Ctrl+Shift+O");
         assert_eq!(s.max_results, 10);
         assert_eq!(s.ai_timeout_secs, 120);
     }
@@ -516,7 +516,7 @@ mod settings_tests {
             "ai_model": "auto",
             "ai_api_key": "",
             "theme": "system",
-            "hotkey": "Alt+Space",
+            "hotkey": "Ctrl+Shift+O",
             "max_results": 10,
             "background_url": ""
         }"#;
@@ -532,7 +532,7 @@ mod settings_tests {
             "ai_api_key": "",
             "ai_timeout_secs": 300,
             "theme": "system",
-            "hotkey": "Alt+Space",
+            "hotkey": "Ctrl+Shift+O",
             "max_results": 10,
             "background_url": ""
         }"#;

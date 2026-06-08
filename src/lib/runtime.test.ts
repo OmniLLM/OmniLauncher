@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen as tauriListen } from "@tauri-apps/api/event";
+import mainRsSource from "../../src-tauri/src/main.rs?raw";
 import { isWindowLocalCommand, invoke, getBackendMode, listen, emit } from "./runtime";
 
 // ---------------------------------------------------------------------------
@@ -573,6 +575,46 @@ describe("window-local commands in HTTP mode bypass HTTP", () => {
     // Without Tauri, these go through the HTTP switch and return Promise.resolve(true)
     const result = await invoke("set_window_geometry");
     expect(result).toBe(true);
+  });
+});
+
+// ===========================================================================
+// 7b. Local Tauri events in HTTP mode
+// ===========================================================================
+
+describe("local Tauri events in HTTP mode", () => {
+  afterEach(cleanupGlobals);
+
+  it("listens for settings-saved on the local Tauri bus instead of opening backend SSE", async () => {
+    (globalThis as any).window = {
+      __TAURI_INTERNALS__: {},
+      __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("settings-saved must not use backend SSE");
+    });
+    (globalThis as any).fetch = fetchSpy;
+
+    const unlisten = await listen("omnilauncher://settings-saved", () => {});
+    unlisten();
+
+    expect(tauriListen).toHaveBeenCalledWith(
+      "omnilauncher://settings-saved",
+      expect.any(Function),
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// 7c. Windows release shell configuration
+// ===========================================================================
+
+describe("Windows release shell configuration", () => {
+  it("declares the Windows subsystem so the frontend does not open a console window", () => {
+    expect(mainRsSource).toContain("cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")");
   });
 });
 

@@ -29,7 +29,7 @@ make start
 ```
 
 > [!TIP]
-> Press **Alt+Space** to open the launcher, **Ctrl+,** to open Settings, and **Esc** to close.
+> Press **Ctrl+Shift+O** to open the launcher, **Ctrl+,** to open Settings, and **Esc** to close.
 
 ### Backend Token
 

@@ -76,7 +76,7 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           ai_api_key: "",
           ai_timeout_secs: 120,
           theme: "system",
-          hotkey: "Alt+Space",
+          hotkey: "Ctrl+Shift+O",
           max_results: 10,
           background_url: "",
           backend_url: "",
