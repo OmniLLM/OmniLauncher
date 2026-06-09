@@ -60,6 +60,10 @@ const WINDOW_LOCAL_COMMANDS = new Set<string>([
 /// Prefer local Tauri for these when available so desktop settings saves do not
 /// depend on a reachable HTTP backend.
 const TAURI_NATIVE_COMMANDS = new Set<string>(["save_settings_cmd"]);
+const SETTINGS_SYNC_COMMANDS = new Set<string>([
+  "save_settings_cmd",
+  "set_hotkey_cmd",
+]);
 
 function isNativeCommand(cmd: string): boolean {
   return WINDOW_LOCAL_COMMANDS.has(cmd) || TAURI_NATIVE_COMMANDS.has(cmd);
@@ -278,6 +282,24 @@ export async function invoke<T = unknown>(
 ): Promise<T> {
   const mode = getBackendMode();
   frontendLog("debug", `invoke ${cmd} mode=${mode} args=${summarizeArgs(args)}`);
+
+  // Settings are split-brain sensitive in the desktop shell: Tauri owns OS-side
+  // effects (global hotkey registration, local settings file), while the
+  // separated backend is what the UI reads in HTTP mode. Sync to both so a
+  // successful desktop save is immediately visible through backend reads.
+  if (mode === "http" && isTauriRuntime() && SETTINGS_SYNC_COMMANDS.has(cmd)) {
+    frontendLog("debug", `invoke ${cmd} syncing to local Tauri and backend`);
+    const nativeResult = await tauriInvoke<T>(cmd, args);
+    const settingsPayload =
+      nativeResult && typeof nativeResult === "object" && !Array.isArray(nativeResult)
+        ? nativeResult
+        : (args?.settings ?? {});
+    await httpJson("/api/settings", {
+      method: "POST",
+      body: JSON.stringify(settingsPayload),
+    });
+    return nativeResult;
+  }
 
   // Window/OS-shell commands and authoritative native commands always run in
   // the local Tauri process when available. The separated HTTP backend cannot
