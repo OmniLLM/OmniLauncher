@@ -281,12 +281,12 @@ export async function invoke<T = unknown>(
     return tauriInvoke<T>(cmd, args);
   }
 
-  if (TAURI_NATIVE_COMMANDS.has(cmd) && isTauriRuntime()) {
+  if (TAURI_NATIVE_COMMANDS.has(cmd) && mode === "tauri") {
     frontendLog("debug", `invoke ${cmd} routed to native Tauri command`);
     return tauriInvoke<T>(cmd, args);
   }
 
-  if (httpMode()) {
+  if (mode === "http") {
     switch (cmd) {
       case "search":
         return httpJson<T>("/api/search", {

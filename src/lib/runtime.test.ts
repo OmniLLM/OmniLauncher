@@ -238,15 +238,28 @@ describe("http routing for new endpoints", () => {
     expect(JSON.parse(call!.body!)).toEqual(settings);
   });
 
-  it("routes save_settings_cmd to native Tauri in the desktop shell", async () => {
+  it("routes save_settings_cmd through HTTP in the desktop shell when a backend URL is configured", async () => {
+    const state = mockBackend();
+    const settings = { ai_base_url: "http://example.com", ai_model: "gpt-4", ai_timeout_secs: 300 };
+    (globalThis as any).window.__TAURI_INTERNALS__ = {};
+
+    await invoke("save_settings_cmd", { settings });
+
+    const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
+    expect(call).toBeDefined();
+    expect(JSON.parse(call!.body!)).toEqual(settings);
+    expect(tauriInvoke).not.toHaveBeenCalledWith("save_settings_cmd", { settings });
+  });
+
+  it("routes save_settings_cmd to native Tauri when no backend URL is configured", async () => {
     const settings = { ai_base_url: "http://example.com", ai_model: "gpt-4", ai_timeout_secs: 300 };
     (globalThis as any).window = {
       __TAURI_INTERNALS__: {},
-      __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
     };
     (globalThis as any).fetch = vi.fn(async () => {
       throw new Error("fetch should not be called for native settings saves");
     });
+
     await expect(invoke("save_settings_cmd", { settings })).resolves.toBeUndefined();
 
     expect(tauriInvoke).toHaveBeenCalledWith("save_settings_cmd", { settings });
