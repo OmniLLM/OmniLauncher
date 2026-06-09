@@ -53,12 +53,17 @@ const WINDOW_LOCAL_COMMANDS = new Set<string>([
   "set_window_size_centered",
   "save_window_position",
   "capture_vision_screenshot",
+  "set_hotkey_cmd",
 ]);
 
 /// Commands that have authoritative native implementations in the desktop shell.
 /// Prefer local Tauri for these when available so desktop settings saves do not
 /// depend on a reachable HTTP backend.
 const TAURI_NATIVE_COMMANDS = new Set<string>(["save_settings_cmd"]);
+
+function isNativeCommand(cmd: string): boolean {
+  return WINDOW_LOCAL_COMMANDS.has(cmd) || TAURI_NATIVE_COMMANDS.has(cmd);
+}
 
 export function isWindowLocalCommand(cmd: string): boolean {
   return WINDOW_LOCAL_COMMANDS.has(cmd);
@@ -274,15 +279,11 @@ export async function invoke<T = unknown>(
   const mode = getBackendMode();
   frontendLog("debug", `invoke ${cmd} mode=${mode} args=${summarizeArgs(args)}`);
 
-  // Window/OS-shell commands always run in the local Tauri process — only it
-  // owns a window. They bypass HTTP routing entirely.
-  if (isWindowLocalCommand(cmd) && isTauriRuntime()) {
+  // Window/OS-shell commands and authoritative native commands always run in
+  // the local Tauri process when available. The separated HTTP backend cannot
+  // own OS window state or live global shortcut registration.
+  if (isNativeCommand(cmd) && isTauriRuntime()) {
     frontendLog("debug", `invoke ${cmd} routed to local Tauri command`);
-    return tauriInvoke<T>(cmd, args);
-  }
-
-  if (TAURI_NATIVE_COMMANDS.has(cmd) && mode === "tauri") {
-    frontendLog("debug", `invoke ${cmd} routed to native Tauri command`);
     return tauriInvoke<T>(cmd, args);
   }
 
@@ -479,11 +480,29 @@ export async function invoke<T = unknown>(
       ai_api_key: "",
       ai_model: "gpt-4",
       ai_timeout_secs: 120,
+      ai_max_tool_iterations: 10,
       theme: "system",
       hotkey: "Ctrl+Shift+O",
       max_results: 10,
       background_url: "",
+      backend_url: "",
+      backend_token: "",
     } as T;
+  }
+  if (cmd === "list_favorites") {
+    return [] as T;
+  }
+  if (cmd === "current_ai_session") {
+    return 0 as T;
+  }
+  if (cmd === "switch_ai_session") {
+    return [] as T;
+  }
+  if (cmd === "set_hotkey_cmd") {
+    return (args?.settings ?? {}) as T;
+  }
+  if (cmd === "save_settings_cmd") {
+    return true as T;
   }
   return {} as T;
 }

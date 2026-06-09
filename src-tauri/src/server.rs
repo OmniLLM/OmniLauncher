@@ -92,6 +92,8 @@ struct SaveSettingsRequest {
     ai_api_key: String,
     #[serde(default = "crate::settings::default_ai_timeout_secs")]
     ai_timeout_secs: u64,
+    #[serde(default = "crate::settings::default_ai_max_tool_iterations")]
+    ai_max_tool_iterations: usize,
     theme: String,
     hotkey: String,
     max_results: usize,
@@ -509,6 +511,7 @@ async fn handle_request(
                         ai_model: input.ai_model,
                         ai_api_key: input.ai_api_key,
                         ai_timeout_secs: input.ai_timeout_secs,
+                        ai_max_tool_iterations: input.ai_max_tool_iterations,
                         theme: input.theme,
                         hotkey: input.hotkey,
                         max_results: input.max_results,
@@ -529,6 +532,10 @@ async fn handle_request(
                             updated.ai_model.clone(),
                             updated.ai_timeout_secs,
                         );
+                    }
+                    {
+                        let mut conversation = state.conversation.lock().await;
+                        conversation.max_turns = updated.ai_max_tool_iterations;
                     }
                     let ok = save_settings(&updated);
                     if ok {
@@ -1527,6 +1534,7 @@ Content-Length: 0\r\n\r\n",
             "ai_model":"gpt-4",
             "ai_api_key":"key",
             "ai_timeout_secs":300,
+            "ai_max_tool_iterations":25,
             "theme":"dark",
             "hotkey":"Ctrl+Shift+O",
             "max_results":10,
@@ -1536,6 +1544,7 @@ Content-Length: 0\r\n\r\n",
         assert_eq!(req.ai_base_url, "http://localhost:11434");
         assert_eq!(req.ai_model, "gpt-4");
         assert_eq!(req.ai_timeout_secs, 300);
+        assert_eq!(req.ai_max_tool_iterations, 25);
         assert_eq!(req.theme, "dark");
         assert_eq!(req.max_results, 10);
     }
@@ -2058,6 +2067,7 @@ pub async fn ai_query_backend(query: String, state: ServerState) -> Result<(), S
     let conversation = state.conversation.clone();
     let skill_mgr = state.skill_manager.clone();
     let event_bus = state.event_bus.clone();
+    let max_tool_iterations = state.settings.lock().await.ai_max_tool_iterations;
 
     let handle = tauri::async_runtime::spawn(async move {
         let _permit = permit;
@@ -2088,6 +2098,7 @@ pub async fn ai_query_backend(query: String, state: ServerState) -> Result<(), S
                 &ctx,
                 &mut skill_lock,
                 Some(progress_tx),
+                max_tool_iterations,
             )
             .await
         });

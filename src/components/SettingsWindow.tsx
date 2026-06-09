@@ -36,6 +36,40 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 type SaveStatus = "idle" | "success" | "error";
 
+const MODIFIER_KEYS = new Set([
+  "Alt",
+  "AltGraph",
+  "Control",
+  "Meta",
+  "Shift",
+]);
+
+function formatHotkeyEvent(
+  event: Pick<
+    KeyboardEvent,
+    "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey"
+  >,
+): string | null {
+  if (!event.key || MODIFIER_KEYS.has(event.key)) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.altKey) parts.push("Alt");
+  if (event.metaKey) parts.push("Cmd");
+
+  const key =
+    event.key === " "
+      ? "Space"
+      : event.key.length === 1
+        ? event.key.toUpperCase()
+        : event.key;
+  parts.push(key);
+  return parts.join("+");
+}
+
 interface Props {
   onClose?: () => void;
 }
@@ -43,6 +77,9 @@ interface Props {
 export default function SettingsWindow({ onClose }: Props = {}) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [hotkeyStatus, setHotkeyStatus] = useState<SaveStatus>("idle");
+  const [hotkeyError, setHotkeyError] = useState("");
+  const [capturingHotkey, setCapturingHotkey] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("ai");
 
@@ -75,6 +112,7 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           ai_model: "auto",
           ai_api_key: "",
           ai_timeout_secs: 120,
+          ai_max_tool_iterations: 10,
           theme: "system",
           hotkey: "Ctrl+Shift+O",
           max_results: 10,
@@ -147,6 +185,44 @@ export default function SettingsWindow({ onClose }: Props = {}) {
     } catch (e) {
       console.error("Save error:", e);
       setSaveStatus("error");
+    }
+  };
+
+  const handleHotkeyCapture = async (event: React.KeyboardEvent) => {
+    if (!settings || !capturingHotkey) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.key === "Escape") {
+      setCapturingHotkey(false);
+      setHotkeyError("");
+      setHotkeyStatus("idle");
+      return;
+    }
+
+    const hotkey = formatHotkeyEvent(event.nativeEvent);
+    if (!hotkey) return;
+
+    const previousHotkey = settings.hotkey;
+    const nextSettings = { ...settings, hotkey };
+    setSettings(nextSettings);
+    setCapturingHotkey(false);
+    setHotkeyStatus("idle");
+    setHotkeyError("");
+
+    try {
+      const savedSettings = await invoke<AppSettings>("set_hotkey_cmd", {
+        settings: nextSettings,
+      });
+      setSettings(savedSettings);
+      setHotkeyStatus("success");
+      emit("omnilauncher://settings-saved", savedSettings).catch(() => {});
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("Hotkey save error:", e);
+      setSettings((s) => (s ? { ...s, hotkey: previousHotkey } : s));
+      setHotkeyError(message || "Failed to register hotkey");
+      setHotkeyStatus("error");
     }
   };
 
@@ -302,6 +378,27 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       title="AI request timeout in seconds"
                     />
                   </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Tool Iterations</span>
+                    <input
+                      className="omni-input"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={settings.ai_max_tool_iterations}
+                      onChange={(e) =>
+                        setSettings(
+                          (s) =>
+                            s && {
+                              ...s,
+                              ai_max_tool_iterations:
+                                parseInt(e.target.value) || 10,
+                            },
+                        )
+                      }
+                      title="Maximum AI tool-call iterations before stopping"
+                    />
+                  </div>
                   <div
                     ref={dropdownRef}
                     style={{ ...rowStyle(true), position: "relative" }}
@@ -442,16 +539,43 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                 <div className="settings-card">
                   <div style={rowStyle()}>
                     <span style={rowLabelStyle}>Hotkey</span>
-                    <div
+                    <button
+                      type="button"
                       className="omni-input"
+                      onClick={() => {
+                        setCapturingHotkey(true);
+                        setHotkeyError("");
+                        setHotkeyStatus("idle");
+                      }}
+                      onBlur={() => setCapturingHotkey(false)}
+                      onKeyDown={handleHotkeyCapture}
                       style={{
-                        color: "var(--sub)",
-                        cursor: "default",
+                        color: capturingHotkey ? "var(--accent)" : "var(--text)",
+                        cursor: "pointer",
+                        textAlign: "left",
                         userSelect: "none",
                       }}
+                      aria-label="Edit hotkey"
                     >
-                      {settings.hotkey}
-                    </div>
+                      {capturingHotkey ? "Press new hotkey…" : settings.hotkey}
+                    </button>
+                    {hotkeyStatus === "success" && (
+                      <span
+                        className="omni-status omni-status--success"
+                        style={{ gridColumn: "2" }}
+                      >
+                        ✓ Hotkey saved
+                      </span>
+                    )}
+                    {hotkeyStatus === "error" && (
+                      <span
+                        className="omni-status omni-status--error"
+                        style={{ gridColumn: "2" }}
+                        title={hotkeyError}
+                      >
+                        ✗ {hotkeyError || "Hotkey failed"}
+                      </span>
+                    )}
                   </div>
                   <div style={rowStyle(true)}>
                     <span style={rowLabelStyle}>Max Results</span>

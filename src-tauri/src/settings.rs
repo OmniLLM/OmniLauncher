@@ -73,6 +73,10 @@ pub fn default_ai_timeout_secs() -> u64 {
     120
 }
 
+pub fn default_ai_max_tool_iterations() -> usize {
+    10
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub ai_base_url: String,
@@ -80,6 +84,8 @@ pub struct AppSettings {
     pub ai_api_key: String,
     #[serde(default = "default_ai_timeout_secs")]
     pub ai_timeout_secs: u64,
+    #[serde(default = "default_ai_max_tool_iterations")]
+    pub ai_max_tool_iterations: usize,
     pub theme: String,
     pub hotkey: String,
     pub max_results: usize,
@@ -178,6 +184,7 @@ impl Default for AppSettings {
             ai_model: "auto".to_string(),
             ai_api_key: String::new(),
             ai_timeout_secs: default_ai_timeout_secs(),
+            ai_max_tool_iterations: default_ai_max_tool_iterations(),
             theme: "system".to_string(),
             hotkey: "Ctrl+Shift+O".to_string(),
             max_results: 10,
@@ -507,6 +514,7 @@ mod settings_tests {
         assert_eq!(s.hotkey, "Ctrl+Shift+O");
         assert_eq!(s.max_results, 10);
         assert_eq!(s.ai_timeout_secs, 120);
+        assert_eq!(s.ai_max_tool_iterations, 10);
     }
 
     #[test]
@@ -522,6 +530,7 @@ mod settings_tests {
         }"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.ai_timeout_secs, 120);
+        assert_eq!(s.ai_max_tool_iterations, 10);
     }
 
     #[test]
@@ -538,5 +547,22 @@ mod settings_tests {
         }"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.ai_timeout_secs, 300);
+    }
+
+    #[test]
+    fn test_preserves_custom_ai_max_tool_iterations() {
+        let json = r#"{
+            "ai_base_url": "http://localhost:5000",
+            "ai_model": "auto",
+            "ai_api_key": "",
+            "ai_timeout_secs": 300,
+            "ai_max_tool_iterations": 25,
+            "theme": "system",
+            "hotkey": "Ctrl+Shift+O",
+            "max_results": 10,
+            "background_url": ""
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.ai_max_tool_iterations, 25);
     }
 }

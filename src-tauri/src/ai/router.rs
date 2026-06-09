@@ -206,6 +206,7 @@ impl Router {
                     context,
                     skill_manager,
                     progress_tx,
+                    context.max_turns,
                 )
                 .await
             }
@@ -219,6 +220,7 @@ impl Router {
         context: &ConversationContext,
         skill_manager: &mut SkillManager,
         progress_tx: Option<tokio::sync::mpsc::Sender<String>>,
+        max_tool_iterations: usize,
     ) -> AiResponse {
         let mut tools = plugin_manager.all_tool_schemas();
 
@@ -428,8 +430,10 @@ impl Router {
 
         inject_skill(&mut messages);
 
-        // Agentic loop: up to MAX_AGENT_ITERATIONS (10) iterations
-        const MAX_AGENT_ITERATIONS: usize = 10;
+        // Agentic loop: up to configured tool iterations. Clamp the persisted
+        // value so a bad settings file cannot disable the guard or create an
+        // unbounded loop.
+        let max_agent_iterations = max_tool_iterations.clamp(1, 100);
         let mut all_tools_used: Vec<String> = vec![];
         let mut loop_messages = messages.clone();
         let mut final_content = String::new();
@@ -445,7 +449,7 @@ impl Router {
         let mut continuation_nudges: usize = 0;
         const MAX_CONTINUATION_NUDGES: usize = 3;
 
-        for _iteration in 0..MAX_AGENT_ITERATIONS {
+        for _iteration in 0..max_agent_iterations {
             // ── Context compression (sliding window) ──────────────────────────
             local_ctx.compress_if_needed();
             // Rebuild loop_messages to reflect any compression that occurred.

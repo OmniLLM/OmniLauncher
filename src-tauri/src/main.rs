@@ -20,7 +20,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, LogicalPosition, LogicalSize, Manager, Position, Size,
 };
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tokio::sync::{Mutex, Semaphore};
 
 fn window_pos_path() -> std::path::PathBuf {
@@ -208,6 +208,7 @@ pub struct AppState {
     pub skill_manager: Arc<Mutex<SkillManager>>,
     pub live_server: LiveServer,
     pub live_server_port: u16,
+    pub active_shortcut: Arc<Mutex<Option<Shortcut>>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -314,6 +315,62 @@ fn parse_key_code(token: &str) -> Option<Code> {
     }
 }
 
+fn toggle_launcher_window<R: tauri::Runtime>(shortcut_window: &tauri::WebviewWindow<R>) {
+    log::trace!("Global shortcut pressed; toggling main window visibility");
+    // FIX (Windows): a *minimized* window still reports
+    // `is_visible() == true`, and `show()` does NOT restore
+    // a minimized window. Treat "minimized" as not-visible
+    // so the toggle restores the UI instead of only the
+    // taskbar icon.
+    let shown = shortcut_window.is_visible().unwrap_or(false)
+        && !shortcut_window.is_minimized().unwrap_or(false);
+    if shown {
+        let _ = shortcut_window.hide();
+        return;
+    }
+    // FIX: previously this called `foreground_is_ours()`
+    // (synchronous PowerShell on Windows) and a blocking
+    // X11 selection read directly on the global-hotkey
+    // dispatcher thread, freezing the GUI for ~200-500ms
+    // on every press. Move the capture work off-thread
+    // and show the window immediately so the launcher
+    // appears instantly; the selection is delivered as a
+    // follow-up event when ready.
+    let _ = shortcut_window.unminimize();
+    let _ = shortcut_window.show();
+    let _ = shortcut_window.set_focus();
+    let _ = shortcut_window.emit("omnilauncher://shown", String::new());
+
+    let win_for_selection = shortcut_window.clone();
+    std::thread::spawn(move || {
+        let cfg = omnilauncher_lib::settings::load_settings();
+        if !cfg.capture_selection_on_open {
+            return;
+        }
+        if foreground_is_ours() {
+            return;
+        }
+        let selection = omnilauncher_lib::plugins::selection::read_x11_selection().unwrap_or_default();
+        if !selection.is_empty() {
+            let _ = win_for_selection.emit("omnilauncher://selection", selection);
+        }
+    });
+}
+
+fn register_launcher_shortcut<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
+    shortcut: Shortcut,
+) -> Result<(), String> {
+    app.global_shortcut()
+        .on_shortcut(shortcut, move |_app, _shortcut, event| {
+            if let ShortcutState::Pressed = event.state() {
+                toggle_launcher_window(&window);
+            }
+        })
+        .map_err(|err| err.to_string())
+}
+
 pub fn run() {
     log::info!("Starting OmniLauncher runtime");
     let settings = load_settings();
@@ -323,6 +380,8 @@ pub fn run() {
         settings.ai_model,
         settings.max_results
     );
+
+    let ai_max_tool_iterations = settings.ai_max_tool_iterations;
 
     let ai_client = AiClient::with_timeout(
         settings.ai_base_url.clone(),
@@ -359,6 +418,7 @@ pub fn run() {
             // Re-hydrate from SQLite so follow-up questions survive restarts.
             let sid = omnilauncher_lib::db::conversation::current_session_id();
             ctx.session_id = sid;
+            ctx.max_turns = ai_max_tool_iterations;
             ctx.messages = omnilauncher_lib::db::conversation::load_recent_for_session(sid, 20);
             ctx
         })),
@@ -367,6 +427,7 @@ pub fn run() {
         skill_manager: Arc::new(Mutex::new(skill_manager)),
         live_server,
         live_server_port,
+        active_shortcut: Arc::new(Mutex::new(None)),
     };
 
     // Parse the configured hotkey from settings (default "Ctrl+Shift+O"). On parse
@@ -502,59 +563,11 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            let global_shortcut = app.global_shortcut();
-
             // FIX: surface registration failures to the frontend so the user
             // sees a banner instead of a silently-dead hotkey. We still allow
             // the app to start (the tray click is a working fallback).
             let shortcut_window = window.clone();
-            let register_result =
-                global_shortcut.on_shortcut(shortcut, move |_app, _shortcut, event| {
-                    if let tauri_plugin_global_shortcut::ShortcutState::Pressed = event.state() {
-                        log::trace!("Global shortcut pressed; toggling main window visibility");
-                        // FIX (Windows): a *minimized* window still reports
-                        // `is_visible() == true`, and `show()` does NOT restore
-                        // a minimized window. Treat "minimized" as not-visible
-                        // so the toggle restores the UI instead of only the
-                        // taskbar icon.
-                        let shown = shortcut_window.is_visible().unwrap_or(false)
-                            && !shortcut_window.is_minimized().unwrap_or(false);
-                        if shown {
-                            let _ = shortcut_window.hide();
-                            return;
-                        }
-                        // FIX: previously this called `foreground_is_ours()`
-                        // (synchronous PowerShell on Windows) and a blocking
-                        // X11 selection read directly on the global-hotkey
-                        // dispatcher thread, freezing the GUI for ~200-500ms
-                        // on every press. Move the capture work off-thread
-                        // and show the window immediately so the launcher
-                        // appears instantly; the selection is delivered as a
-                        // follow-up event when ready.
-                        let _ = shortcut_window.unminimize();
-                        let _ = shortcut_window.show();
-                        let _ = shortcut_window.set_focus();
-                        let _ = shortcut_window.emit("omnilauncher://shown", String::new());
-
-                        let win_for_selection = shortcut_window.clone();
-                        std::thread::spawn(move || {
-                            let cfg = omnilauncher_lib::settings::load_settings();
-                            if !cfg.capture_selection_on_open {
-                                return;
-                            }
-                            if foreground_is_ours() {
-                                return;
-                            }
-                            let selection =
-                                omnilauncher_lib::plugins::selection::read_x11_selection()
-                                    .unwrap_or_default();
-                            if !selection.is_empty() {
-                                let _ =
-                                    win_for_selection.emit("omnilauncher://selection", selection);
-                            }
-                        });
-                    }
-                });
+            let register_result = register_launcher_shortcut(app.handle(), shortcut_window, shortcut);
 
             if let Err(err) = register_result {
                 log::warn!("Failed to register global shortcut: {err}");
@@ -562,8 +575,10 @@ pub fn run() {
                 // Emit on the main window so the UI can surface a toast.
                 let _ = window.emit(
                     "omnilauncher://hotkey-error",
-                    format!("Failed to register Ctrl+Shift+O: {err}"),
+                    format!("Failed to register {}: {err}", settings_for_hotkey.hotkey),
                 );
+            } else {
+                *app.state::<AppState>().active_shortcut.blocking_lock() = Some(shortcut);
             }
 
             Ok(())
@@ -580,6 +595,7 @@ pub fn run() {
             add_favorite,
             remove_favorite,
             save_settings_cmd,
+            set_hotkey_cmd,
             clear_conversation,
             list_ai_sessions,
             current_ai_session,
@@ -802,6 +818,7 @@ async fn ai_query(
     let ai_client = state.ai_client.clone();
     let conversation = state.conversation.clone();
     let skill_mgr = state.skill_manager.clone();
+    let max_tool_iterations = state.settings.lock().await.ai_max_tool_iterations;
 
     let handle = tauri::async_runtime::spawn(async move {
         // Keep permit alive for duration of task
@@ -836,6 +853,7 @@ async fn ai_query(
                 &ctx,
                 &mut skill_lock,
                 Some(progress_tx),
+                max_tool_iterations,
             )
             .await
         });
@@ -1329,6 +1347,8 @@ fn remove_favorite(id: String) -> Result<(), String> {
 async fn save_settings_cmd(
     settings: AppSettings,
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
 ) -> Result<bool, String> {
     log::debug!(
         "save_settings_cmd invoked (base_url={}, model={}, max_results={})",
@@ -1336,8 +1356,49 @@ async fn save_settings_cmd(
         settings.ai_model,
         settings.max_results
     );
+
+    let current_hotkey = state.settings.lock().await.hotkey.clone();
+    let mut changed_shortcut: Option<(Option<Shortcut>, Shortcut)> = None;
+    if current_hotkey != settings.hotkey {
+        let next_shortcut = parse_shortcut(&settings.hotkey)
+            .ok_or_else(|| format!("Invalid hotkey: {}", settings.hotkey))?;
+        let mut active_shortcut = state.active_shortcut.lock().await;
+        let previous_shortcut = *active_shortcut;
+
+        if let Some(previous) = previous_shortcut {
+            app.global_shortcut()
+                .unregister(previous)
+                .map_err(|err| format!("Failed to unregister current hotkey: {err}"))?;
+        }
+
+        if let Err(err) = register_launcher_shortcut(&app, window.clone(), next_shortcut) {
+            if let Some(previous) = previous_shortcut {
+                let _ = register_launcher_shortcut(&app, window.clone(), previous);
+            }
+            return Err(format!("Failed to register {}: {err}", settings.hotkey));
+        }
+
+        *active_shortcut = Some(next_shortcut);
+        changed_shortcut = Some((previous_shortcut, next_shortcut));
+    }
+
+    if !save_settings(&settings) {
+        if let Some((previous_shortcut, next_shortcut)) = changed_shortcut {
+            let _ = app.global_shortcut().unregister(next_shortcut);
+            if let Some(previous) = previous_shortcut {
+                if register_launcher_shortcut(&app, window, previous).is_ok() {
+                    *state.active_shortcut.lock().await = Some(previous);
+                }
+            }
+        }
+        return Err("Failed to save settings".to_string());
+    }
+
     let mut current = state.settings.lock().await;
     *current = settings.clone();
+    let mut ctx = state.conversation.lock().await;
+    ctx.max_turns = settings.ai_max_tool_iterations;
+    drop(ctx);
     // Recreate AiClient with new settings
     let mut client = state.ai_client.lock().await;
     *client = AiClient::with_timeout(
@@ -1346,7 +1407,18 @@ async fn save_settings_cmd(
         settings.ai_model.clone(),
         settings.ai_timeout_secs,
     );
-    Ok(save_settings(&settings))
+    Ok(true)
+}
+
+#[tauri::command]
+async fn set_hotkey_cmd(
+    settings: AppSettings,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<AppSettings, String> {
+    save_settings_cmd(settings.clone(), state, app, window).await?;
+    Ok(settings)
 }
 
 // ─── Skill commands ───────────────────────────────────────────────────────────
@@ -1837,6 +1909,7 @@ fn main() {
         let mut conversation = ConversationContext::default();
         let sid = omnilauncher_lib::db::conversation::current_session_id();
         conversation.session_id = sid;
+        conversation.max_turns = settings.ai_max_tool_iterations;
         conversation.messages =
             omnilauncher_lib::db::conversation::load_recent_for_session(sid, 20);
 

@@ -19,7 +19,7 @@
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   AiResponse,
@@ -71,6 +71,7 @@ vi.mock("./lib/runtime", () => ({
             ai_model: "",
             ai_api_key: "",
             ai_timeout_secs: 120,
+            ai_max_tool_iterations: 10,
             theme: "system",
             hotkey: "Cmd+Space",
             max_results: 30,
@@ -112,12 +113,18 @@ vi.mock("./lib/runtime", () => ({
         }
         case "ai_cancel":
           return undefined as T;
+        case "set_hotkey_cmd":
+          if (failNextSettingsSave) {
+            failNextSettingsSave = false;
+            throw new Error("mock save failure");
+          }
+          return args?.settings as AppSettings as T;
         case "save_settings_cmd":
           if (failNextSettingsSave) {
             failNextSettingsSave = false;
             throw new Error("mock save failure");
           }
-          return undefined as T;
+          return true as T;
         case "save_window_position":
         case "set_window_geometry":
         case "set_window_size_centered":
@@ -278,17 +285,72 @@ describe("App — settings", () => {
     expect(screen.getByText("Preferences")).toBeInTheDocument();
   });
 
-  it("shows a save failed message when saving settings fails", async () => {
-    failNextSettingsSave = true;
+  it("saves an adjustable AI tool iteration limit", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Open settings" }));
     await screen.findByText("Preferences");
+
+    const toolIterations = screen.getByTitle(
+      "Maximum AI tool-call iterations before stopping",
+    );
+    fireEvent.change(toolIterations, { target: { value: "25" } });
     await user.click(screen.getByRole("button", { name: "Save Settings" }));
 
-    expect(await screen.findByText("✗ Save failed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save Settings" })).toBeEnabled();
+    await screen.findAllByText("✓ Saved");
+    expect(invokeCalls[invokeCalls.length - 1]).toMatchObject({
+      cmd: "save_settings_cmd",
+      args: {
+        settings: expect.objectContaining({ ai_max_tool_iterations: 25 }),
+      },
+    });
+  });
+
+  it("captures a new hotkey and saves it immediately", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Open settings" }));
+    await user.click(screen.getByRole("button", { name: "General" }));
+
+    const hotkeyButton = await screen.findByRole("button", { name: "Edit hotkey" });
+    expect(hotkeyButton).toHaveTextContent("Cmd+Space");
+
+    await user.click(hotkeyButton);
+    expect(hotkeyButton).toHaveTextContent("Press new hotkey…");
+
+    fireEvent.keyDown(hotkeyButton, {
+      key: "k",
+      code: "KeyK",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    await screen.findByText("✓ Hotkey saved");
+    expect(hotkeyButton).toHaveTextContent("Ctrl+Shift+K");
+    expect(invokeCalls[invokeCalls.length - 1]).toMatchObject({
+      cmd: "set_hotkey_cmd",
+      args: {
+        settings: expect.objectContaining({ hotkey: "Ctrl+Shift+K" }),
+      },
+    });
+  });
+
+  it("keeps the previous hotkey when immediate registration fails", async () => {
+    failNextSettingsSave = true;
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Open settings" }));
+    await user.click(screen.getByRole("button", { name: "General" }));
+
+    const hotkeyButton = await screen.findByRole("button", { name: "Edit hotkey" });
+    await user.click(hotkeyButton);
+    fireEvent.keyDown(hotkeyButton, { key: " ", code: "Space", altKey: true });
+
+    expect(await screen.findByText(/mock save failure/)).toBeInTheDocument();
+    expect(hotkeyButton).toHaveTextContent("Cmd+Space");
   });
 });
 
