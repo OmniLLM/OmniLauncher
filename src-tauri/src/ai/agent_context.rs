@@ -100,11 +100,15 @@ pub fn collect(config_dir: &Path, home_dir: &Path, cwd: &Path) -> Vec<LoadedAgen
 pub fn collect_live() -> Vec<LoadedAgentFile> {
     let config_dir = crate::path_config::config_dir();
     let Some(home_dir) = dirs::home_dir() else {
-        return Vec::new();
+        // Config-dir AGENTS.md should still work even when HOME cannot be
+        // resolved (rare launcher/service environments).
+        let cwd_fallback = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        return collect(&config_dir, &cwd_fallback, &cwd_fallback);
     };
-    let Ok(cwd) = std::env::current_dir() else {
-        return Vec::new();
-    };
+    let cwd = std::env::current_dir().unwrap_or_else(|err| {
+        log::warn!("agent_context: failed to resolve current_dir: {err}");
+        home_dir.clone()
+    });
     collect(&config_dir, &home_dir, &cwd)
 }
 

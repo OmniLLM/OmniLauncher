@@ -21,12 +21,33 @@ fn is_allowed_agent(name: &str) -> bool {
 }
 
 fn build_prompt(prompt: &str, context: Option<&str>) -> String {
-    match context {
-        Some(ctx) if !ctx.is_empty() => format!(
-            "[Context from parent agent]\n{}\n[End context]\n\nTask: {}",
-            ctx, prompt
-        ),
-        _ => prompt.to_string(),
+    let inherited_agent_context = {
+        let files = crate::ai::agent_context::collect_live();
+        if files.is_empty() {
+            None
+        } else {
+            Some(crate::ai::agent_context::format_suffix(&files))
+        }
+    };
+
+    let mut sections: Vec<String> = Vec::new();
+    if let Some(agent_ctx) = inherited_agent_context {
+        sections.push(format!(
+            "[Global AGENTS context inherited from OmniLauncher]\n{}\n[End global AGENTS context]",
+            agent_ctx
+        ));
+    }
+    if let Some(ctx) = context.filter(|c| !c.is_empty()) {
+        sections.push(format!(
+            "[Context from parent agent]\n{}\n[End context]",
+            ctx
+        ));
+    }
+    sections.push(format!("Task: {}", prompt));
+    if sections.len() == 1 {
+        prompt.to_string()
+    } else {
+        sections.join("\n\n")
     }
 }
 
