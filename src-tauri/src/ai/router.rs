@@ -350,8 +350,14 @@ impl Router {
         let agent_context_suffix = crate::ai::agent_context::format_suffix(&agent_context_files);
         if !agent_files.is_empty() {
             log::debug!(
-                "ai_route: loaded {} agent instruction file(s) into system prompt ({} context bytes)",
+                "ai_route: loaded {} agent instruction file(s) into system prompt (config_agents_base={} config_agents_path={} context bytes={})",
                 agent_files.len(),
+                config_system_prompt.is_some(),
+                agent_files
+                    .iter()
+                    .find(|file| is_config_agents_md(file))
+                    .map(|file| file.path.display().to_string())
+                    .unwrap_or_else(|| "<none>".to_string()),
                 agent_context_suffix.len()
             );
         }
