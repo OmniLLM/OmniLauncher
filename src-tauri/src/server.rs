@@ -94,6 +94,15 @@ struct SaveSettingsRequest {
     ai_timeout_secs: u64,
     #[serde(default = "crate::settings::default_ai_max_tool_iterations")]
     ai_max_tool_iterations: usize,
+    /// Mirrored from settings.rs so the desktop shell can edit these via the
+    /// /api/settings round-trip without losing them on save. Defaulted so
+    /// legacy clients (that don't yet send the fields) keep working — the
+    /// defaults match `settings.rs` so a missing field doesn't quietly reset
+    /// a user's saved value.
+    #[serde(default = "crate::settings::default_ai_max_retry_attempts")]
+    ai_max_retry_attempts: u32,
+    #[serde(default = "crate::settings::default_ai_retry_base_delay_ms")]
+    ai_retry_base_delay_ms: u64,
     theme: String,
     hotkey: String,
     max_results: usize,
@@ -512,6 +521,8 @@ async fn handle_request(
                         ai_api_key: input.ai_api_key,
                         ai_timeout_secs: input.ai_timeout_secs,
                         ai_max_tool_iterations: input.ai_max_tool_iterations,
+                        ai_max_retry_attempts: input.ai_max_retry_attempts,
+                        ai_retry_base_delay_ms: input.ai_retry_base_delay_ms,
                         theme: input.theme,
                         hotkey: input.hotkey,
                         max_results: input.max_results,
@@ -1323,6 +1334,74 @@ mod tests {
         assert_eq!(response.status, "401 Unauthorized");
     }
 
+    /// End-to-end regression for the "retry fields don't save" bug. POSTs a settings payload
+    /// with custom values for `ai_max_retry_attempts` and `ai_retry_base_delay_ms` through
+    /// the real HTTP handler and asserts both the in-memory state AND the JSON response
+    /// reflect the requested values. Before the fix the server silently dropped the fields
+    /// (struct didn't declare them) and the `..state.settings.lock().await.clone()` spread
+    /// then re-filled them from the OLD in-memory state — so the user's input vanished.
+    #[tokio::test]
+    async fn post_settings_persists_ai_retry_fields_to_state() {
+        let previous_env = std::env::var("OMNILAUNCHER_AUTH_TOKEN").ok();
+        std::env::remove_var("OMNILAUNCHER_AUTH_TOKEN");
+
+        // Seed the state with the documented defaults so we can prove the POST changed them.
+        let mut settings = AppSettings::default();
+        settings.backend_token = "rt-token".to_string();
+        let state = ServerState {
+            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
+            ai_client: Arc::new(Mutex::new(AiClient::new(
+                settings.ai_base_url.clone(),
+                settings.resolve_ai_api_key(),
+                settings.ai_model.clone(),
+            ))),
+            settings: Arc::new(Mutex::new(settings)),
+            conversation: Arc::new(Mutex::new(ConversationContext::default())),
+            ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
+            current_ai_task: Arc::new(Mutex::new(None)),
+            skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+            event_bus: EventBus::default(),
+            latest_selection: Arc::new(Mutex::new(None)),
+            auth_token: Arc::new("rt-token".to_string()),
+        };
+
+        let body = r#"{
+            "ai_base_url":"http://localhost:5000",
+            "ai_model":"auto",
+            "ai_api_key":"",
+            "ai_timeout_secs":120,
+            "ai_max_tool_iterations":10,
+            "ai_max_retry_attempts":8,
+            "ai_retry_base_delay_ms":4321,
+            "theme":"system",
+            "hotkey":"Ctrl+Shift+O",
+            "max_results":10,
+            "background_url":""
+        }"#;
+        let request = format!(
+            "POST /api/settings HTTP/1.1\r\nX-OmniLauncher-Token: rt-token\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = handle_request(&state, "POST", "/api/settings", "", &request).await;
+
+        if let Some(token) = previous_env {
+            std::env::set_var("OMNILAUNCHER_AUTH_TOKEN", token);
+        }
+
+        assert_eq!(response.status, "200 OK", "POST should succeed");
+        let stored = state.settings.lock().await.clone();
+        assert_eq!(
+            stored.ai_max_retry_attempts, 8,
+            "ai_max_retry_attempts must be persisted into state (not silently dropped)"
+        );
+        assert_eq!(
+            stored.ai_retry_base_delay_ms, 4321,
+            "ai_retry_base_delay_ms must be persisted into state (not silently dropped)"
+        );
+    }
+
     // ── EventBus tests ─────────────────────────────────────────────────
 
     #[tokio::test]
@@ -1557,6 +1636,52 @@ Content-Length: 0\r\n\r\n",
         assert_eq!(req.ai_max_tool_iterations, 25);
         assert_eq!(req.theme, "dark");
         assert_eq!(req.max_results, 10);
+    }
+
+    /// Regression test: `ai_max_retry_attempts` and `ai_retry_base_delay_ms` must round-trip
+    /// through `SaveSettingsRequest`. Previously they were silently dropped by the server
+    /// payload struct, so the values typed in the Preferences window never reached disk —
+    /// a `..state.settings.lock().await.clone()` spread filled them in from the in-memory
+    /// state instead, masking the loss.
+    #[test]
+    fn save_settings_request_preserves_ai_retry_fields() {
+        let json = r#"{
+            "ai_base_url":"http://localhost:11434",
+            "ai_model":"gpt-4",
+            "ai_api_key":"key",
+            "ai_timeout_secs":300,
+            "ai_max_tool_iterations":25,
+            "ai_max_retry_attempts":7,
+            "ai_retry_base_delay_ms":1500,
+            "theme":"dark",
+            "hotkey":"Ctrl+Shift+O",
+            "max_results":10,
+            "background_url":""
+        }"#;
+        let req: SaveSettingsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.ai_max_retry_attempts, 7);
+        assert_eq!(req.ai_retry_base_delay_ms, 1500);
+    }
+
+    /// When the request omits the retry fields (legacy clients), they should fall back to
+    /// the documented defaults — `default_ai_max_retry_attempts` (3) and
+    /// `default_ai_retry_base_delay_ms` (2000) — rather than failing the whole save.
+    #[test]
+    fn save_settings_request_defaults_ai_retry_fields_when_missing() {
+        let json = r#"{
+            "ai_base_url":"http://localhost:11434",
+            "ai_model":"gpt-4",
+            "ai_api_key":"key",
+            "ai_timeout_secs":300,
+            "ai_max_tool_iterations":25,
+            "theme":"dark",
+            "hotkey":"Ctrl+Shift+O",
+            "max_results":10,
+            "background_url":""
+        }"#;
+        let req: SaveSettingsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.ai_max_retry_attempts, 3);
+        assert_eq!(req.ai_retry_base_delay_ms, 2_000);
     }
 
     // ── extract_auth_header tests ──────────────────────────────────────
