@@ -1,8 +1,9 @@
-//! Load durable AGENT.md context files into the AI system prompt.
+//! Load durable AGENTS.md/AGENT.md context files into the AI system prompt.
 //!
 //! Three sources, in this load order (matching the user-facing spec):
-//!   1. `<config_dir>/AGENT.md`            — global app config
-//!      (defaults to `~/.config/omnilauncher/AGENT.md`)
+//!   1. `<config_dir>/AGENTS.md`           — primary global app system prompt
+//!      (defaults to `~/.config/omnilauncher/AGENTS.md`)
+//!      Falls back to `<config_dir>/AGENT.md` for existing installs.
 //!   2. `<cwd>/AGENT.md` walking upward    — project context
 //!      (root → cwd so the most-specific file lands last)
 //!   3. `<home>/AGENT.md`                  — user-global
@@ -58,7 +59,7 @@ pub fn collect(config_dir: &Path, home_dir: &Path, cwd: &Path) -> Vec<LoadedAgen
     let mut seen: Vec<PathBuf> = Vec::new();
     let mut total: usize = 0;
 
-    // 1. Config dir AGENT.md
+    // 1. Config dir AGENTS.md (preferred) / AGENT.md (legacy fallback)
     if let Some(file) = load_agent_md(config_dir, AgentSource::Config, &mut seen, &mut total) {
         out.push(file);
     }
@@ -158,7 +159,13 @@ pub fn format_suffix(files: &[LoadedAgentFile]) -> String {
 
 // ─── internals ────────────────────────────────────────────────────────────
 
-/// Look for AGENT.md (then agent.md as a case-sensitive-FS fallback) in `dir`.
+/// Look for an agent-instructions file in `dir`.
+///
+/// The app config directory prefers `AGENTS.md` so
+/// `~/.config/omnilauncher/AGENTS.md` can act as the primary user-authored
+/// system prompt. Other directories keep the historical `AGENT.md` lookup so
+/// project/home context files continue to work unchanged. Lowercase fallbacks
+/// are kept for case-sensitive filesystems.
 /// Returns None if neither exists, if the file is empty, if we've already
 /// loaded the same canonical path, or if the total byte budget is exhausted.
 fn load_agent_md(
@@ -167,7 +174,10 @@ fn load_agent_md(
     seen: &mut Vec<PathBuf>,
     total: &mut usize,
 ) -> Option<LoadedAgentFile> {
-    let candidates = ["AGENT.md", "agent.md"];
+    let candidates: &[&str] = match source {
+        AgentSource::Config => &["AGENTS.md", "agents.md", "AGENT.md", "agent.md"],
+        AgentSource::Cwd | AgentSource::Home => &["AGENT.md", "agent.md"],
+    };
     for name in candidates {
         let path = dir.join(name);
         if !path.is_file() {
@@ -266,6 +276,22 @@ mod tests {
         let files = collect(config.path(), home.path(), cwd.path());
         assert!(files.is_empty(), "expected no files, got {files:?}");
         assert_eq!(format_suffix(&files), "");
+    }
+
+    #[test]
+    fn loads_config_agents_md_before_legacy_agent_md() {
+        let config = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        write(&config.path().join("AGENT.md"), "legacy config rules");
+        write(&config.path().join("AGENTS.md"), "primary config rules");
+
+        let files = collect(config.path(), home.path(), cwd.path());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, AgentSource::Config);
+        assert_eq!(files[0].path, config.path().join("AGENTS.md"));
+        assert!(files[0].body.contains("primary config rules"));
+        assert!(!files[0].body.contains("legacy config rules"));
     }
 
     #[test]

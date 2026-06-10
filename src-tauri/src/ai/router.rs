@@ -322,22 +322,43 @@ impl Router {
             }
         };
 
-        let mut system_prompt = build_system_prompt(&os_info, tool_names.len(), &tool_list);
-        system_prompt.push_str(&skills_inventory_suffix);
-
-        // Load durable AGENT.md context the user has dropped in known spots
-        // (config dir → cwd walking upward → home). Built once before the
+        // Load durable AGENTS.md/AGENT.md context the user has dropped in known
+        // spots (config dir → cwd walking upward → home). Built once before the
         // agentic loop and re-appended on every rebuild so the context stays
-        // visible across tool iterations.
+        // visible across tool iterations. A config-dir AGENTS.md is special: it
+        // becomes the base system prompt source instead of being wrapped as a
+        // context suffix.
         let agent_files = crate::ai::agent_context::collect_live();
-        let agent_context_suffix = crate::ai::agent_context::format_suffix(&agent_files);
+        let is_config_agents_md = |file: &crate::ai::agent_context::LoadedAgentFile| {
+            file.source == crate::ai::agent_context::AgentSource::Config
+                && file
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name == "AGENTS.md" || name == "agents.md")
+                    .unwrap_or(false)
+        };
+        let config_system_prompt = agent_files
+            .iter()
+            .find(|file| is_config_agents_md(file))
+            .map(|file| file.body.as_str());
+        let agent_context_files = agent_files
+            .iter()
+            .filter(|file| !is_config_agents_md(file))
+            .cloned()
+            .collect::<Vec<_>>();
+        let agent_context_suffix = crate::ai::agent_context::format_suffix(&agent_context_files);
         if !agent_files.is_empty() {
             log::debug!(
-                "ai_route: loaded {} AGENT.md file(s) into system prompt ({} bytes)",
+                "ai_route: loaded {} agent instruction file(s) into system prompt ({} context bytes)",
                 agent_files.len(),
                 agent_context_suffix.len()
             );
         }
+
+        let mut system_prompt =
+            build_system_prompt(&os_info, tool_names.len(), &tool_list, config_system_prompt);
+        system_prompt.push_str(&skills_inventory_suffix);
         system_prompt.push_str(&agent_context_suffix);
 
         // Find relevant skills
@@ -459,8 +480,12 @@ impl Router {
             // Tool results ARE stored in local_ctx and will be included in the rebuild.
             loop_messages = {
                 let os_info = get_os_info();
-                let mut system_prompt_rebuild =
-                    build_system_prompt(&os_info, tool_names.len(), &tool_list);
+                let mut system_prompt_rebuild = build_system_prompt(
+                    &os_info,
+                    tool_names.len(),
+                    &tool_list,
+                    config_system_prompt,
+                );
                 system_prompt_rebuild.push_str(&skills_inventory_suffix);
                 system_prompt_rebuild.push_str(&agent_context_suffix);
                 let mut rebuilt = local_ctx.get_messages_with_system(&system_prompt_rebuild);
@@ -1495,10 +1520,17 @@ fn build_system_prompt(
     os_info: &(&'static str, &'static str, &'static str),
     tool_count: usize,
     tool_list: &str,
+    config_system_prompt: Option<&str>,
 ) -> String {
+    let base_prompt = config_system_prompt
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .unwrap_or("You are OmniLauncher, an AI-powered desktop assistant with full tool access.");
+
     format!(
-        "You are OmniLauncher, an AI-powered desktop assistant with full tool access.\n\
+        "{base_prompt}\n\
         \n\
+        OMNILAUNCHER RUNTIME CONTEXT:\n\
         SYSTEM ENVIRONMENT:\n\
         - Operating System: {}\n\
         - Shell: {}\n\
@@ -1538,6 +1570,36 @@ fn build_system_prompt(
         Use tools proactively. When in doubt, try the most specific tool first.",
         os_info.0, os_info.1, os_info.2, tool_count, tool_list
     )
+}
+
+#[cfg(test)]
+mod system_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn build_system_prompt_uses_config_agents_md_as_base_prompt() {
+        let os_info = &("Linux", "bash", "Use bash syntax.");
+        let prompt = build_system_prompt(
+            os_info,
+            1,
+            "shell_exec",
+            Some("Custom AGENTS system prompt."),
+        );
+
+        assert!(prompt.starts_with("Custom AGENTS system prompt."));
+        assert!(prompt.contains("OMNILAUNCHER RUNTIME CONTEXT"));
+        assert!(prompt.contains("AVAILABLE TOOLS (1 total): shell_exec"));
+        assert!(!prompt.starts_with("You are OmniLauncher"));
+    }
+
+    #[test]
+    fn build_system_prompt_falls_back_when_config_agents_md_is_missing() {
+        let os_info = &("Linux", "bash", "Use bash syntax.");
+        let prompt = build_system_prompt(os_info, 0, "", None);
+
+        assert!(prompt.starts_with("You are OmniLauncher"));
+        assert!(prompt.contains("OMNILAUNCHER RUNTIME CONTEXT"));
+    }
 }
 
 /// Heuristic: decide whether the final assistant content still needs a

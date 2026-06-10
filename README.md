@@ -73,11 +73,12 @@ Common slash commands:
 | `/skills`               | manage AI skills                |
 | `/plugins`              | install, update, remove plugins |
 
-### AGENT.md Context
+### AGENTS.md Context
 
-Drop an `AGENT.md` file in any of the following spots and the AI mode picks it up automatically as durable, project-specific context (load order — most general first, most specific last):
+Drop an `AGENTS.md` file at `~/.config/omnilauncher/AGENTS.md` to use it as the primary global AI system prompt source. OmniLauncher also picks up legacy/project context files automatically (load order — most general first, most specific last):
 
-1. `~/.config/omnilauncher/AGENT.md` — global app config
+1. `~/.config/omnilauncher/AGENTS.md` — primary global app system prompt
+   - Legacy fallback: `~/.config/omnilauncher/AGENT.md`
 2. `AGENT.md` walking upward from the current working directory — project context
 3. `~/AGENT.md` — user-global
 
@@ -102,7 +103,7 @@ Run `make help` for the full target list.
 | -------------------------------------- | ---------------------------------- |
 | `~/.config/omnilauncher/settings.json` | Main settings (UI-editable)        |
 | `~/.config/omnilauncher/server-token`  | Backend token fallback             |
-| `~/.config/omnilauncher/AGENT.md`      | Global AI agent context            |
+| `~/.config/omnilauncher/AGENTS.md`  | Primary global AI system prompt     |
 | `~/.omnilauncher/`                     | Runtime data (DB, plugins, skills) |
 
 ### Troubleshooting
