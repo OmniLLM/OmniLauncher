@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import mainRsSource from "../../src-tauri/src/main.rs?raw";
-import { isWindowLocalCommand, invoke, getBackendMode, listen, emit } from "./runtime";
+import { isWindowLocalCommand, invoke, getBackendMode, listen, emit, ensureBackendToken } from "./runtime";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -81,6 +81,90 @@ function cleanupGlobals() {
   delete (globalThis as any).window;
   delete (globalThis as any).fetch;
 }
+
+// ===========================================================================
+// 0. Frontend backend-token storage
+// ===========================================================================
+
+describe("frontend backend-token storage", () => {
+  afterEach(cleanupGlobals);
+
+  it("uses a frontend-local backend token from the Tauri shell before HTTP requests", async () => {
+    const state = mockBackend();
+    (globalThis as any).window.__TAURI_INTERNALS__ = {};
+    vi.mocked(tauriInvoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "get_frontend_backend_token") return "frontend-file-token";
+      return undefined;
+    });
+
+    await invoke("get_settings");
+
+    const call = state.calls.find((c) => c.url.endsWith("/api/settings"));
+    expect(call).toBeDefined();
+    expect(call!.headers["x-omnilauncher-token"]).toBe("frontend-file-token");
+    expect(tauriInvoke).toHaveBeenCalledWith("get_frontend_backend_token");
+  });
+
+  it("re-prompts and retries once when a saved frontend token is rejected", async () => {
+    const calls: { url: string; method: string; headers: Record<string, string> }[] = [];
+    (globalThis as any).window = {
+      __OMNILAUNCHER_BACKEND_URL__: "http://test.local",
+      __TAURI_INTERNALS__: {},
+      prompt: vi.fn(() => "replacement-token"),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    vi.mocked(tauriInvoke).mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "get_frontend_backend_token") return "old-token";
+      if (cmd === "save_frontend_backend_token") return args?.token;
+      return undefined;
+    });
+    (globalThis as any).fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        method: init?.method ?? "GET",
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      });
+      if (calls.length === 1) {
+        return new Response("missing or invalid auth token", { status: 401 });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await invoke("get_settings");
+
+    expect(calls.map((call) => call.headers["x-omnilauncher-token"])).toEqual([
+      "old-token",
+      "replacement-token",
+    ]);
+    expect((globalThis as any).window.prompt).toHaveBeenCalledTimes(1);
+    expect(tauriInvoke).toHaveBeenCalledWith("save_frontend_backend_token", {
+      token: "replacement-token",
+    });
+  });
+
+  it("does not save local settings when the backend token prompt is cancelled", async () => {
+    mockBackend();
+    (globalThis as any).window.__OMNILAUNCHER_BACKEND_URL__ = "http://cancelled-token.local";
+    (globalThis as any).window.__TAURI_INTERNALS__ = {};
+    (globalThis as any).window.prompt = vi.fn(() => "");
+    vi.mocked(tauriInvoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "get_frontend_backend_token") return "";
+      return undefined;
+    });
+
+    await expect(
+      invoke("save_settings_cmd", { settings: { hotkey: "Ctrl+Shift+P" } }),
+    ).rejects.toThrow("Backend token is required");
+
+    expect(tauriInvoke).not.toHaveBeenCalledWith("save_settings_cmd", {
+      settings: { hotkey: "Ctrl+Shift+P" },
+    });
+  });
+});
 
 // ===========================================================================
 // 1. Command classification
@@ -301,7 +385,6 @@ describe("http routing for new endpoints", () => {
       ai_base_url: "http://example.com",
       ai_model: "gpt-4",
       ai_timeout_secs: 300,
-      backend_token: "new-backend-token",
     };
     await invoke("save_settings_cmd", { settings });
     const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
@@ -317,7 +400,6 @@ describe("http routing for new endpoints", () => {
         ai_base_url: "http://example.com",
         ai_model: "gpt-4",
         ai_timeout_secs: 300,
-        backend_token: "new-backend-token",
       },
     });
     expect((globalThis as any).window.__OMNILAUNCHER_TOKEN__).toBe("current-backend-token");
@@ -332,7 +414,6 @@ describe("http routing for new endpoints", () => {
         ai_base_url: "http://example.com",
         ai_model: "gpt-4",
         ai_timeout_secs: 300,
-        backend_token: "new-backend-token",
       },
     });
     await invoke("get_settings");

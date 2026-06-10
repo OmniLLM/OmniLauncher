@@ -45,12 +45,15 @@ make start-backend
 | ---------------------------------- | ----------------------------------------------- |
 | Use a shared token (split-machine) | export `OMNILAUNCHER_AUTH_TOKEN` on the backend |
 | Single-machine dev                 | leave it unset — a random one is generated      |
-| Token file fallback                | `~/.config/omnilauncher/server-token`           |
+| Backend token file fallback        | `~/.config/omnilauncher/server-token`           |
+| Frontend saved connection token    | `~/.config/omnilauncher/backend-token`          |
 
-In the UI press **Ctrl+,**, open **General**, set **Backend URL** + **Backend Token**, then open **AI** and set **Provider URL**, **API Key**, and **Model**. Click **Save Settings**.
+When the frontend starts and no saved connection token exists, it prompts for the backend token and stores it in `~/.config/omnilauncher/backend-token`. The token is not stored in `settings.json` and does not appear on the Settings page.
+
+In the UI press **Ctrl+,**, open **General**, set **Backend URL**, then open **AI** and set **Provider URL**, **API Key**, and **Model**. Click **Save Settings**.
 
 > [!IMPORTANT]
-> **Backend Token** authenticates OmniLauncher itself. **API Key** authenticates your LLM provider. They are separate — configure the backend token first.
+> The backend token authenticates OmniLauncher itself. **API Key** authenticates your LLM provider. They are separate — configure the backend token prompt first when using a split-machine backend.
 
 ### Modes
 

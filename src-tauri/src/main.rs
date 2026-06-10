@@ -45,6 +45,19 @@ fn server_token_path() -> std::path::PathBuf {
     p
 }
 
+/// Path where the frontend shell stores the user-entered backend connection
+/// token. This intentionally differs from `settings.json` and from the
+/// backend-owned `server-token` file.
+fn frontend_backend_token_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let mut p = std::path::PathBuf::from(home);
+    p.push(".config");
+    p.push("omnilauncher");
+    let _ = std::fs::create_dir_all(&p);
+    p.push("backend-token");
+    p
+}
+
 /// Returns true when the OS foreground window appears to belong to
 /// OmniLauncher itself. Used to suppress selection capture so highlighted
 /// text inside our own dashboard / settings windows doesn't bleed back into
@@ -129,7 +142,7 @@ fn resolve_backend_url(settings: &AppSettings) -> String {
 ///
 /// Precedence:
 ///   1. `OMNILAUNCHER_AUTH_TOKEN` env override
-///   2. `settings.backend_token`
+///   2. frontend-local `~/.config/omnilauncher/backend-token`
 ///   3. `~/.config/omnilauncher/server-token` (same-machine fallback, written
 ///      by the `--server` process at startup)
 ///
@@ -137,6 +150,18 @@ fn resolve_backend_url(settings: &AppSettings) -> String {
 /// already noticed the empty token (logged) or are running in browser/mock
 /// mode where token-less requests are expected.
 fn resolve_auth_token(settings: &AppSettings) -> String {
+    if let Ok(token) = std::env::var("OMNILAUNCHER_AUTH_TOKEN") {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Ok(token) = fs::read_to_string(frontend_backend_token_path()) {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
     omnilauncher_lib::settings::resolve_backend_auth_token(settings)
 }
 
@@ -350,7 +375,8 @@ fn toggle_launcher_window<R: tauri::Runtime>(shortcut_window: &tauri::WebviewWin
         if foreground_is_ours() {
             return;
         }
-        let selection = omnilauncher_lib::plugins::selection::read_x11_selection().unwrap_or_default();
+        let selection =
+            omnilauncher_lib::plugins::selection::read_x11_selection().unwrap_or_default();
         if !selection.is_empty() {
             let _ = win_for_selection.emit("omnilauncher://selection", selection);
         }
@@ -473,13 +499,10 @@ pub fn run() {
 
             // Inject the auth token the frontend should send with every backend
             // request. Same lazy-read race as backend_url — `runtime.ts` reads
-            // `window.__OMNILAUNCHER_TOKEN__` at first `httpJson` call. Lets the
-            // Windows shell + WSL backend topology work: the shell never reads
-            // the WSL-side `~/.config/omnilauncher/server-token` (different
-            // filesystem), it just trusts what the user pinned via env or
-            // settings. When the token is empty we still inject the empty
-            // string so the frontend's `tauriInvoke` fallback path can detect
-            // "shell tried but had nothing" vs. "running in a browser".
+            // `window.__OMNILAUNCHER_TOKEN__` at first `httpJson` call. The token
+            // comes from env, the frontend-local backend-token file, or the
+            // same-machine server-token fallback; it is never read from
+            // settings.json.
             let auth_token = resolve_auth_token(&settings_for_url);
             if auth_token.is_empty() {
                 log::warn!(
@@ -569,7 +592,8 @@ pub fn run() {
             // sees a banner instead of a silently-dead hotkey. We still allow
             // the app to start (the tray click is a working fallback).
             let shortcut_window = window.clone();
-            let register_result = register_launcher_shortcut(app.handle(), shortcut_window, shortcut);
+            let register_result =
+                register_launcher_shortcut(app.handle(), shortcut_window, shortcut);
 
             if let Err(err) = register_result {
                 log::warn!("Failed to register global shortcut: {err}");
@@ -634,6 +658,8 @@ pub fn run() {
             omnilauncher_lib::python_installer::install_python_command,
             omnilauncher_lib::python_installer::check_bundled_python,
             get_server_token,
+            get_frontend_backend_token,
+            save_frontend_backend_token,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -673,9 +699,7 @@ fn frontend_log(level: String, message: String) -> Result<(), String> {
 ///
 /// Resolution mirrors `resolve_auth_token`:
 ///   1. `OMNILAUNCHER_AUTH_TOKEN` env override
-///   2. `settings.backend_token` (lets the user pin a stable token via the
-///      Preferences UI — required when shell and backend live on different
-///      machines, e.g. Windows shell + WSL backend)
+///   2. frontend-local `~/.config/omnilauncher/backend-token`
 ///   3. `~/.config/omnilauncher/server-token` (same-machine fallback the
 ///      `--server` process writes at startup)
 ///
@@ -685,6 +709,25 @@ fn frontend_log(level: String, message: String) -> Result<(), String> {
 fn get_server_token(state: tauri::State<'_, AppState>) -> String {
     let settings = state.settings.blocking_lock().clone();
     resolve_auth_token(&settings)
+}
+
+#[tauri::command]
+fn get_frontend_backend_token() -> String {
+    fs::read_to_string(frontend_backend_token_path())
+        .map(|token| token.trim().to_string())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn save_frontend_backend_token(token: String) -> Result<(), String> {
+    let trimmed = token.trim();
+    let path = frontend_backend_token_path();
+    fs::write(&path, trimmed).map_err(|error| {
+        format!(
+            "failed to save frontend backend token to {}: {error}",
+            path.display()
+        )
+    })
 }
 
 /// Resize the window to an explicit logical size while keeping it centered on
@@ -1900,11 +1943,10 @@ fn main() {
         //      cross-machine deployments agree on a stable, user-configured
         //      token without depending on the local-only token file).
         //   2. Existing `~/.config/omnilauncher/server-token` on disk — REUSED
-        //      across restarts so the desktop shell's cached `backend_token`
-        //      (read from its own settings.json on a different machine) keeps
-        //      authenticating after a backend restart. Previously we
-        //      regenerated on every launch, which silently broke cross-machine
-        //      shells: the WSL backend would mint a fresh random token on each
+        //      across restarts so same-machine frontends keep authenticating
+        //      after a backend restart. Previously we regenerated on every
+        //      launch, which silently broke clients still sending the old token:
+        //      the WSL backend would mint a fresh random token on each
         //      restart, the Windows shell still sent the OLD token from its
         //      own settings.json, the backend returned 401, and the frontend's
         //      `get_settings` catch path silently substituted hardcoded
@@ -1915,9 +1957,7 @@ fn main() {
         // shell continues to work with zero configuration and the file always
         // matches the live in-memory token.
         let (auth_token, token_source) = match std::env::var("OMNILAUNCHER_AUTH_TOKEN") {
-            Ok(t) if !t.trim().is_empty() => {
-                (t.trim().to_string(), "OMNILAUNCHER_AUTH_TOKEN env")
-            }
+            Ok(t) if !t.trim().is_empty() => (t.trim().to_string(), "OMNILAUNCHER_AUTH_TOKEN env"),
             _ => match std::fs::read_to_string(server_token_path()) {
                 Ok(s) if !s.trim().is_empty() => (
                     s.trim().to_string(),
@@ -2031,6 +2071,7 @@ mod tests {
             skill_manager: Arc::new(Mutex::new(SkillManager::new())),
             live_server: LiveServer::new(),
             live_server_port: 0,
+            active_shortcut: Arc::new(Mutex::new(None)),
         };
 
         let first = state

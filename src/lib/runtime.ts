@@ -19,28 +19,97 @@ function frontendLog(level: FrontendLogLevel, message: string) {
 }
 
 let lastLoggedBackendUrl = "__unset__";
+let promptedBackendToken: { url: string; token: string } | null = null;
 
-/// Per-launch auth token for the API server. Source priority (matches the
-/// shell-side `resolve_auth_token` in main.rs):
-///   1. `window.__OMNILAUNCHER_TOKEN__` injected by the Tauri shell at setup.
-///      This is the only path that works for cross-machine deployments (WSL
-///      backend + Windows shell) because the shell can't read the WSL-side
-///      same-machine token file.
-///   2. `tauriInvoke("get_server_token")` — same-machine fallback for the
-///      legacy desktop case where the shell didn't inject (older builds /
-///      `--no-default-features`). Reads the local token file.
-///   3. Empty string — browser / mock / no-auth mode.
+function normalizeToken(token: unknown): string {
+  return typeof token === "string" ? token.trim() : "";
+}
+
+async function readFrontendBackendToken(): Promise<string> {
+  if (!isTauriRuntime()) return "";
+  return tauriInvoke<string>("get_frontend_backend_token")
+    .then(normalizeToken)
+    .catch(() => "");
+}
+
+async function saveFrontendBackendToken(token: string): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await tauriInvoke("save_frontend_backend_token", { token });
+}
+
+async function promptForBackendToken(): Promise<string> {
+  if (typeof window === "undefined" || !isTauriRuntime()) return "";
+  const entered = normalizeToken(
+    window.prompt?.("Enter the backend token to connect to OmniLauncher:", ""),
+  );
+  if (!entered) return "";
+
+  promptedBackendToken = { url: backendUrl(), token: entered };
+  await saveFrontendBackendToken(entered).catch((error) => {
+    frontendLog(
+      "warn",
+      `failed to save frontend backend token: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+  return entered;
+}
+
+export async function ensureBackendToken(): Promise<string> {
+  if (typeof window === "undefined" || !httpMode() || !isTauriRuntime()) return "";
+
+  const injected = normalizeToken((window as any).__OMNILAUNCHER_TOKEN__);
+  if (injected) return injected;
+
+  const stored = await readFrontendBackendToken();
+  if (stored) {
+    return stored;
+  }
+
+  if (promptedBackendToken?.url === backendUrl()) {
+    return promptedBackendToken.token;
+  }
+
+  return promptForBackendToken();
+}
+
+async function promptForReplacementBackendToken(): Promise<string> {
+  if (typeof window === "undefined" || !httpMode() || !isTauriRuntime()) return "";
+  (window as any).__OMNILAUNCHER_TOKEN__ = "";
+  promptedBackendToken = null;
+  return promptForBackendToken();
+}
+
+async function activeBackendToken(): Promise<string> {
+  if (typeof window !== "undefined") {
+    const injected = normalizeToken((window as any).__OMNILAUNCHER_TOKEN__);
+    if (injected) return injected;
+  }
+  if (promptedBackendToken?.url === backendUrl()) {
+    return promptedBackendToken.token;
+  }
+  return resolveServerToken();
+}
+
+/// Per-launch auth token for the API server. Source priority:
+///   1. `window.__OMNILAUNCHER_TOKEN__` injected by the Tauri shell.
+///   2. Frontend-local `~/.config/omnilauncher/backend-token` via Tauri.
+///   3. Prompted token cached in-page and saved to the frontend-local file.
+///   4. Empty string — browser / mock / no-auth mode.
 ///
 /// Read lazily on each request so settings changes can rotate the token
 /// without restarting the app.
 async function resolveServerToken(): Promise<string> {
   if (typeof window !== "undefined") {
-    const injected = (window as any).__OMNILAUNCHER_TOKEN__;
-    if (typeof injected === "string") {
+    const injected = normalizeToken((window as any).__OMNILAUNCHER_TOKEN__);
+    if (injected) {
       return injected;
     }
+    const ensured = await ensureBackendToken();
+    if (ensured) {
+      return ensured;
+    }
     if (isTauriRuntime()) {
-      return tauriInvoke<string>("get_server_token").catch(() => "");
+      return tauriInvoke<string>("get_server_token").then(normalizeToken).catch(() => "");
     }
   }
   return "";
@@ -141,23 +210,31 @@ function buildUrl(path: string): string {
 }
 
 async function httpJson<T>(path: string, init?: RequestInit): Promise<T> {
+  return httpJsonWithRetry<T>(path, init, true);
+}
+
+async function httpJsonWithRetry<T>(
+  path: string,
+  init: RequestInit | undefined,
+  retryAuth: boolean,
+): Promise<T> {
   const url = buildUrl(path);
   const method = init?.method ?? "GET";
   const start = performance.now();
   const bodySummary = typeof init?.body === "string" ? `${init.body.length} bytes` : "none";
   frontendLog("debug", `HTTP ${method} ${url} start body=${bodySummary}`);
 
-  const serverToken = await resolveServerToken();
+  const serverToken = await activeBackendToken();
 
   let response: Response;
   try {
     response = await fetch(url, {
+      ...init,
       headers: {
         "Content-Type": "application/json",
         ...(serverToken ? { "X-OmniLauncher-Token": serverToken } : {}),
         ...(init?.headers ?? {}),
       },
-      ...init,
     });
   } catch (error) {
     frontendLog(
@@ -169,6 +246,13 @@ async function httpJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   const elapsed = Math.round(performance.now() - start);
   frontendLog("debug", `HTTP ${method} ${url} response status=${response.status} elapsed=${elapsed}ms`);
+
+  if (response.status === 401 && retryAuth) {
+    const replacementToken = await promptForReplacementBackendToken();
+    if (replacementToken) {
+      return httpJsonWithRetry<T>(path, init, false);
+    }
+  }
 
   if (!response.ok) {
     const text = await response.text();
@@ -288,17 +372,17 @@ export async function invoke<T = unknown>(
   // separated backend is what the UI reads in HTTP mode. Sync to both so a
   // successful desktop save is immediately visible through backend reads.
   if (mode === "http" && isTauriRuntime() && SETTINGS_SYNC_COMMANDS.has(cmd)) {
-    frontendLog("debug", `invoke ${cmd} syncing to local Tauri and backend`);
-    const nativeResult = await tauriInvoke<T>(cmd, args);
-    const settingsPayload =
-      nativeResult && typeof nativeResult === "object" && !Array.isArray(nativeResult)
-        ? nativeResult
-        : (args?.settings ?? {});
+    frontendLog("debug", `invoke ${cmd} syncing to backend and local Tauri`);
+    const token = await activeBackendToken();
+    if (!token) {
+      throw new Error("Backend token is required to save settings");
+    }
+    const settingsPayload = args?.settings ?? {};
     await httpJson("/api/settings", {
       method: "POST",
       body: JSON.stringify(settingsPayload),
     });
-    return nativeResult;
+    return tauriInvoke<T>(cmd, args);
   }
 
   // Window/OS-shell commands and authoritative native commands always run in
@@ -508,7 +592,6 @@ export async function invoke<T = unknown>(
       max_results: 10,
       background_url: "",
       backend_url: "",
-      backend_token: "",
     } as T;
   }
   if (cmd === "list_favorites") {

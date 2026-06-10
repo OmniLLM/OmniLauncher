@@ -127,19 +127,6 @@ pub struct AppSettings {
     #[serde(default)]
     pub backend_url: String,
 
-    /// Bearer/auth token the desktop shell sends to the separated backend.
-    /// Used when the backend runs on a different machine (e.g. WSL backend +
-    /// Windows shell) and the per-launch token file under `~/.config` is not
-    /// readable by the shell. Resolution order on the shell side:
-    ///   1. `OMNILAUNCHER_AUTH_TOKEN` env override
-    ///   2. this field
-    ///   3. `~/.config/omnilauncher/server-token` (legacy same-machine path)
-    /// On the backend side, when `OMNILAUNCHER_AUTH_TOKEN` is set it pins the
-    /// per-launch token to that value (instead of a fresh random one), so both
-    /// ends can agree on a stable, user-configured token.
-    #[serde(default)]
-    pub backend_token: String,
-
     // ── legacy single-server fields (migrated on first load) ──────────────────
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub github_token: String,
@@ -165,21 +152,16 @@ impl AppSettings {
 /// Resolve the backend auth token in the same order used by the desktop shell
 /// and the HTTP server:
 ///   1. `OMNILAUNCHER_AUTH_TOKEN` env override
-///   2. `settings.backend_token`
-///   3. `~/.config/omnilauncher/server-token` (same-machine fallback)
+///   2. `~/.config/omnilauncher/server-token` (same-machine fallback)
 ///
-/// The helper is shared by the shell and server so a settings save can rotate
-/// the live token without duplicating precedence logic.
-pub fn resolve_backend_auth_token(settings: &AppSettings) -> String {
+/// User-entered frontend connection tokens are intentionally stored outside
+/// `settings.json` and are not part of backend settings.
+pub fn resolve_backend_auth_token(_settings: &AppSettings) -> String {
     if let Ok(token) = std::env::var("OMNILAUNCHER_AUTH_TOKEN") {
         let trimmed = token.trim();
         if !trimmed.is_empty() {
             return trimmed.to_string();
         }
-    }
-    let from_settings = settings.backend_token.trim();
-    if !from_settings.is_empty() {
-        return from_settings.to_string();
     }
     settings_path()
         .with_file_name("server-token")
@@ -207,7 +189,6 @@ impl Default for AppSettings {
             github_servers: vec![],
             capture_selection_on_open: false,
             backend_url: String::new(),
-            backend_token: String::new(),
             github_token: String::new(),
             github_server: String::new(),
             github_orgs: vec![],
@@ -531,6 +512,12 @@ mod settings_tests {
         assert_eq!(s.ai_max_tool_iterations, 10);
         assert_eq!(s.ai_max_retry_attempts, 3);
         assert_eq!(s.ai_retry_base_delay_ms, 2_000);
+    }
+
+    #[test]
+    fn test_serialized_settings_do_not_include_backend_token() {
+        let json = serde_json::to_string(&AppSettings::default()).unwrap();
+        assert!(!json.contains("backend_token"));
     }
 
     #[test]

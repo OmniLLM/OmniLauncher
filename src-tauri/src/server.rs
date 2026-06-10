@@ -11,9 +11,7 @@ use crate::{
     launcher_config::LauncherConfig,
     live_server::LiveResponse,
     plugins::QueryResult,
-    save_settings,
-    settings::resolve_backend_auth_token,
-    AppSettings, SkillManager,
+    save_settings, AppSettings, SkillManager,
 };
 
 #[derive(Clone)]
@@ -107,13 +105,11 @@ struct SaveSettingsRequest {
     hotkey: String,
     max_results: usize,
     background_url: String,
-    /// Mirrored from settings.rs so the desktop shell can edit these via the
-    /// /api/settings round-trip without losing them on save. Both default to
-    /// empty so existing clients (and legacy posts) remain compatible.
+    /// Mirrored from settings.rs so the desktop shell can edit this via the
+    /// /api/settings round-trip without losing it. Defaulted so existing clients
+    /// and legacy posts remain compatible.
     #[serde(default)]
     backend_url: String,
-    #[serde(default)]
-    backend_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -309,7 +305,13 @@ async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Result<String,
 }
 
 async fn serve_api_listener(listener: TcpListener, state: ServerState) {
-    log::info!("server listening on {}", listener.local_addr().map(|a| a.to_string()).unwrap_or_else(|_| "unknown".to_string()));
+    log::info!(
+        "server listening on {}",
+        listener
+            .local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| "unknown".to_string())
+    );
 
     loop {
         let (mut stream, addr) = match listener.accept().await {
@@ -452,15 +454,7 @@ async fn handle_request(
     // OPTIONS (CORS preflight) and /health are exempt; everything else requires
     // the per-launch token in X-OmniLauncher-Token.
     if method != "OPTIONS" && path != "/health" {
-        let expected_token = {
-            let settings = state.settings.lock().await;
-            let resolved = resolve_backend_auth_token(&settings);
-            if resolved.is_empty() {
-                state.auth_token.as_str().to_string()
-            } else {
-                resolved
-            }
-        };
+        let expected_token = state.auth_token.as_str();
         match extract_auth_header(request) {
             Some(tok) if tok == expected_token => {}
             _ => {
@@ -528,7 +522,6 @@ async fn handle_request(
                         max_results: input.max_results,
                         background_url: input.background_url,
                         backend_url: input.backend_url,
-                        backend_token: input.backend_token,
                         ..state.settings.lock().await.clone()
                     };
                     {
@@ -990,15 +983,7 @@ mod tests {
     }
 
     fn test_server_state() -> ServerState {
-        // Pin backend_token in the settings so `resolve_backend_auth_token`
-        // short-circuits at precedence 2 ("settings.backend_token") instead
-        // of falling through to the on-disk `~/.config/omnilauncher/server-token`
-        // file (precedence 3) — that file exists on every developer's machine
-        // after they've run the launcher once, and would otherwise win over
-        // the `auth_token` field we set below, leaking real state into the
-        // test and breaking auth assertions.
-        let mut settings = AppSettings::default();
-        settings.backend_token = "test-token".to_string();
+        let settings = AppSettings::default();
         ServerState {
             plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
             ai_client: Arc::new(Mutex::new(AiClient::new(
@@ -1024,13 +1009,10 @@ mod tests {
         stream.write_all(request).await.unwrap();
 
         let mut buf = vec![0u8; 4096];
-        let n = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream.read(&mut buf),
-        )
-        .await
-        .expect("server should respond promptly")
-        .unwrap();
+        let n = tokio::time::timeout(std::time::Duration::from_secs(1), stream.read(&mut buf))
+            .await
+            .expect("server should respond promptly")
+            .unwrap();
         String::from_utf8_lossy(&buf[..n]).into_owned()
     }
 
@@ -1266,12 +1248,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_request_accepts_token_resolved_from_current_settings() {
+    async fn handle_request_accepts_current_state_token() {
         let previous_env = std::env::var("OMNILAUNCHER_AUTH_TOKEN").ok();
         std::env::remove_var("OMNILAUNCHER_AUTH_TOKEN");
 
-        let mut settings = AppSettings::default();
-        settings.backend_token = "current-settings-token".to_string();
+        let settings = AppSettings::default();
         let state = ServerState {
             plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
             ai_client: Arc::new(Mutex::new(AiClient::new(
@@ -1286,10 +1267,10 @@ mod tests {
             skill_manager: Arc::new(Mutex::new(SkillManager::new())),
             event_bus: EventBus::default(),
             latest_selection: Arc::new(Mutex::new(None)),
-            auth_token: Arc::new("stale-startup-token".to_string()),
+            auth_token: Arc::new("current-state-token".to_string()),
         };
         let request =
-            "GET /api/settings HTTP/1.1\r\nX-OmniLauncher-Token: current-settings-token\r\n\r\n";
+            "GET /api/settings HTTP/1.1\r\nX-OmniLauncher-Token: current-state-token\r\n\r\n";
 
         let response = handle_request(&state, "GET", "/api/settings", "", request).await;
 
@@ -1297,16 +1278,14 @@ mod tests {
             std::env::set_var("OMNILAUNCHER_AUTH_TOKEN", token);
         }
         assert_eq!(response.status, "200 OK");
-        assert!(response.body.contains("current-settings-token"));
     }
 
     #[tokio::test]
-    async fn handle_request_rejects_mismatched_settings_token() {
+    async fn handle_request_rejects_mismatched_state_token() {
         let previous_env = std::env::var("OMNILAUNCHER_AUTH_TOKEN").ok();
         std::env::remove_var("OMNILAUNCHER_AUTH_TOKEN");
 
-        let mut settings = AppSettings::default();
-        settings.backend_token = "current-settings-token".to_string();
+        let settings = AppSettings::default();
         let state = ServerState {
             plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
             ai_client: Arc::new(Mutex::new(AiClient::new(
@@ -1321,7 +1300,7 @@ mod tests {
             skill_manager: Arc::new(Mutex::new(SkillManager::new())),
             event_bus: EventBus::default(),
             latest_selection: Arc::new(Mutex::new(None)),
-            auth_token: Arc::new("stale-startup-token".to_string()),
+            auth_token: Arc::new("current-state-token".to_string()),
         };
         let request =
             "GET /api/settings HTTP/1.1\r\nX-OmniLauncher-Token: stale-startup-token\r\n\r\n";
@@ -1346,8 +1325,7 @@ mod tests {
         std::env::remove_var("OMNILAUNCHER_AUTH_TOKEN");
 
         // Seed the state with the documented defaults so we can prove the POST changed them.
-        let mut settings = AppSettings::default();
-        settings.backend_token = "rt-token".to_string();
+        let settings = AppSettings::default();
         let state = ServerState {
             plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
             ai_client: Arc::new(Mutex::new(AiClient::new(
@@ -1497,7 +1475,9 @@ Access-Control-Request-Headers: x-omnilauncher-token\r\n\r\n"
             );
             assert!(response.contains("Access-Control-Allow-Origin: *"));
             assert!(response.contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS"));
-            assert!(response.contains("Access-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token, Authorization"));
+            assert!(response.contains(
+                "Access-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token, Authorization"
+            ));
             assert!(!response.contains("Content-Type: text/event-stream"));
         }
     }
@@ -1521,27 +1501,26 @@ X-OmniLauncher-Token: test-token\r\n\r\n",
             .unwrap();
 
         let mut initial = vec![0u8; 1024];
-        let header_len = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream.read(&mut initial),
-        )
-        .await
-        .expect("SSE GET should return headers promptly")
-        .unwrap();
+        let header_len =
+            tokio::time::timeout(std::time::Duration::from_secs(1), stream.read(&mut initial))
+                .await
+                .expect("SSE GET should return headers promptly")
+                .unwrap();
         let headers = String::from_utf8_lossy(&initial[..header_len]);
         assert!(headers.starts_with("HTTP/1.1 200 OK"));
         assert!(headers.contains("Content-Type: text/event-stream"));
 
-        bus.emit_json("omnilauncher://ai-done", &serde_json::json!({ "content": "ok" }))
-            .await;
-        let mut event = vec![0u8; 1024];
-        let event_len = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream.read(&mut event),
+        bus.emit_json(
+            "omnilauncher://ai-done",
+            &serde_json::json!({ "content": "ok" }),
         )
-        .await
-        .expect("SSE event should arrive promptly")
-        .unwrap();
+        .await;
+        let mut event = vec![0u8; 1024];
+        let event_len =
+            tokio::time::timeout(std::time::Duration::from_secs(1), stream.read(&mut event))
+                .await
+                .expect("SSE event should arrive promptly")
+                .unwrap();
         let event_payload = String::from_utf8_lossy(&event[..event_len]);
         assert!(event_payload.starts_with("data: "));
         assert!(event_payload.contains("\"content\":\"ok\""));

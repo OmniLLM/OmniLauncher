@@ -77,7 +77,6 @@ vi.mock("./lib/runtime", () => ({
             max_results: 30,
             background_url: "",
             backend_url: "",
-            backend_token: "",
           } as AppSettings as T;
         case "search":
           return searchResults as T;
@@ -305,6 +304,22 @@ describe("App — settings", () => {
         settings: expect.objectContaining({ ai_max_tool_iterations: 25 }),
       },
     });
+  });
+
+  it("does not show or save a backend token in settings", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Open settings" }));
+    await screen.findByText("Preferences");
+
+    expect(screen.queryByText("Backend Token")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await screen.findAllByText("✓ Saved");
+    const saveCall = invokeCalls.find((call) => call.cmd === "save_settings_cmd");
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.args?.settings).not.toHaveProperty("backend_token");
   });
 
   it("captures a new hotkey and saves it immediately", async () => {
