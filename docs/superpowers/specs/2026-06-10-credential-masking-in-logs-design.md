@@ -169,11 +169,10 @@ A `#[cfg(test)] mod tests` inside `log_masking.rs` covers:
 4. JWT-shaped value masked.
 5. `Authorization: Bearer <long-token>` masked.
 6. `mask_argv` with `["--user", "alice", "--password", "hunter2"]` —
-   `--password` is replaced (case-insensitive substring match in the
-   element preceding the secret is **not** the strategy; we mask
-   any element that matches a value pattern, and we additionally
-   mask the element that follows a key-name token like `--password`,
-   `-p`, `--token`, `--api-key`). See implementation notes below.
+   the element following `--password` is replaced with `"***"`
+   (see "Flag-pair sweep" below). `--user`/`alice` are untouched.
+7. `mask_argv` with `["curl", "-H", "Authorization: Bearer eyJxxx..."]`
+   — the bearer-pattern value sweep replaces the secret inline.
 7. Plain non-sensitive JSON unchanged (sanity).
 
 ### `mask_argv` strategy
