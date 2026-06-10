@@ -97,7 +97,7 @@ A new builder method preserves backwards-compatible constructors:
                 api_key,
                 model,
                 request_timeout_secs: request_timeout_secs.max(1),
-                max_retry_attempts: max_retry_attempts.max(1),
+                max_retry_attempts: max_retry_attempts.clamp(1, 30),
                 retry_base_delay_ms,
             }
         }
@@ -106,6 +106,19 @@ A new builder method preserves backwards-compatible constructors:
 `AiClient::new` and `AiClient::with_timeout` keep their current
 signatures and delegate to `with_retry` using the default constants
 (so existing tests and external callers don't need to change).
+
+`max_retry_attempts` is clamped to `[1, 30]` at construction:
+
+- `1` is the floor because `0` would skip the original request and
+  return an `AiError::Transport("max retries exhausted")` immediately —
+  a foot-gun nobody wants.
+- `30` is the ceiling because the per-retry backoff is
+  `base * (1 << (attempt - 1))`, and `1u64 << 29` already exceeds
+  half a billion milliseconds (≈ 6 days). Larger values would
+  overflow on later attempts; the ceiling makes that statically
+  impossible.
+
+### Loop body
 
 `chat_with_tools` reads the fields instead of the consts:
 
@@ -116,10 +129,6 @@ signatures and delegate to `with_retry` using the default constants
         }
         ...
     }
-
-The shift-by-`(attempt - 1)` could overflow for absurd settings; we
-clamp the `max_retry_attempts` to `30` at construction (the natural
-ceiling where `1u64 << 29` is already half a billion milliseconds).
 
 ### Call-site wiring
 
