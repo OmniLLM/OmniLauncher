@@ -95,12 +95,17 @@ pub struct ChatResponse {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_MAX_RETRY_ATTEMPTS: u32 = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS: u64 = 2_000;
+const MAX_ALLOWED_RETRY_ATTEMPTS: u32 = 30;
 
 pub struct AiClient {
     base_url: String,
     api_key: String,
     model: String,
     request_timeout_secs: u64,
+    max_retry_attempts: u32,
+    retry_base_delay_ms: u64,
 }
 
 impl AiClient {
@@ -114,11 +119,37 @@ impl AiClient {
         model: String,
         request_timeout_secs: u64,
     ) -> Self {
+        Self::with_retry(
+            base_url,
+            api_key,
+            model,
+            request_timeout_secs,
+            DEFAULT_MAX_RETRY_ATTEMPTS,
+            DEFAULT_RETRY_BASE_DELAY_MS,
+        )
+    }
+
+    /// Full builder: explicit request timeout AND retry budget.
+    ///
+    /// `max_retry_attempts` is clamped to `[1, 30]`:
+    ///   * `1` floor so the original request always runs.
+    ///   * `30` ceiling so the per-retry shift `1u64 << (attempt - 1)`
+    ///     cannot overflow.
+    pub fn with_retry(
+        base_url: String,
+        api_key: String,
+        model: String,
+        request_timeout_secs: u64,
+        max_retry_attempts: u32,
+        retry_base_delay_ms: u64,
+    ) -> Self {
         Self {
             base_url,
             api_key,
             model,
             request_timeout_secs: request_timeout_secs.max(1),
+            max_retry_attempts: max_retry_attempts.clamp(1, MAX_ALLOWED_RETRY_ATTEMPTS),
+            retry_base_delay_ms,
         }
     }
 
@@ -130,6 +161,12 @@ impl AiClient {
     }
     pub fn request_timeout_secs(&self) -> u64 {
         self.request_timeout_secs
+    }
+    pub fn max_retry_attempts(&self) -> u32 {
+        self.max_retry_attempts
+    }
+    pub fn retry_base_delay_ms(&self) -> u64 {
+        self.retry_base_delay_ms
     }
 
     fn build_client(&self) -> Result<reqwest::Client, AiError> {
@@ -144,7 +181,9 @@ impl AiClient {
         Ok(resp.content.unwrap_or_default())
     }
 
-    /// Wrapper with retry logic (max 3 attempts, 2 s base delay + XOR-shift jitter).
+    /// Wrapper with retry logic. The attempt cap and base delay come from the
+    /// client's configured `max_retry_attempts` / `retry_base_delay_ms`
+    /// (defaults match the historical hardcoded values: 3 attempts, 2 s base).
     ///
     /// Retries on: transient errors (timeout, transport, 429, 502, 503).
     /// Does NOT retry on permanent errors (auth, bad request, etc.).
@@ -153,14 +192,14 @@ impl AiClient {
         messages: Vec<Message>,
         tools: Vec<serde_json::Value>,
     ) -> Result<ChatResponse, AiError> {
-        const MAX_ATTEMPTS: u32 = 3;
-        const BASE_DELAY_MS: u64 = 2_000;
+        let max_attempts = self.max_retry_attempts;
+        let base_delay_ms = self.retry_base_delay_ms;
 
         let mut last_err: Option<AiError> = None;
 
-        for attempt in 0..MAX_ATTEMPTS {
+        for attempt in 0..max_attempts {
             if attempt > 0 {
-                let backoff_ms = BASE_DELAY_MS * (1u64 << (attempt - 1));
+                let backoff_ms = base_delay_ms * (1u64 << (attempt - 1));
                 let seed = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -172,7 +211,7 @@ impl AiClient {
                 log::debug!(
                     "AI retry attempt {}/{} after {} ms (model={})",
                     attempt + 1,
-                    MAX_ATTEMPTS,
+                    max_attempts,
                     backoff_ms + jitter_ms,
                     self.model
                 );
@@ -482,6 +521,53 @@ mod client_tests {
         let c = make_client();
         assert_eq!(c.base_url(), "http://localhost:9999");
         assert_eq!(c.model(), "test-model");
+    }
+
+    #[test]
+    fn test_default_retry_budget_matches_legacy_constants() {
+        let c = make_client();
+        assert_eq!(c.max_retry_attempts(), 3);
+        assert_eq!(c.retry_base_delay_ms(), 2_000);
+    }
+
+    #[test]
+    fn test_with_retry_clamps_max_attempts_to_one() {
+        let c = AiClient::with_retry(
+            "http://localhost:9999".into(),
+            "test-key".into(),
+            "test-model".into(),
+            120,
+            0,
+            500,
+        );
+        assert_eq!(c.max_retry_attempts(), 1, "0 must clamp to 1");
+    }
+
+    #[test]
+    fn test_with_retry_clamps_max_attempts_to_thirty() {
+        let c = AiClient::with_retry(
+            "http://localhost:9999".into(),
+            "test-key".into(),
+            "test-model".into(),
+            120,
+            9_999,
+            500,
+        );
+        assert_eq!(c.max_retry_attempts(), 30, "absurd value must clamp to 30");
+    }
+
+    #[test]
+    fn test_with_retry_preserves_in_range_values() {
+        let c = AiClient::with_retry(
+            "http://localhost:9999".into(),
+            "test-key".into(),
+            "test-model".into(),
+            120,
+            5,
+            750,
+        );
+        assert_eq!(c.max_retry_attempts(), 5);
+        assert_eq!(c.retry_base_delay_ms(), 750);
     }
 
     #[tokio::test]

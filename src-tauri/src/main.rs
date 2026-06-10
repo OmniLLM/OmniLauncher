@@ -383,11 +383,13 @@ pub fn run() {
 
     let ai_max_tool_iterations = settings.ai_max_tool_iterations;
 
-    let ai_client = AiClient::with_timeout(
+    let ai_client = AiClient::with_retry(
         settings.ai_base_url.clone(),
         settings.resolve_ai_api_key(),
         settings.ai_model.clone(),
         settings.ai_timeout_secs,
+        settings.ai_max_retry_attempts,
+        settings.ai_retry_base_delay_ms,
     );
 
     let mut skill_manager = SkillManager::new();
@@ -1405,11 +1407,13 @@ async fn save_settings_cmd(
     drop(ctx);
     // Recreate AiClient with new settings
     let mut client = state.ai_client.lock().await;
-    *client = AiClient::with_timeout(
+    *client = AiClient::with_retry(
         settings.ai_base_url.clone(),
         settings.resolve_ai_api_key(),
         settings.ai_model.clone(),
         settings.ai_timeout_secs,
+        settings.ai_max_retry_attempts,
+        settings.ai_retry_base_delay_ms,
     );
     Ok(true)
 }
@@ -1880,11 +1884,13 @@ fn main() {
 
     if server_mode {
         let settings = load_settings();
-        let ai_client = AiClient::with_timeout(
+        let ai_client = AiClient::with_retry(
             settings.ai_base_url.clone(),
             settings.resolve_ai_api_key(),
             settings.ai_model.clone(),
             settings.ai_timeout_secs,
+            settings.ai_max_retry_attempts,
+            settings.ai_retry_base_delay_ms,
         );
         let mut skill_manager = SkillManager::new();
         skill_manager.load_all();

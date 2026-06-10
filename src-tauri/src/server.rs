@@ -526,11 +526,13 @@ async fn handle_request(
                     }
                     {
                         let mut client = state.ai_client.lock().await;
-                        *client = AiClient::with_timeout(
+                        *client = AiClient::with_retry(
                             updated.ai_base_url.clone(),
                             updated.resolve_ai_api_key(),
                             updated.ai_model.clone(),
                             updated.ai_timeout_secs,
+                            updated.ai_max_retry_attempts,
+                            updated.ai_retry_base_delay_ms,
                         );
                     }
                     {

@@ -113,6 +113,8 @@ export default function SettingsWindow({ onClose }: Props = {}) {
           ai_api_key: "",
           ai_timeout_secs: 120,
           ai_max_tool_iterations: 10,
+          ai_max_retry_attempts: 3,
+          ai_retry_base_delay_ms: 2000,
           theme: "system",
           hotkey: "Ctrl+Shift+O",
           max_results: 10,
@@ -397,6 +399,49 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                         )
                       }
                       title="Maximum AI tool-call iterations before stopping"
+                    />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Retry Attempts</span>
+                    <input
+                      className="omni-input"
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={settings.ai_max_retry_attempts}
+                      onChange={(e) =>
+                        setSettings(
+                          (s) =>
+                            s && {
+                              ...s,
+                              ai_max_retry_attempts:
+                                parseInt(e.target.value) || 3,
+                            },
+                        )
+                      }
+                      title="How many times the AI client tries a transient-error request before giving up (1 = no retries)"
+                    />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Retry Base Delay (ms)</span>
+                    <input
+                      className="omni-input"
+                      type="number"
+                      min={0}
+                      max={60000}
+                      step={100}
+                      value={settings.ai_retry_base_delay_ms}
+                      onChange={(e) =>
+                        setSettings(
+                          (s) =>
+                            s && {
+                              ...s,
+                              ai_retry_base_delay_ms:
+                                parseInt(e.target.value) || 2000,
+                            },
+                        )
+                      }
+                      title="Base backoff delay before the first retry; doubles on each subsequent retry plus jitter"
                     />
                   </div>
                   <div

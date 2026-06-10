@@ -77,6 +77,14 @@ pub fn default_ai_max_tool_iterations() -> usize {
     10
 }
 
+pub fn default_ai_max_retry_attempts() -> u32 {
+    3
+}
+
+pub fn default_ai_retry_base_delay_ms() -> u64 {
+    2_000
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub ai_base_url: String,
@@ -86,6 +94,10 @@ pub struct AppSettings {
     pub ai_timeout_secs: u64,
     #[serde(default = "default_ai_max_tool_iterations")]
     pub ai_max_tool_iterations: usize,
+    #[serde(default = "default_ai_max_retry_attempts")]
+    pub ai_max_retry_attempts: u32,
+    #[serde(default = "default_ai_retry_base_delay_ms")]
+    pub ai_retry_base_delay_ms: u64,
     pub theme: String,
     pub hotkey: String,
     pub max_results: usize,
@@ -185,6 +197,8 @@ impl Default for AppSettings {
             ai_api_key: String::new(),
             ai_timeout_secs: default_ai_timeout_secs(),
             ai_max_tool_iterations: default_ai_max_tool_iterations(),
+            ai_max_retry_attempts: default_ai_max_retry_attempts(),
+            ai_retry_base_delay_ms: default_ai_retry_base_delay_ms(),
             theme: "system".to_string(),
             hotkey: "Ctrl+Shift+O".to_string(),
             max_results: 10,
@@ -515,6 +529,8 @@ mod settings_tests {
         assert_eq!(s.max_results, 10);
         assert_eq!(s.ai_timeout_secs, 120);
         assert_eq!(s.ai_max_tool_iterations, 10);
+        assert_eq!(s.ai_max_retry_attempts, 3);
+        assert_eq!(s.ai_retry_base_delay_ms, 2_000);
     }
 
     #[test]
@@ -531,6 +547,8 @@ mod settings_tests {
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.ai_timeout_secs, 120);
         assert_eq!(s.ai_max_tool_iterations, 10);
+        assert_eq!(s.ai_max_retry_attempts, 3);
+        assert_eq!(s.ai_retry_base_delay_ms, 2_000);
     }
 
     #[test]
@@ -564,5 +582,23 @@ mod settings_tests {
         }"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.ai_max_tool_iterations, 25);
+    }
+
+    #[test]
+    fn test_preserves_custom_ai_retry_fields() {
+        let json = r#"{
+            "ai_base_url": "http://localhost:5000",
+            "ai_model": "auto",
+            "ai_api_key": "",
+            "ai_max_retry_attempts": 5,
+            "ai_retry_base_delay_ms": 500,
+            "theme": "system",
+            "hotkey": "Ctrl+Shift+O",
+            "max_results": 10,
+            "background_url": ""
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.ai_max_retry_attempts, 5);
+        assert_eq!(s.ai_retry_base_delay_ms, 500);
     }
 }
