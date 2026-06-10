@@ -399,7 +399,11 @@ impl PluginManager {
     }
 
     pub async fn execute_tool(&self, name: &str, args: serde_json::Value) -> String {
-        log::debug!("PluginManager.execute_tool: name='{}' args={}", name, args);
+        log::debug!(
+            "PluginManager.execute_tool: name='{}' args={}",
+            name,
+            crate::log_masking::mask_json(&args)
+        );
         // AI calls tools by their schema function name; fall back to plugin name
         // for backward compatibility with callers that pass plugin.name() directly.
         let idx = self

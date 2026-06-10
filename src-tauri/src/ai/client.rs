@@ -377,6 +377,9 @@ impl AiClient {
             url,
             self.model,
             messages.len(),
+            // NOTE: We log "bearer"/"none" rather than the real token. If you
+            // ever add more fields here that touch request body or headers,
+            // route them through `crate::log_masking` first.
             if self.api_key.is_empty() {
                 "none"
             } else {

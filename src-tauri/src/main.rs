@@ -1012,7 +1012,10 @@ async fn slash_preview(
 }
 
 fn spawn_external_command(program: &str, args: &[&str], description: &str) -> bool {
-    log::debug!("spawning external command for {description}: {program} {args:?}");
+    log::debug!(
+        "spawning external command for {description}: {program} {}",
+        omnilauncher_lib::log_masking::mask_argv(args)
+    );
     match std::process::Command::new(program).args(args).spawn() {
         Ok(child) => {
             log::info!(
@@ -1023,7 +1026,8 @@ fn spawn_external_command(program: &str, args: &[&str], description: &str) -> bo
         }
         Err(err) => {
             log::error!(
-                "failed to spawn external command for {description}: {program} {args:?}: {err}"
+                "failed to spawn external command for {description}: {program} {}: {err}",
+                omnilauncher_lib::log_masking::mask_argv(args)
             );
             false
         }
@@ -1856,7 +1860,10 @@ fn main() {
 
     if debug_enabled {
         log::info!("Running with --debug");
-        log::debug!("CLI args: {:?}", args);
+        log::debug!(
+            "CLI args: {}",
+            omnilauncher_lib::log_masking::mask_argv(&args)
+        );
     } else if TermLogger::init(
         LevelFilter::Info,
         ConfigBuilder::new().build(),
