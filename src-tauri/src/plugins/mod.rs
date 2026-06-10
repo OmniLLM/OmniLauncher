@@ -35,6 +35,7 @@ pub mod screenshot;
 pub mod script_runner;
 pub mod selection;
 pub mod shell_plugin;
+pub mod skill_credentials;
 pub mod skill_runner;
 pub mod snippets;
 pub mod sys_info;
