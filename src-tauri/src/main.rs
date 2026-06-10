@@ -1895,19 +1895,39 @@ fn main() {
         let mut skill_manager = SkillManager::new();
         skill_manager.load_all();
 
-        // Resolve the per-launch auth token. When `OMNILAUNCHER_AUTH_TOKEN`
-        // is set we pin to it (lets cross-machine deployments — e.g. WSL
-        // backend + Windows shell — agree on a stable, user-configured token
-        // without depending on the local-only token file). Otherwise we
-        // generate a fresh random one as before. In both cases we still
-        // write the token to `~/.config/omnilauncher/server-token` so the
-        // same-machine shell continues to work with zero configuration.
+        // Resolve the per-launch auth token. Precedence:
+        //   1. `OMNILAUNCHER_AUTH_TOKEN` env (user-pinned, takes priority — lets
+        //      cross-machine deployments agree on a stable, user-configured
+        //      token without depending on the local-only token file).
+        //   2. Existing `~/.config/omnilauncher/server-token` on disk — REUSED
+        //      across restarts so the desktop shell's cached `backend_token`
+        //      (read from its own settings.json on a different machine) keeps
+        //      authenticating after a backend restart. Previously we
+        //      regenerated on every launch, which silently broke cross-machine
+        //      shells: the WSL backend would mint a fresh random token on each
+        //      restart, the Windows shell still sent the OLD token from its
+        //      own settings.json, the backend returned 401, and the frontend's
+        //      `get_settings` catch path silently substituted hardcoded
+        //      defaults — Preferences appeared to "not load settings.json".
+        //   3. Generate a fresh random token (first-run / file missing-or-empty
+        //      / unreadable).
+        // In all cases we (re-)write the token to disk so the same-machine
+        // shell continues to work with zero configuration and the file always
+        // matches the live in-memory token.
         let (auth_token, token_source) = match std::env::var("OMNILAUNCHER_AUTH_TOKEN") {
-            Ok(t) if !t.trim().is_empty() => (t.trim().to_string(), "OMNILAUNCHER_AUTH_TOKEN env"),
-            _ => (
-                server::generate_auth_token(),
-                "freshly generated random token",
-            ),
+            Ok(t) if !t.trim().is_empty() => {
+                (t.trim().to_string(), "OMNILAUNCHER_AUTH_TOKEN env")
+            }
+            _ => match std::fs::read_to_string(server_token_path()) {
+                Ok(s) if !s.trim().is_empty() => (
+                    s.trim().to_string(),
+                    "existing server-token file (reused across restarts)",
+                ),
+                _ => (
+                    server::generate_auth_token(),
+                    "freshly generated random token",
+                ),
+            },
         };
         log::info!("server auth token sourced from {token_source}");
         if let Err(e) = std::fs::write(server_token_path(), auth_token.as_bytes()) {
