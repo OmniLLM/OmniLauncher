@@ -979,7 +979,15 @@ mod tests {
     }
 
     fn test_server_state() -> ServerState {
-        let settings = AppSettings::default();
+        // Pin backend_token in the settings so `resolve_backend_auth_token`
+        // short-circuits at precedence 2 ("settings.backend_token") instead
+        // of falling through to the on-disk `~/.config/omnilauncher/server-token`
+        // file (precedence 3) — that file exists on every developer's machine
+        // after they've run the launcher once, and would otherwise win over
+        // the `auth_token` field we set below, leaking real state into the
+        // test and breaking auth assertions.
+        let mut settings = AppSettings::default();
+        settings.backend_token = "test-token".to_string();
         ServerState {
             plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
             ai_client: Arc::new(Mutex::new(AiClient::new(

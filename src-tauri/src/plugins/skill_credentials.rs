@@ -4,8 +4,14 @@ use std::path::PathBuf;
 
 pub(crate) const SKILLS_CONFIG_DIR_ENV: &str = "OMNILAUNCHER_SKILLS_CONFIG_DIR";
 
+/// Re-export of the process-global env-var mutex defined in `path_config`.
+///
+/// Originally a private mutex local to this module, but a parallel test in
+/// `plugins::scheduler` mutating `OMNILAUNCHER_CONFIG_DIR` (via a different
+/// local mutex) could race tests here that touch the same env var. Aliasing
+/// to the shared lock unifies serialization across modules.
 #[cfg(test)]
-pub(crate) static TEST_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) use crate::path_config::CONFIG_DIR_ENV_LOCK as TEST_ENV_LOCK;
 
 fn skills_config_dir() -> PathBuf {
     if let Ok(path) = std::env::var(SKILLS_CONFIG_DIR_ENV) {

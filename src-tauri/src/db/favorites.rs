@@ -119,6 +119,10 @@ mod tests {
 
     #[test]
     fn add_list_remove_roundtrip() {
+        // Hold the shared env-lock for the full test so concurrent tests in
+        // other modules can't mutate OMNILAUNCHER_CONFIG_DIR mid-way and
+        // redirect add/list/remove to different DBs.
+        let _guard = path_config::CONFIG_DIR_ENV_LOCK.blocking_lock();
         // Uses the real data dir DB; guard the test behind a unique id so it is
         // self-cleaning and doesn't collide with other rows.
         let id = "test-fav-roundtrip-zzz";

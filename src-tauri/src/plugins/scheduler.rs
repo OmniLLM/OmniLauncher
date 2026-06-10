@@ -1359,7 +1359,6 @@ fn parse_add_preview(rest: &str) -> Vec<QueryResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::Mutex;
 
     #[test]
     fn escape_applescript_escapes_backslash_before_quote() {
@@ -1383,9 +1382,11 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    // Serialise all tests that mutate OMNILAUNCHER_CONFIG_DIR (a global env-var)
-    // so they don't race each other when cargo runs tests in parallel.
-    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+    // All tests that mutate OMNILAUNCHER_CONFIG_DIR (a global env-var) acquire
+    // the same shared mutex from `path_config` so they don't race each other —
+    // both within this module and across other modules (e.g. skill_runner) that
+    // also touch the env. See `path_config::CONFIG_DIR_ENV_LOCK`.
+    use crate::path_config::CONFIG_DIR_ENV_LOCK as ENV_LOCK;
 
     #[test]
     fn start_scheduler_does_not_require_current_tokio_runtime() {
