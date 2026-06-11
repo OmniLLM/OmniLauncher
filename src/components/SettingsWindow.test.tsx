@@ -23,12 +23,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import type { AppSettings } from "../types/app";
 
-const invokeMock = vi.fn();
-const emitMock = vi.fn(async () => {});
-const listenMock = vi.fn(async () => () => {});
+type RuntimeMock<Return> = (...args: unknown[]) => Promise<Return>;
+
+const invokeMock = vi.fn<RuntimeMock<unknown>>();
+const emitMock = vi.fn<RuntimeMock<void>>(async () => {});
+const listenMock = vi.fn<RuntimeMock<() => void>>(async () => () => {});
 
 vi.mock("../lib/runtime", () => ({
-  invoke: <T,>(...args: unknown[]): Promise<T> => invokeMock(...args),
+  invoke: <T,>(...args: unknown[]): Promise<T> => invokeMock(...args) as Promise<T>,
   emit: (...args: unknown[]) => emitMock(...args),
   listen: (...args: unknown[]) => listenMock(...args),
 }));
