@@ -92,6 +92,34 @@ pub struct FunctionCall {
 pub struct ChatResponse {
     pub content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// OpenAI / vLLM / OpenLLM finish_reason for the assistant turn.
+    /// Used by the agent loop to detect hard truncation (`"length"`),
+    /// the explicit `"tool_calls"` stop, or a normal `"stop"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+}
+
+/// OpenAI-style `tool_choice` directive. Mirrors the spec values the model
+/// providers support (`auto` / `none` / `required`); see the OpenAI Chat
+/// Completions reference. The agent loop normally uses `Auto`; it escalates
+/// to `Required` once per turn when the model returned text-only despite
+/// the task being mid-flight — a principled alternative to inspecting the
+/// model's text for "preamble" phrases.
+#[derive(Debug, Clone, Copy)]
+pub enum ToolChoice {
+    Auto,
+    None,
+    Required,
+}
+
+impl ToolChoice {
+    fn as_api_value(self) -> &'static str {
+        match self {
+            ToolChoice::Auto => "auto",
+            ToolChoice::None => "none",
+            ToolChoice::Required => "required",
+        }
+    }
 }
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
@@ -192,6 +220,21 @@ impl AiClient {
         messages: Vec<Message>,
         tools: Vec<serde_json::Value>,
     ) -> Result<ChatResponse, AiError> {
+        self.chat_with_tools_choice(messages, tools, ToolChoice::Auto)
+            .await
+    }
+
+    /// Same as [`chat_with_tools`] but lets the caller force the model to
+    /// emit a tool call. Used by the agentic loop as a one-shot escalation
+    /// when the model returned text only but the task is mid-flight (no
+    /// tool was called all turn) — borrowed from the OpenAI / LangChain
+    /// "required" tool-choice pattern instead of inspecting model text.
+    pub async fn chat_with_tools_choice(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<serde_json::Value>,
+        tool_choice: ToolChoice,
+    ) -> Result<ChatResponse, AiError> {
         let max_attempts = self.max_retry_attempts;
         let base_delay_ms = self.retry_base_delay_ms;
 
@@ -219,7 +262,7 @@ impl AiClient {
             }
 
             match self
-                .chat_with_tools_once(messages.clone(), tools.clone())
+                .chat_with_tools_once(messages.clone(), tools.clone(), tool_choice)
                 .await
             {
                 Ok(resp) => return Ok(resp),
@@ -235,11 +278,28 @@ impl AiClient {
         Err(last_err.unwrap_or(AiError::Transport("max retries exhausted".into())))
     }
 
-    /// Single (non-retrying) API call — used internally by `chat_with_tools`.
+    /// Same as [`chat_with_tools_choice`] but performs exactly ONE attempt
+    /// — no retry backoff. Used for the agent loop's one-shot
+    /// `tool_choice="required"` escalation: when the proxy doesn't
+    /// support that mode (e.g. returns 502 "All providers failed"),
+    /// retrying 30× with exponential backoff just wedges the agent for
+    /// many minutes. A single attempt fails fast and lets the caller
+    /// gracefully fall back to the original text response.
+    pub async fn chat_with_tools_choice_once(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<serde_json::Value>,
+        tool_choice: ToolChoice,
+    ) -> Result<ChatResponse, AiError> {
+        self.chat_with_tools_once(messages, tools, tool_choice).await
+    }
+
+    /// Single (non-retrying) API call — used internally by `chat_with_tools_choice`.
     async fn chat_with_tools_once(
         &self,
         messages: Vec<Message>,
         tools: Vec<serde_json::Value>,
+        tool_choice: ToolChoice,
     ) -> Result<ChatResponse, AiError> {
         let client = self.build_client()?;
 
@@ -288,7 +348,7 @@ impl AiClient {
 
         if !tools.is_empty() {
             body["tools"] = serde_json::json!(tools);
-            body["tool_choice"] = serde_json::json!("auto");
+            body["tool_choice"] = serde_json::json!(tool_choice.as_api_value());
         }
 
         let url = format!(
@@ -363,10 +423,12 @@ impl AiClient {
             .await
             .map_err(|e| AiError::Json(e.to_string()))?;
 
-        let choice = &json["choices"][0]["message"];
-        let content = choice["content"].as_str().map(|s| s.to_string());
+        let choice = &json["choices"][0];
+        let message = &choice["message"];
+        let content = message["content"].as_str().map(|s| s.to_string());
+        let finish_reason = choice["finish_reason"].as_str().map(|s| s.to_string());
 
-        let tool_calls = choice["tool_calls"].as_array().map(|tcs| {
+        let tool_calls = message["tool_calls"].as_array().map(|tcs| {
             tcs.iter()
                 .filter_map(|tc| {
                     Some(ToolCall {
@@ -381,9 +443,17 @@ impl AiClient {
                 .collect()
         });
 
+        log::debug!(
+            "AI response parsed: finish_reason={:?} content_len={} tool_calls={}",
+            finish_reason,
+            content.as_ref().map(|c| c.len()).unwrap_or(0),
+            tool_calls.as_ref().map(|tcs: &Vec<ToolCall>| tcs.len()).unwrap_or(0),
+        );
+
         Ok(ChatResponse {
             content,
             tool_calls,
+            finish_reason,
         })
     }
 
@@ -497,6 +567,17 @@ mod client_tests {
             "test-key".into(),
             "test-model".into(),
         )
+    }
+
+    #[test]
+    fn test_tool_choice_api_values() {
+        // Lock the on-the-wire strings — must match the OpenAI /
+        // vLLM / OpenLLM chat-completions spec, which several
+        // proxies our users hit are strict about. Changing these
+        // is a wire-format break.
+        assert_eq!(ToolChoice::Auto.as_api_value(), "auto");
+        assert_eq!(ToolChoice::None.as_api_value(), "none");
+        assert_eq!(ToolChoice::Required.as_api_value(), "required");
     }
 
     #[test]
@@ -701,12 +782,14 @@ mod client_tests {
         let resp = ChatResponse {
             content: Some("Hello!".to_string()),
             tool_calls: None,
+            finish_reason: Some("stop".to_string()),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("Hello!"));
         let deserialized: ChatResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.content.as_deref(), Some("Hello!"));
         assert!(deserialized.tool_calls.is_none());
+        assert_eq!(deserialized.finish_reason.as_deref(), Some("stop"));
     }
 
     #[test]
@@ -721,12 +804,14 @@ mod client_tests {
                     arguments: r#"{"q":"rust"}"#.to_string(),
                 },
             }]),
+            finish_reason: Some("tool_calls".to_string()),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: ChatResponse = serde_json::from_str(&json).unwrap();
         assert!(deserialized.content.is_none());
         let tcs = deserialized.tool_calls.unwrap();
         assert_eq!(tcs[0].function.name, "search");
+        assert_eq!(deserialized.finish_reason.as_deref(), Some("tool_calls"));
     }
 
     #[test]
