@@ -85,6 +85,10 @@ pub fn default_ai_retry_base_delay_ms() -> u64 {
     2_000
 }
 
+pub fn default_ai_loop_detector_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub ai_base_url: String,
@@ -98,6 +102,13 @@ pub struct AppSettings {
     pub ai_max_retry_attempts: u32,
     #[serde(default = "default_ai_retry_base_delay_ms")]
     pub ai_retry_base_delay_ms: u64,
+    /// When true (default), the agentic tool loop halts after detecting
+    /// three identical (request, result) iterations in a row. Disable for
+    /// advanced debugging of long multi-step skills — the iteration cap
+    /// (`ai_max_tool_iterations`) is still the upper bound. See
+    /// `openspec/specs/ai-chat/spec.md`, "User override for loop detector".
+    #[serde(default = "default_ai_loop_detector_enabled")]
+    pub ai_loop_detector_enabled: bool,
     pub theme: String,
     pub hotkey: String,
     pub max_results: usize,
@@ -181,6 +192,7 @@ impl Default for AppSettings {
             ai_max_tool_iterations: default_ai_max_tool_iterations(),
             ai_max_retry_attempts: default_ai_max_retry_attempts(),
             ai_retry_base_delay_ms: default_ai_retry_base_delay_ms(),
+            ai_loop_detector_enabled: default_ai_loop_detector_enabled(),
             theme: "system".to_string(),
             hotkey: "Ctrl+Shift+O".to_string(),
             max_results: 10,
@@ -536,6 +548,7 @@ pub fn looks_like_factory_defaults(candidate: &AppSettings) -> bool {
         && candidate.ai_max_tool_iterations == 10
         && candidate.ai_max_retry_attempts == 3
         && candidate.ai_retry_base_delay_ms == 2_000
+        && candidate.ai_loop_detector_enabled
         && candidate.theme == "system"
         && candidate.hotkey == "Ctrl+Shift+O"
         && candidate.max_results == 10
@@ -575,6 +588,7 @@ mod settings_tests {
         assert_eq!(s.ai_max_tool_iterations, 10);
         assert_eq!(s.ai_max_retry_attempts, 3);
         assert_eq!(s.ai_retry_base_delay_ms, 2_000);
+        assert!(s.ai_loop_detector_enabled);
     }
 
     #[test]
@@ -599,6 +613,11 @@ mod settings_tests {
         assert_eq!(s.ai_max_tool_iterations, 10);
         assert_eq!(s.ai_max_retry_attempts, 3);
         assert_eq!(s.ai_retry_base_delay_ms, 2_000);
+        assert!(
+            s.ai_loop_detector_enabled,
+            "missing ai_loop_detector_enabled defaults to true (regression: would silently \
+             disable safety guard on older settings files)"
+        );
     }
 
     #[test]
@@ -652,6 +671,29 @@ mod settings_tests {
         assert_eq!(s.ai_retry_base_delay_ms, 500);
     }
 
+    #[test]
+    fn test_preserves_custom_ai_loop_detector_field() {
+        // Round-trip a settings JSON that explicitly disables the loop
+        // detector, confirming the override is honoured and the rest of
+        // the file is loaded unchanged. See
+        // openspec/specs/ai-chat/spec.md, "User override for loop detector".
+        let json = r#"{
+            "ai_base_url": "http://localhost:5000",
+            "ai_model": "auto",
+            "ai_api_key": "",
+            "ai_loop_detector_enabled": false,
+            "theme": "system",
+            "hotkey": "Ctrl+Shift+O",
+            "max_results": 10,
+            "background_url": ""
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(!s.ai_loop_detector_enabled, "explicit false honoured");
+        // Sanity: other defaults still apply.
+        assert_eq!(s.ai_timeout_secs, 120);
+        assert_eq!(s.ai_max_tool_iterations, 10);
+    }
+
     // ── Default-overwrite guard ────────────────────────────────────────
     // Regression coverage for the silent-fallback bug: the old frontend
     // catch path would substitute hardcoded defaults when get_settings
@@ -669,6 +711,7 @@ mod settings_tests {
             ai_max_tool_iterations: 10,
             ai_max_retry_attempts: 3,
             ai_retry_base_delay_ms: 2_000,
+            ai_loop_detector_enabled: true,
             theme: "system".to_string(),
             hotkey: "Ctrl+Shift+O".to_string(),
             max_results: 10,

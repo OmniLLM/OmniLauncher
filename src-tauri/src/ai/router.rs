@@ -140,6 +140,16 @@ pub enum RouteDecision {
 
 pub struct Router;
 
+/// Truncate `s` to at most `budget` chars, appending an explicit elision
+/// marker when truncation happens. Char-boundary safe.
+fn truncate_with_marker(s: &str, budget: usize) -> String {
+    if s.chars().count() <= budget {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(budget).collect();
+    format!("{truncated}…(elided {} more chars)", s.chars().count() - budget)
+}
+
 impl Router {
     /// Decide routing purely from the query text.
     ///
@@ -207,10 +217,26 @@ impl Router {
                     skill_manager,
                     progress_tx,
                     context.max_turns,
+                    true,
                 )
                 .await
             }
         }
+    }
+
+    /// Loop-detector decision: the agentic tool loop SHALL halt only when
+    /// the last three iterations have BOTH identical tool-call fingerprints
+    /// AND identical tool-result fingerprints. Three identical *requests*
+    /// whose *results* differ are a legitimate retry pattern (transient
+    /// errors, partial data, region-discovery iteration) and MUST NOT trip
+    /// the detector. See `openspec/specs/ai-chat/spec.md`,
+    /// "Loop-detector result sensitivity".
+    fn is_loop(window: &std::collections::VecDeque<(String, String)>) -> bool {
+        if window.len() < 3 {
+            return false;
+        }
+        let first = &window[0];
+        window.iter().all(|pair| pair == first)
     }
 
     pub async fn ai_route(
@@ -221,6 +247,7 @@ impl Router {
         skill_manager: &mut SkillManager,
         progress_tx: Option<tokio::sync::mpsc::Sender<String>>,
         max_tool_iterations: usize,
+        loop_detector_enabled: bool,
     ) -> AiResponse {
         let mut tools = plugin_manager.all_tool_schemas();
 
@@ -465,9 +492,14 @@ impl Router {
         let mut loop_messages = messages.clone();
         let mut final_content = String::new();
 
-        // For loop detection: track the last 3 assistant tool-call fingerprints.
-        // A fingerprint is "<tool_name>|<arguments>" joined for all calls in one iteration.
-        let mut recent_fingerprints: std::collections::VecDeque<String> =
+        // For loop detection: track the last 3 iterations of the agentic
+        // loop as `(request_fingerprint, result_fingerprint)` tuples. The
+        // detector fires only when both halves of the tuple are identical
+        // across all three entries — three identical *requests* whose
+        // *results* differ (e.g. distinct transient errors) is a
+        // legitimate retry pattern, not a loop. See `Router::is_loop`
+        // and `openspec/specs/ai-chat/spec.md`.
+        let mut recent_fingerprints: std::collections::VecDeque<(String, String)> =
             std::collections::VecDeque::with_capacity(3);
 
         // Continuation guard: bounded counter for cases where the model
@@ -713,24 +745,16 @@ impl Router {
                     let tool_calls = resp.tool_calls.clone().unwrap_or_default();
 
                     {
-                        // ── Loop detection ─────────────────────────────────────
-                        let fingerprint = tool_calls
+                        // ── Loop detection (part 1): fingerprint the request
+                        // The detector compares (request_fp, result_fp) tuples
+                        // across the last 3 iterations — see `Router::is_loop`.
+                        // We compute the request half here, execute the tools
+                        // below, then compute the result half and check.
+                        let request_fp = tool_calls
                             .iter()
                             .map(|tc| format!("{}|{}", tc.function.name, tc.function.arguments))
                             .collect::<Vec<_>>()
                             .join(";");
-
-                        recent_fingerprints.push_back(fingerprint.clone());
-                        if recent_fingerprints.len() > 3 {
-                            recent_fingerprints.pop_front();
-                        }
-
-                        if recent_fingerprints.len() == 3
-                            && recent_fingerprints.iter().all(|fp| fp == &fingerprint)
-                        {
-                            final_content = "Agent stuck in a loop: repeated identical tool calls detected. Stopping.".to_string();
-                            break;
-                        }
 
                         // Execute all tools in this iteration
                         let mut tool_result_messages: Vec<Message> = vec![];
@@ -788,6 +812,81 @@ impl Router {
                                 &tc.function.name,
                                 &result,
                             ));
+                        }
+
+                        // ── Loop detection (part 2): fingerprint the result and decide
+                        // result_fp uses a non-cryptographic hash of each tool's
+                        // result content to bound memory — tool results can be
+                        // megabytes. Three iterations of "same call, same hash"
+                        // is a loop; three iterations of "same call, different
+                        // hashes" is a legitimate retry.
+                        let result_fp = tool_result_messages
+                            .iter()
+                            .zip(tool_calls.iter())
+                            .map(|(msg, tc)| {
+                                use std::hash::{Hash, Hasher};
+                                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                msg.content_str().hash(&mut hasher);
+                                format!("{}|{:016x}", tc.function.name, hasher.finish())
+                            })
+                            .collect::<Vec<_>>()
+                            .join(";");
+
+                        recent_fingerprints.push_back((request_fp.clone(), result_fp.clone()));
+                        if recent_fingerprints.len() > 3 {
+                            recent_fingerprints.pop_front();
+                        }
+
+                        if loop_detector_enabled && Self::is_loop(&recent_fingerprints) {
+                            // Build the user-visible surface: repeated tool
+                            // name(s), credential-masked arguments snippet,
+                            // credential-masked last-result snippet, and a
+                            // one-line hint. See `openspec/specs/ai-chat/spec.md`
+                            // "Loop-detector failure surface".
+                            const SNIPPET_BUDGET: usize = 500;
+                            let tool_name_summary = tool_calls
+                                .iter()
+                                .map(|tc| tc.function.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let args_summary = tool_calls
+                                .iter()
+                                .map(|tc| {
+                                    serde_json::from_str::<serde_json::Value>(
+                                        &tc.function.arguments,
+                                    )
+                                    .map(|v| crate::log_masking::mask_json(&v))
+                                    .unwrap_or_else(|_| {
+                                        crate::log_masking::mask_str(&tc.function.arguments)
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                                .join("; ");
+                            let args_snippet = truncate_with_marker(&args_summary, SNIPPET_BUDGET);
+                            let last_result_raw = tool_result_messages
+                                .last()
+                                .map(|m| m.content_str().to_string())
+                                .unwrap_or_default();
+                            let last_result_masked =
+                                crate::log_masking::mask_str(&last_result_raw);
+                            let last_result_snippet =
+                                truncate_with_marker(&last_result_masked, SNIPPET_BUDGET);
+
+                            log::debug!(
+                                "ai_route: loop detector tripped — tools=[{tool_name_summary}] \
+                                 last_result_snippet={last_result_snippet}"
+                            );
+
+                            final_content = format!(
+                                "Agent stuck in a loop: the same tool call was repeated three times \
+                                 with the same result.\n\n\
+                                 Tool: {tool_name_summary}\n\
+                                 Arguments (redacted): {args_snippet}\n\
+                                 Last result (redacted): {last_result_snippet}\n\n\
+                                 Try rephrasing your query with more specifics, or disable the loop \
+                                 detector in Settings → AI if you are debugging a long multi-step skill."
+                            );
+                            break;
                         }
 
                         // Append assistant message with tool_calls (proper OpenAI format)
@@ -1937,5 +2036,61 @@ mod tests {
         assert!(!first_turn("user", true, true), "one-shot cap");
         assert!(!first_turn("tool", true, false), "tool result is mid-task, not first-turn");
         assert!(!first_turn("user", false, false), "no tools available → don't nudge");
+    }
+}
+
+#[cfg(test)]
+mod loop_detector_tests {
+    //! Unit tests for the agentic-loop `is_loop` helper.
+    //!
+    //! See `openspec/changes/fix-tool-loop-detector-false-positive/` for the
+    //! change that introduced this. The detector compares
+    //! `(request_fingerprint, result_fingerprint)` tuples — three identical
+    //! *requests* whose *results* differ is a legitimate retry pattern,
+    //! NOT a loop. Three pairwise-identical tuples IS a loop.
+
+    use super::*;
+    use std::collections::VecDeque;
+
+    /// Window smaller than 3 entries can never be a loop — the detector has
+    /// not yet seen enough iterations to make a decision.
+    #[test]
+    fn test_is_loop_window_smaller_than_three_returns_false() {
+        let mut window: VecDeque<(String, String)> = VecDeque::new();
+        assert!(!Router::is_loop(&window), "empty window is not a loop");
+        window.push_back(("call_a".to_string(), "result_a".to_string()));
+        assert!(!Router::is_loop(&window), "1-element window is not a loop");
+        window.push_back(("call_a".to_string(), "result_a".to_string()));
+        assert!(!Router::is_loop(&window), "2-element window is not a loop");
+    }
+
+    /// Three identical *requests* with three *differing* results is a
+    /// legitimate retry (e.g. an OpenStack call retried after distinct
+    /// transient error messages) and MUST NOT trip the detector.
+    #[test]
+    fn test_is_loop_negative_differing_results() {
+        let mut window: VecDeque<(String, String)> = VecDeque::new();
+        window.push_back(("openstack|region=se1".to_string(), "error: auth expired".to_string()));
+        window.push_back(("openstack|region=se1".to_string(), "error: token refresh required".to_string()));
+        window.push_back(("openstack|region=se1".to_string(), "ok: 12 servers".to_string()));
+        assert!(
+            !Router::is_loop(&window),
+            "identical requests with differing results must NOT be a loop"
+        );
+    }
+
+    /// Three identical (request, result) pairs is a real loop — the model
+    /// is asking the same question and getting the same answer over and
+    /// over with no progress.
+    #[test]
+    fn test_is_loop_positive_identical_pairs() {
+        let mut window: VecDeque<(String, String)> = VecDeque::new();
+        window.push_back(("openstack|region=se1".to_string(), "ok: 5 servers".to_string()));
+        window.push_back(("openstack|region=se1".to_string(), "ok: 5 servers".to_string()));
+        window.push_back(("openstack|region=se1".to_string(), "ok: 5 servers".to_string()));
+        assert!(
+            Router::is_loop(&window),
+            "three pairwise-identical (request, result) tuples IS a loop"
+        );
     }
 }

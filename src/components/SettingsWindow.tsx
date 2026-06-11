@@ -535,6 +535,33 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       title="Base backoff delay before the first retry; doubles on each subsequent retry plus jitter"
                     />
                   </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Loop Detector</span>
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        cursor: "pointer",
+                      }}
+                      title="When on (default), the AI tool loop halts after three identical (request, result) iterations in a row. Disable only when debugging long multi-step skills — Tool Iterations is still the upper bound."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={settings.ai_loop_detector_enabled}
+                        onChange={(e) =>
+                          setSettings(
+                            (s) =>
+                              s && {
+                                ...s,
+                                ai_loop_detector_enabled: e.target.checked,
+                              },
+                          )
+                        }
+                      />
+                      <span>Enable AI loop detector</span>
+                    </label>
+                  </div>
                   <div
                     ref={dropdownRef}
                     style={{ ...rowStyle(true), position: "relative" }}

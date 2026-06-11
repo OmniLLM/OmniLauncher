@@ -2384,6 +2384,7 @@ pub async fn ai_query_backend(query: String, state: ServerState) -> Result<(), S
     let skill_mgr = state.skill_manager.clone();
     let event_bus = state.event_bus.clone();
     let max_tool_iterations = state.settings.lock().await.ai_max_tool_iterations;
+    let loop_detector_enabled = state.settings.lock().await.ai_loop_detector_enabled;
 
     let handle = tauri::async_runtime::spawn(async move {
         let _permit = permit;
@@ -2415,6 +2416,7 @@ pub async fn ai_query_backend(query: String, state: ServerState) -> Result<(), S
                 &mut skill_lock,
                 Some(progress_tx),
                 max_tool_iterations,
+                loop_detector_enabled,
             )
             .await
         });

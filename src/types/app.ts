@@ -39,6 +39,11 @@ export interface AppSettings {
   ai_max_tool_iterations: number;
   ai_max_retry_attempts: number;
   ai_retry_base_delay_ms: number;
+  /** When true (default), the agentic tool loop halts after detecting three
+   * identical (request, result) iterations in a row. Disable for advanced
+   * debugging of long multi-step skills — `ai_max_tool_iterations` is still
+   * the upper bound. */
+  ai_loop_detector_enabled: boolean;
   theme: string;
   hotkey: string;
   max_results: number;
