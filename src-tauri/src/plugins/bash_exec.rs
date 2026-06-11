@@ -174,6 +174,11 @@ impl Plugin for ShellExecPlugin {
             cmd.current_dir(dir);
         }
 
+        let credential_env = crate::plugins::skill_credentials::credential_env_for_skill("gcp");
+        for (key, value) in credential_env {
+            cmd.env(key, value);
+        }
+
         // Run with a 120-second timeout. When the timeout fires the tokio Child
         // is dropped which reaps the process — no manual kill needed.
         let output_result =
@@ -225,5 +230,64 @@ impl Plugin for ShellExecPlugin {
             }
             Err(e) => format!("Error executing command: {}", e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::skill_credentials::{SKILLS_CONFIG_DIR_ENV, TEST_ENV_LOCK};
+    use crate::plugins::Plugin;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn shell_exec_sets_gcp_adc_env_from_skill_credentials() {
+        let _guard = TEST_ENV_LOCK.lock().await;
+        let skills_config = TempDir::new().unwrap();
+        std::env::set_var(SKILLS_CONFIG_DIR_ENV, skills_config.path());
+
+        let profile = serde_json::json!({
+            "cloud": {
+                "gcp": {
+                    "gcp": {
+                        "service_account_key": {
+                            "type": "service_account",
+                            "project_id": "test-project",
+                            "private_key_id": "key-id",
+                            "private_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
+                            "client_email": "test@example.invalid",
+                            "client_id": "123",
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                            "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/test",
+                            "universe_domain": "googleapis.com"
+                        }
+                    }
+                }
+            }
+        });
+        fs::write(
+            skills_config.path().join("credential.json"),
+            profile.to_string(),
+        )
+        .unwrap();
+
+        let output = ShellExecPlugin
+            .execute_tool(serde_json::json!({
+                "command": if cfg!(target_os = "windows") {
+                    "$env:GOOGLE_APPLICATION_CREDENTIALS"
+                } else {
+                    "printf '%s' \"$GOOGLE_APPLICATION_CREDENTIALS\""
+                }
+            }))
+            .await;
+
+        std::env::remove_var(SKILLS_CONFIG_DIR_ENV);
+
+        let adc = skills_config.path().join("gcp_sa_key.json");
+        assert_eq!(output.trim(), adc.to_string_lossy());
+        assert!(adc.is_file());
     }
 }
