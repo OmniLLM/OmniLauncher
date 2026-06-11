@@ -81,7 +81,9 @@ export default function SettingsWindow({ onClose }: Props = {}) {
   const [hotkeyError, setHotkeyError] = useState("");
   const [capturingHotkey, setCapturingHotkey] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [activeTab, setActiveTab] = useState<TabId>("ai");
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   const currentBgUrl = settings?.background_url ?? "";
   const isCustomBg =
@@ -100,31 +102,41 @@ export default function SettingsWindow({ onClose }: Props = {}) {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    setLoading(true);
+    setLoadError("");
+    setSettings(null);
     invoke<AppSettings>("get_settings")
       .then((s) => {
         setSettings(s);
         setModelFilter(s.ai_model);
         setLoading(false);
       })
-      .catch(() => {
-        setSettings({
-          ai_base_url: "http://localhost:5000",
-          ai_model: "auto",
-          ai_api_key: "",
-          ai_timeout_secs: 120,
-          ai_max_tool_iterations: 10,
-          ai_max_retry_attempts: 3,
-          ai_retry_base_delay_ms: 2000,
-          theme: "system",
-          hotkey: "Ctrl+Shift+O",
-          max_results: 10,
-          background_url: "",
-          backend_url: "",
-        });
-        setModelFilter("auto");
+      .catch((err) => {
+        // CRITICAL: Do NOT silently substitute hardcoded defaults here.
+        //
+        // Historically this catch swapped in `AppSettings.default()`-shaped
+        // hardcoded values, which had two terrible effects:
+        //
+        //   1. Cross-machine connections (WSL backend ↔ Windows frontend) where
+        //      the auth token is missing/stale → get_settings returns 401 →
+        //      user sees factory defaults in Preferences instead of the
+        //      backend's real settings, and assumes "settings page is broken".
+        //
+        //   2. If the user then clicks Save, the frontend POSTs those defaults
+        //      back to the backend, which writes them to settings.json —
+        //      silently wiping the user's actual saved settings.
+        //
+        // Surface the failure honestly. Keep `settings` null so the form
+        // doesn't render (preventing a destructive save), and show the real
+        // error with a retry affordance.
+        const message =
+          err instanceof Error ? err.message : String(err ?? "Unknown error");
+        console.error("Failed to load settings from backend:", err);
+        setLoadError(message || "Failed to load settings from backend");
         setLoading(false);
       });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadAttempt]);
 
   const fetchModels = useCallback(async () => {
     if (!settings) return;
@@ -227,7 +239,7 @@ export default function SettingsWindow({ onClose }: Props = {}) {
     }
   };
 
-  if (loading || !settings) {
+  if (loading) {
     return (
       <div
         style={{
@@ -242,6 +254,86 @@ export default function SettingsWindow({ onClose }: Props = {}) {
         }}
       >
         Loading settings…
+      </div>
+    );
+  }
+
+  if (loadError || !settings) {
+    // Show the failure honestly instead of silently rendering hardcoded
+    // defaults — see the long-form comment on the get_settings catch above
+    // for why this matters (cross-machine deploys, accidental save-of-defaults).
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          background: "transparent",
+          color: "var(--text)",
+          fontFamily: "inherit",
+          overflow: "hidden",
+        }}
+      >
+        <div data-tauri-drag-region className="omni-titlebar">
+          <span className="omni-titlebar__title">
+            <span aria-hidden="true">⚙</span>
+            <span>Preferences</span>
+          </span>
+          <button
+            className="omni-titlebar__close"
+            onClick={() => onClose?.()}
+            title="Close"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 16,
+            padding: "32px 28px",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: 32 }} aria-hidden="true">
+            ⚠
+          </div>
+          <div style={{ fontSize: 15, color: "var(--text)", fontWeight: 600 }}>
+            Could not load settings from the backend.
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--sub)",
+              maxWidth: 480,
+              wordBreak: "break-word",
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "10px 12px",
+            }}
+          >
+            {loadError || "No settings returned by the backend."}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--sub)", maxWidth: 480 }}>
+            The Save button is disabled until settings load successfully so a
+            partial form can't overwrite your saved configuration.
+          </div>
+          <button
+            type="button"
+            className="omni-btn omni-btn--primary"
+            onClick={() => setLoadAttempt((n) => n + 1)}
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }

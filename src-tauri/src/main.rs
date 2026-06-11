@@ -1406,6 +1406,28 @@ async fn save_settings_cmd(
         settings.max_results
     );
 
+    // Defense-in-depth guard (mirrors the same check in server.rs's POST
+    // /api/settings handler): refuse to overwrite customized state with a
+    // payload that looks exactly like factory defaults. This catches the
+    // exact silent-fallback regression the SettingsWindow.tsx fix prevents,
+    // even if a future caller bypasses or regresses that frontend check.
+    let current_for_guard = state.settings.lock().await.clone();
+    if omnilauncher_lib::settings::looks_like_factory_defaults(&settings)
+        && omnilauncher_lib::settings::appears_customized(&current_for_guard)
+    {
+        log::warn!(
+            "refusing save_settings_cmd: payload matches factory defaults but live state is customized (api_key_present={}, backend_url_present={}, github_servers={}, plugin_dirs={})",
+            !current_for_guard.ai_api_key.is_empty(),
+            !current_for_guard.backend_url.is_empty(),
+            current_for_guard.github_servers.len(),
+            current_for_guard.plugin_dirs.len()
+        );
+        return Err(
+            "Refusing to overwrite customized settings with factory defaults. Reload the Preferences window and try again."
+                .to_string(),
+        );
+    }
+
     let current_hotkey = state.settings.lock().await.hotkey.clone();
     let mut changed_shortcut: Option<(Option<Shortcut>, Shortcut)> = None;
     if current_hotkey != settings.hotkey {

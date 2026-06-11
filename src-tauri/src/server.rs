@@ -509,6 +509,62 @@ async fn handle_request(
                         input.background_url,
                         !input.ai_api_key.trim().is_empty()
                     );
+                    // Defense-in-depth guard (do this BEFORE moving input
+                    // fields into `updated`): refuse a POST whose explicit
+                    // fields are all factory defaults when the live in-memory
+                    // state's same explicit fields are customized. The
+                    // historical bug — frontend silent-fallback substitutes
+                    // hardcoded defaults on a failed get_settings, then the
+                    // user clicks Save and wipes their real config — is
+                    // exactly this shape. A legitimate "reset everything"
+                    // save from a never-customized install is still allowed.
+                    //
+                    // We check the RAW INPUT FIELDS (not the merged `updated`
+                    // below) because the `..state.settings.lock().await.clone()`
+                    // spread re-fills github_servers/plugin_dirs from
+                    // in-memory state, masking the wipe shape after the merge.
+                    // The danger is the EXPLICITLY mapped fields being wiped.
+                    let current = state.settings.lock().await.clone();
+                    let input_is_factory_default = input.ai_api_key.is_empty()
+                        && input.background_url.is_empty()
+                        && input.backend_url.is_empty()
+                        && (input.ai_base_url == "http://localhost:5000"
+                            || input.ai_base_url == "http://127.0.0.1:5000")
+                        && input.ai_model == "auto"
+                        && input.ai_timeout_secs == 120
+                        && input.ai_max_tool_iterations == 10
+                        && input.ai_max_retry_attempts == 3
+                        && input.ai_retry_base_delay_ms == 2_000
+                        && input.theme == "system"
+                        && input.hotkey == "Ctrl+Shift+O"
+                        && input.max_results == 10;
+                    let current_is_customized = !current.ai_api_key.is_empty()
+                        || !current.background_url.is_empty()
+                        || !current.backend_url.is_empty()
+                        || !current.plugin_dirs.is_empty()
+                        || !current.github_servers.is_empty()
+                        || (current.ai_base_url != "http://localhost:5000"
+                            && current.ai_base_url != "http://127.0.0.1:5000")
+                        || current.ai_model != "auto";
+                    if input_is_factory_default && current_is_customized {
+                        log::warn!(
+                            "refusing POST /api/settings: payload matches factory defaults but live state is customized (api_key_present={}, backend_url_present={}, github_servers={}, plugin_dirs={}, ai_base_url={}, ai_model={})",
+                            !current.ai_api_key.is_empty(),
+                            !current.backend_url.is_empty(),
+                            current.github_servers.len(),
+                            current.plugin_dirs.len(),
+                            current.ai_base_url,
+                            current.ai_model
+                        );
+                        return LiveResponse::text(
+                            "409 Conflict",
+                            "Refusing to overwrite customized settings with factory defaults. \
+This usually means the frontend failed to load settings (e.g. auth error) and \
+substituted defaults before the user clicked Save. Reload the settings page \
+and try again."
+                                .to_string(),
+                        );
+                    }
                     let updated = AppSettings {
                         ai_base_url: input.ai_base_url,
                         ai_model: input.ai_model,
@@ -522,7 +578,7 @@ async fn handle_request(
                         max_results: input.max_results,
                         background_url: input.background_url,
                         backend_url: input.backend_url,
-                        ..state.settings.lock().await.clone()
+                        ..current
                     };
                     {
                         let mut settings = state.settings.lock().await;
@@ -1377,6 +1433,152 @@ mod tests {
         assert_eq!(
             stored.ai_retry_base_delay_ms, 4321,
             "ai_retry_base_delay_ms must be persisted into state (not silently dropped)"
+        );
+    }
+
+    /// Regression test for the "Preferences silently wipes user settings" bug.
+    ///
+    /// Repro: WSL backend has customized settings (API key set, etc). Windows
+    /// frontend connects, get_settings returns 401 because the token is stale,
+    /// the old SettingsWindow.tsx catch path substituted hardcoded defaults
+    /// and rendered them in the form. User clicks Save → frontend POSTs the
+    /// hardcoded defaults → backend silently overwrote settings.json with
+    /// them, wiping the user's API key, plugin dirs, github servers, etc.
+    ///
+    /// The server-side guard now refuses such a POST with 409 Conflict so the
+    /// user's customizations survive even if the frontend regresses.
+    #[tokio::test]
+    async fn post_settings_refuses_default_payload_when_state_is_customized() {
+        let previous_env = std::env::var("OMNILAUNCHER_AUTH_TOKEN").ok();
+        std::env::remove_var("OMNILAUNCHER_AUTH_TOKEN");
+
+        // Seed customized state — non-empty API key + a github_server is
+        // exactly the "user has put in real config" signal the guard checks.
+        let mut settings = AppSettings::default();
+        settings.ai_api_key = "sk-real-user-key".to_string();
+        settings.github_servers.push(crate::settings::GitHubServer {
+            hostname: "github.com".to_string(),
+            ..Default::default()
+        });
+
+        let state = ServerState {
+            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
+            ai_client: Arc::new(Mutex::new(AiClient::new(
+                settings.ai_base_url.clone(),
+                settings.resolve_ai_api_key(),
+                settings.ai_model.clone(),
+            ))),
+            settings: Arc::new(Mutex::new(settings)),
+            conversation: Arc::new(Mutex::new(ConversationContext::default())),
+            ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
+            current_ai_task: Arc::new(Mutex::new(None)),
+            skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+            event_bus: EventBus::default(),
+            latest_selection: Arc::new(Mutex::new(None)),
+            auth_token: Arc::new("guard-token".to_string()),
+        };
+
+        // This is the EXACT payload the old SettingsWindow.tsx silent-fallback
+        // would POST after a failed get_settings.
+        let body = r#"{
+            "ai_base_url":"http://localhost:5000",
+            "ai_model":"auto",
+            "ai_api_key":"",
+            "ai_timeout_secs":120,
+            "ai_max_tool_iterations":10,
+            "ai_max_retry_attempts":3,
+            "ai_retry_base_delay_ms":2000,
+            "theme":"system",
+            "hotkey":"Ctrl+Shift+O",
+            "max_results":10,
+            "background_url":"",
+            "backend_url":""
+        }"#;
+        let request = format!(
+            "POST /api/settings HTTP/1.1\r\nX-OmniLauncher-Token: guard-token\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = handle_request(&state, "POST", "/api/settings", "", &request).await;
+
+        if let Some(token) = previous_env {
+            std::env::set_var("OMNILAUNCHER_AUTH_TOKEN", token);
+        }
+
+        assert_eq!(
+            response.status, "409 Conflict",
+            "guard must reject default-shaped payload when live state is customized"
+        );
+        // Critically, the in-memory state must NOT have been mutated.
+        let after = state.settings.lock().await.clone();
+        assert_eq!(
+            after.ai_api_key, "sk-real-user-key",
+            "user's API key must survive the rejected POST"
+        );
+        assert_eq!(
+            after.github_servers.len(),
+            1,
+            "user's github servers must survive the rejected POST"
+        );
+    }
+
+    /// Companion to the guard test: a legitimate "I'm a fresh install, accept
+    /// my factory-default save" must still succeed when nothing in live state
+    /// indicates customization.
+    #[tokio::test]
+    async fn post_settings_accepts_default_payload_when_state_is_not_customized() {
+        let previous_env = std::env::var("OMNILAUNCHER_AUTH_TOKEN").ok();
+        std::env::remove_var("OMNILAUNCHER_AUTH_TOKEN");
+
+        // Pristine state — no API key, no github servers, no backend URL.
+        let settings = AppSettings::default();
+        let state = ServerState {
+            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
+            ai_client: Arc::new(Mutex::new(AiClient::new(
+                settings.ai_base_url.clone(),
+                settings.resolve_ai_api_key(),
+                settings.ai_model.clone(),
+            ))),
+            settings: Arc::new(Mutex::new(settings)),
+            conversation: Arc::new(Mutex::new(ConversationContext::default())),
+            ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
+            current_ai_task: Arc::new(Mutex::new(None)),
+            skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+            event_bus: EventBus::default(),
+            latest_selection: Arc::new(Mutex::new(None)),
+            auth_token: Arc::new("fresh-token".to_string()),
+        };
+
+        let body = r#"{
+            "ai_base_url":"http://localhost:5000",
+            "ai_model":"auto",
+            "ai_api_key":"",
+            "ai_timeout_secs":120,
+            "ai_max_tool_iterations":10,
+            "ai_max_retry_attempts":3,
+            "ai_retry_base_delay_ms":2000,
+            "theme":"system",
+            "hotkey":"Ctrl+Shift+O",
+            "max_results":10,
+            "background_url":"",
+            "backend_url":""
+        }"#;
+        let request = format!(
+            "POST /api/settings HTTP/1.1\r\nX-OmniLauncher-Token: fresh-token\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = handle_request(&state, "POST", "/api/settings", "", &request).await;
+
+        if let Some(token) = previous_env {
+            std::env::set_var("OMNILAUNCHER_AUTH_TOKEN", token);
+        }
+
+        assert_eq!(
+            response.status, "200 OK",
+            "guard must allow default-shaped POST on a never-customized install"
         );
     }
 

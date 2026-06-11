@@ -485,10 +485,73 @@ pub fn save_settings(settings: &AppSettings) -> bool {
             return false;
         }
     }
+    // Defense-in-depth: write a sibling `.bak` of whatever is currently on
+    // disk before we overwrite. Cheap (one extra copy per Save click) and
+    // recovers the user instantly from any future bug that writes hardcoded
+    // defaults on top of real settings — historically the no.1 way users
+    // lost configuration (frontend silent-fallback → POST defaults). The
+    // backup is best-effort; a copy failure does NOT block the save.
+    if path.exists() {
+        let bak_path = path.with_extension("json.bak");
+        if let Err(err) = std::fs::copy(&path, &bak_path) {
+            log::warn!(
+                "settings backup failed (continuing with save): {} -> {} ({})",
+                path.display(),
+                bak_path.display(),
+                err
+            );
+        }
+    }
     match serde_json::to_string_pretty(settings) {
         Ok(json) => std::fs::write(&path, json).is_ok(),
         Err(_) => false,
     }
+}
+
+/// Returns true when `candidate` looks like the factory-default settings —
+/// the exact shape the frontend's old silent-fallback used to produce when
+/// `get_settings` failed. Used by the POST /api/settings handler to refuse
+/// to overwrite a customized in-memory state with what is almost certainly
+/// a UI-bug payload rather than an intentional save.
+///
+/// We intentionally do NOT use `*candidate == AppSettings::default()` because
+/// a legitimate user CAN save a payload that matches defaults exactly (e.g.
+/// they reset every field on purpose). The check below combines the default
+/// shape with empty API key + empty backend URL + no plugin dirs + no github
+/// servers — the combination the old silent-fallback path emitted.
+///
+/// The base URL check accepts both `http://localhost:5000` (the old
+/// frontend silent-fallback value) and `http://127.0.0.1:5000` (the
+/// AppSettings::default() value); either signals "default shape".
+pub fn looks_like_factory_defaults(candidate: &AppSettings) -> bool {
+    candidate.ai_api_key.is_empty()
+        && candidate.backend_url.is_empty()
+        && candidate.plugin_dirs.is_empty()
+        && candidate.github_servers.is_empty()
+        && candidate.background_url.is_empty()
+        && (candidate.ai_base_url == "http://localhost:5000"
+            || candidate.ai_base_url == "http://127.0.0.1:5000")
+        && candidate.ai_model == "auto"
+        && candidate.ai_timeout_secs == 120
+        && candidate.ai_max_tool_iterations == 10
+        && candidate.ai_max_retry_attempts == 3
+        && candidate.ai_retry_base_delay_ms == 2_000
+        && candidate.theme == "system"
+        && candidate.hotkey == "Ctrl+Shift+O"
+        && candidate.max_results == 10
+}
+
+/// Returns true when `existing` clearly carries user customization — used to
+/// gate the "refuse default-overwrite" guard. We err on the side of letting
+/// a save through: only flag obvious customization (non-empty API key, custom
+/// background, GitHub servers, plugin dirs, or backend URL) so legitimate
+/// "reset everything" saves still work for users who never customized.
+pub fn appears_customized(existing: &AppSettings) -> bool {
+    !existing.ai_api_key.is_empty()
+        || !existing.backend_url.is_empty()
+        || !existing.background_url.is_empty()
+        || !existing.plugin_dirs.is_empty()
+        || !existing.github_servers.is_empty()
 }
 
 #[cfg(test)]
@@ -587,5 +650,171 @@ mod settings_tests {
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.ai_max_retry_attempts, 5);
         assert_eq!(s.ai_retry_base_delay_ms, 500);
+    }
+
+    // ── Default-overwrite guard ────────────────────────────────────────
+    // Regression coverage for the silent-fallback bug: the old frontend
+    // catch path would substitute hardcoded defaults when get_settings
+    // failed, then a subsequent Save would POST those defaults and wipe
+    // a user's customized settings. These helpers gate that path.
+
+    fn default_shaped_settings() -> AppSettings {
+        // Matches the exact shape the old SettingsWindow.tsx silent-fallback
+        // produced (and the AppSettings::default values otherwise).
+        AppSettings {
+            ai_base_url: "http://localhost:5000".to_string(),
+            ai_model: "auto".to_string(),
+            ai_api_key: String::new(),
+            ai_timeout_secs: 120,
+            ai_max_tool_iterations: 10,
+            ai_max_retry_attempts: 3,
+            ai_retry_base_delay_ms: 2_000,
+            theme: "system".to_string(),
+            hotkey: "Ctrl+Shift+O".to_string(),
+            max_results: 10,
+            background_url: String::new(),
+            plugin_dirs: vec![],
+            github_servers: vec![],
+            capture_selection_on_open: false,
+            backend_url: String::new(),
+            github_token: String::new(),
+            github_server: String::new(),
+            github_orgs: vec![],
+        }
+    }
+
+    #[test]
+    fn looks_like_factory_defaults_matches_silent_fallback_shape() {
+        assert!(looks_like_factory_defaults(&default_shaped_settings()));
+    }
+
+    #[test]
+    fn looks_like_factory_defaults_rejects_customized_payload() {
+        let mut s = default_shaped_settings();
+        s.ai_api_key = "sk-real".to_string();
+        assert!(!looks_like_factory_defaults(&s));
+
+        let mut s = default_shaped_settings();
+        s.background_url = "https://example.com/bg.png".to_string();
+        assert!(!looks_like_factory_defaults(&s));
+
+        let mut s = default_shaped_settings();
+        s.backend_url = "http://10.0.0.5:1422".to_string();
+        assert!(!looks_like_factory_defaults(&s));
+
+        let mut s = default_shaped_settings();
+        s.github_servers.push(GitHubServer {
+            hostname: "github.com".to_string(),
+            ..Default::default()
+        });
+        assert!(!looks_like_factory_defaults(&s));
+    }
+
+    #[test]
+    fn looks_like_factory_defaults_rejects_tweaked_scalar_fields() {
+        let mut s = default_shaped_settings();
+        s.ai_timeout_secs = 300;
+        assert!(!looks_like_factory_defaults(&s));
+
+        let mut s = default_shaped_settings();
+        s.max_results = 25;
+        assert!(!looks_like_factory_defaults(&s));
+
+        let mut s = default_shaped_settings();
+        s.theme = "dark".to_string();
+        assert!(!looks_like_factory_defaults(&s));
+
+        let mut s = default_shaped_settings();
+        s.hotkey = "Alt+Space".to_string();
+        assert!(!looks_like_factory_defaults(&s));
+    }
+
+    #[test]
+    fn appears_customized_detects_user_state() {
+        let mut s = default_shaped_settings();
+        assert!(!appears_customized(&s));
+
+        s.ai_api_key = "sk-test".to_string();
+        assert!(appears_customized(&s));
+
+        let mut s = default_shaped_settings();
+        s.backend_url = "http://backend.local:1422".to_string();
+        assert!(appears_customized(&s));
+
+        let mut s = default_shaped_settings();
+        s.background_url = "https://example.com/bg.png".to_string();
+        assert!(appears_customized(&s));
+
+        let mut s = default_shaped_settings();
+        s.plugin_dirs.push("/opt/plugins".to_string());
+        assert!(appears_customized(&s));
+
+        let mut s = default_shaped_settings();
+        s.github_servers.push(GitHubServer {
+            hostname: "github.com".to_string(),
+            ..Default::default()
+        });
+        assert!(appears_customized(&s));
+    }
+
+    /// Regression test for the "rebuild backend wipes settings.json" bug:
+    /// save_settings must copy the existing file to `settings.json.bak` BEFORE
+    /// overwriting, so the user can always recover the previous configuration
+    /// if a bad payload (UI bug, accidental save) lands on disk.
+    #[test]
+    fn save_settings_creates_backup_of_previous_file() {
+        // Override settings location to a temp dir so we don't touch the user's
+        // real config. Hold the global env lock for the duration to keep
+        // parallel tests from racing on OMNILAUNCHER_CONFIG_DIR.
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.blocking_lock();
+        // Use a unique dir per test invocation so leftover state from a prior
+        // crashed run cannot make this test pass-then-fail spuriously.
+        let tmp = std::env::temp_dir().join(format!(
+            "omnilauncher-save-bak-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("test tmp dir");
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", tmp.to_string_lossy().as_ref());
+
+        // Ensure no stale settings.json or .bak from prior runs.
+        let path = settings_path();
+        let bak_path = path.with_extension("json.bak");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bak_path);
+
+        // First save: nothing to back up yet.
+        let mut s = default_shaped_settings();
+        s.ai_api_key = "first-key".to_string();
+        assert!(save_settings(&s));
+        assert!(path.exists(), "settings.json should exist after first save");
+        assert!(
+            !bak_path.exists(),
+            "no backup expected on first save (path={})",
+            bak_path.display()
+        );
+
+        // Second save: the previous file must be copied to .bak first.
+        let mut s2 = default_shaped_settings();
+        s2.ai_api_key = "second-key".to_string();
+        assert!(save_settings(&s2));
+        assert!(bak_path.exists(), "settings.json.bak must exist after second save");
+
+        // The .bak content must reflect the FIRST save (so it's a true backup
+        // of what was about to be overwritten, not a copy of the new value).
+        let bak_body = std::fs::read_to_string(&bak_path).unwrap();
+        assert!(
+            bak_body.contains("first-key"),
+            "backup must carry the previous value, got: {}",
+            bak_body
+        );
+        assert!(
+            !bak_body.contains("second-key"),
+            "backup must NOT contain the just-saved value"
+        );
+
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
