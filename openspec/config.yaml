@@ -1,0 +1,23 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+context: |
+  Tech stack: Tauri 2 + Rust (backend, src-tauri/) and React + TypeScript +
+  Vite (frontend, src/). Tests: `cargo test` for Rust, `vitest` for frontend.
+  Conventional commit messages (feat:, fix:, docs(spec):, etc.).
+  Domain: keyboard-first launcher with three modes (launcher / AI / slash),
+  plugin and skill systems, optional split-machine backend with token auth.
+  User config lives under `~/.config/omnilauncher/`; runtime data under
+  `~/.omnilauncher/`.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
