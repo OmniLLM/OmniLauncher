@@ -122,17 +122,9 @@ const WINDOW_LOCAL_COMMANDS = new Set<string>([
   "set_window_size_centered",
   "save_window_position",
   "capture_vision_screenshot",
-  "set_hotkey_cmd",
 ]);
 
-/// Commands that have authoritative native implementations in the desktop shell.
-/// Prefer local Tauri for these when available so desktop settings saves do not
-/// depend on a reachable HTTP backend.
-const TAURI_NATIVE_COMMANDS = new Set<string>(["save_settings_cmd"]);
-const SETTINGS_SYNC_COMMANDS = new Set<string>([
-  "save_settings_cmd",
-  "set_hotkey_cmd",
-]);
+const TAURI_NATIVE_COMMANDS = new Set<string>([]);
 
 function isNativeCommand(cmd: string): boolean {
   return WINDOW_LOCAL_COMMANDS.has(cmd) || TAURI_NATIVE_COMMANDS.has(cmd);
@@ -367,24 +359,6 @@ export async function invoke<T = unknown>(
   const mode = getBackendMode();
   frontendLog("debug", `invoke ${cmd} mode=${mode} args=${summarizeArgs(args)}`);
 
-  // Settings are split-brain sensitive in the desktop shell: Tauri owns OS-side
-  // effects (global hotkey registration, local settings file), while the
-  // separated backend is what the UI reads in HTTP mode. Sync to both so a
-  // successful desktop save is immediately visible through backend reads.
-  if (mode === "http" && isTauriRuntime() && SETTINGS_SYNC_COMMANDS.has(cmd)) {
-    frontendLog("debug", `invoke ${cmd} syncing to backend and local Tauri`);
-    const token = await activeBackendToken();
-    if (!token) {
-      throw new Error("Backend token is required to save settings");
-    }
-    const settingsPayload = args?.settings ?? {};
-    await httpJson("/api/settings", {
-      method: "POST",
-      body: JSON.stringify(settingsPayload),
-    });
-    return tauriInvoke<T>(cmd, args);
-  }
-
   // Window/OS-shell commands and authoritative native commands always run in
   // the local Tauri process when available. The separated HTTP backend cannot
   // own OS window state or live global shortcut registration.
@@ -403,6 +377,10 @@ export async function invoke<T = unknown>(
       case "get_settings":
         return httpJson<T>("/api/settings");
       case "save_settings_cmd":
+      case "set_hotkey_cmd":
+        if (isTauriRuntime() && !(await activeBackendToken())) {
+          throw new Error("Backend token is required to save settings");
+        }
         return httpJson<T>("/api/settings", {
           method: "POST",
           body: JSON.stringify(args?.settings ?? {}),
@@ -555,6 +533,11 @@ export async function invoke<T = unknown>(
           `Command \"${cmd}\" is not available in browser mode yet.`,
         );
     }
+  }
+
+  if (isTauriRuntime() && (cmd === "save_settings_cmd" || cmd === "set_hotkey_cmd")) {
+    frontendLog("debug", `invoke ${cmd} routed to local Tauri command without backend`);
+    return tauriInvoke<T>(cmd, args);
   }
 
   console.warn(`[Tauri Shim] Mock invoke for: ${cmd}`);

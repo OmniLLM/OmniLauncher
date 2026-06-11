@@ -313,7 +313,7 @@ describe("http routing for new endpoints", () => {
     expect(state.calls.some((c) => c.url.endsWith("/api/ai/cancel") && c.method === "POST")).toBe(true);
   });
 
-  it("syncs save_settings_cmd to both native Tauri and backend in the desktop shell", async () => {
+  it("routes save_settings_cmd only to the backend in the desktop shell", async () => {
     const state = mockBackend();
     const settings = { ai_base_url: "http://example.com", ai_model: "gpt-4", ai_timeout_secs: 300 };
     (globalThis as any).window.__TAURI_INTERNALS__ = {};
@@ -321,22 +321,21 @@ describe("http routing for new endpoints", () => {
     await invoke("save_settings_cmd", { settings });
 
     const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
-    expect(tauriInvoke).toHaveBeenCalledWith("save_settings_cmd", { settings });
+    expect(tauriInvoke).not.toHaveBeenCalledWith("save_settings_cmd", { settings });
     expect(call).toBeDefined();
     expect(JSON.parse(call!.body!)).toEqual(settings);
   });
 
-  it("syncs set_hotkey_cmd to both native Tauri and backend in the desktop shell", async () => {
+  it("routes set_hotkey_cmd only to the backend in the desktop shell", async () => {
     const state = mockBackend();
     const settings = { hotkey: "Ctrl+Shift+O" };
     (globalThis as any).window.__TAURI_INTERNALS__ = {};
     (globalThis as any).window.__OMNILAUNCHER_TOKEN__ = "current-backend-token";
-    vi.mocked(tauriInvoke).mockResolvedValueOnce(settings);
 
     await invoke("set_hotkey_cmd", { settings });
 
     const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
-    expect(tauriInvoke).toHaveBeenCalledWith("set_hotkey_cmd", { settings });
+    expect(tauriInvoke).not.toHaveBeenCalledWith("set_hotkey_cmd", { settings });
     expect(call).toBeDefined();
     expect(JSON.parse(call!.body!)).toEqual(settings);
   });
@@ -350,7 +349,7 @@ describe("http routing for new endpoints", () => {
     expect(JSON.parse(call!.body!)).toEqual(settings);
   });
 
-  it("syncs save_settings_cmd through native Tauri and HTTP in the desktop shell when a backend URL is configured", async () => {
+  it("routes save_settings_cmd to backend only in the desktop shell when a backend URL is configured", async () => {
     const state = mockBackend();
     const settings = { ai_base_url: "http://example.com", ai_model: "gpt-4", ai_timeout_secs: 300 };
     (globalThis as any).window.__TAURI_INTERNALS__ = {};
@@ -358,7 +357,7 @@ describe("http routing for new endpoints", () => {
     await invoke("save_settings_cmd", { settings });
 
     const call = state.calls.find((c) => c.url.endsWith("/api/settings") && c.method === "POST");
-    expect(tauriInvoke).toHaveBeenCalledWith("save_settings_cmd", { settings });
+    expect(tauriInvoke).not.toHaveBeenCalledWith("save_settings_cmd", { settings });
     expect(call).toBeDefined();
     expect(JSON.parse(call!.body!)).toEqual(settings);
   });
