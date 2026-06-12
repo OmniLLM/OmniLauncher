@@ -95,7 +95,7 @@ export function useGlobalKeyboard(args: UseGlobalKeyboardArgs): void {
 
       if (e.key === "," && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        setShowSettings(true);
+        setShowSettings((prev) => !prev);
       }
 
       if (e.key === "F1") {

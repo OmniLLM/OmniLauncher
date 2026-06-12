@@ -322,6 +322,21 @@ describe("App — settings", () => {
     expect(saveCall!.args?.settings).not.toHaveProperty("backend_token");
   });
 
+  it("toggles settings with Ctrl+,", async () => {
+    render(<App />);
+
+    expect(await findInput()).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    await screen.findByText("Preferences");
+
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    await waitFor(() => {
+      expect(screen.queryByText("Preferences")).not.toBeInTheDocument();
+    });
+    expect(await findInput()).toBeInTheDocument();
+  });
+
   it("captures a new hotkey and saves it immediately", async () => {
     const user = userEvent.setup();
     render(<App />);
