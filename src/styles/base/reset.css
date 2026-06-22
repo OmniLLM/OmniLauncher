@@ -39,10 +39,13 @@ body,
 }
 
 body {
+  background: #0b1220;
   background: var(--bg);
   overflow: hidden;
   margin: 0;
   padding: 0;
+  width: 100%;
+  height: 100%;
   font-family:
     "Inter",
     "Segoe UI",
@@ -50,5 +53,15 @@ body {
     -apple-system,
     sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+html {
+  width: 100%;
+  height: 100%;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
 }
 

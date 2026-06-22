@@ -132,9 +132,6 @@ export default function App() {
   const {
     isCompactMode,
     launcherResultsMode,
-    windowHeight,
-    maxHeight,
-    userResized,
     resetWindowSize,
     handleResizeStart,
   } = useLayoutGeometry({
@@ -172,9 +169,6 @@ export default function App() {
       <AppShell
         resolvedTheme={resolvedTheme}
         backgroundUrl={backgroundUrl}
-        windowHeight={windowHeight}
-        maxHeight={maxHeight}
-        userResized={userResized}
         isCompactMode={isCompactMode}
         isAiMode={isAiMode}
       >

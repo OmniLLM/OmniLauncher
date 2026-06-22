@@ -6,9 +6,6 @@ const SHELL_FONT =
 export interface AppShellProps {
   resolvedTheme: ResolvedTheme;
   backgroundUrl: string;
-  windowHeight: string;
-  maxHeight: string;
-  userResized: boolean;
   isCompactMode: boolean;
   isAiMode: boolean;
   children: React.ReactNode;
@@ -16,15 +13,12 @@ export interface AppShellProps {
 
 /**
  * Outer wrapper div for the launcher window: sets the background gradient,
- * theme-aware colors, font, and height/transition behavior. Stateless — all
- * geometry inputs come from props.
+ * theme-aware colors, font, and height/transition behavior. Always fills the
+ * entire viewport — native window resizing is handled by useWindowSize hook.
  */
 export default function AppShell({
   resolvedTheme,
   backgroundUrl,
-  windowHeight,
-  maxHeight,
-  userResized,
   isCompactMode,
   isAiMode,
   children,
@@ -33,8 +27,8 @@ export default function AppShell({
     <div
       style={{
         width: "100%",
-        height: userResized ? "100vh" : windowHeight,
-        maxHeight: userResized ? "100vh" : maxHeight,
+        minHeight: "100vh",
+        height: "100vh",
         background:
           resolvedTheme === "dark"
             ? backgroundUrl
@@ -55,8 +49,6 @@ export default function AppShell({
         justifyContent: isCompactMode ? "center" : "flex-start",
         padding: isCompactMode ? "0" : 0,
         boxSizing: "border-box",
-        transition:
-          "height 220ms cubic-bezier(0.4,0,0.2,1), max-height 220ms cubic-bezier(0.4,0,0.2,1)",
         outline: isAiMode
           ? `1.5px solid color-mix(in srgb, var(--accent) 20%, transparent)`
           : "none",
