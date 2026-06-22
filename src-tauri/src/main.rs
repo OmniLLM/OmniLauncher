@@ -771,8 +771,8 @@ async fn set_window_size_centered(
 async fn sync_window_geometry(
     window: &tauri::WebviewWindow,
     height: f64,
-    ai_mode: bool,
-    panel_mode: bool,
+    _ai_mode: bool,
+    _panel_mode: bool,
 ) -> Result<bool, String> {
     let clamped_height = height.clamp(56.0, 1200.0);
     log::trace!("sync_window_geometry requested height={height}, clamped={clamped_height}");
@@ -786,21 +786,18 @@ async fn sync_window_geometry(
         let monitor_x = monitor_position.x as f64 / scale_factor;
         let monitor_y = monitor_position.y as f64 / scale_factor;
 
-        let window_width = if panel_mode || ai_mode {
-            monitor_width * 0.5
-        } else {
-            monitor_width / 3.0
-        };
+        let window_width = monitor_width * 2.0 / 3.0;
+        let window_height = (monitor_height * 2.0 / 3.0).max(clamped_height);
         let window_x = monitor_x + (monitor_width - window_width) / 2.0;
-        let window_y = monitor_y + (monitor_height - clamped_height) / 2.0;
+        let window_y = monitor_y + (monitor_height - window_height) / 2.0;
         log::debug!(
-            "Applying centered geometry width={window_width:.2}, height={clamped_height:.2}, x={window_x:.2}, y={window_y:.2}"
+            "Applying centered geometry width={window_width:.2}, height={window_height:.2}, x={window_x:.2}, y={window_y:.2}"
         );
 
         window
             .set_size(Size::Logical(LogicalSize::new(
                 window_width,
-                clamped_height,
+                window_height,
             )))
             .map_err(|e| e.to_string())?;
         window
@@ -808,14 +805,15 @@ async fn sync_window_geometry(
             .map_err(|e| e.to_string())?;
         Ok(true)
     } else {
-        let fallback_width = if ai_mode { 768.0 } else { 640.0 };
+        let fallback_width = 1280.0;
+        let fallback_height = clamped_height.max(720.0);
         log::debug!(
-            "No monitor info available; applying fallback geometry width={fallback_width:.2} height={clamped_height:.2}"
+            "No monitor info available; applying fallback geometry width={fallback_width:.2} height={fallback_height:.2}"
         );
         window
             .set_size(Size::Logical(LogicalSize::new(
                 fallback_width,
-                clamped_height,
+                fallback_height,
             )))
             .map_err(|e| e.to_string())?;
         Ok(true)

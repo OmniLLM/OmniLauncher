@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "OmniLauncher",
-        "width": 640,
-        "height": 360,
+        "width": 1280,
+        "height": 720,
         "minWidth": 360,
         "minHeight": 56,
         "resizable": true,
