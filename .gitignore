@@ -19,7 +19,6 @@ screenshot-*.png
 skill-ui-test.png
 
 # AI-generated plan/doc directories
-docs/superpowers/
 .claude/
 .serena/
 .env
