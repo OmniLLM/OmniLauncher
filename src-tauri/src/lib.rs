@@ -1,3 +1,4 @@
+pub mod a2a;
 pub mod ai;
 pub mod dashboard;
 pub mod db;

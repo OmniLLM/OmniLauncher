@@ -31,6 +31,7 @@ const TABS = [
   { id: "ai", label: "AI", icon: "🤖" },
   { id: "appearance", label: "Appearance", icon: "🎨" },
   { id: "general", label: "General", icon: "⚙️" },
+  { id: "a2a", label: "A2A", icon: "🔗" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -771,6 +772,104 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                           (s) => s && { ...s, backend_url: e.target.value },
                         )
                       }
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "a2a" && (
+              <div>
+                <div className="settings-section-header">A2A Server</div>
+                <div className="settings-card">
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Enable A2A Server</span>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        type="checkbox"
+                        checked={settings.a2a_enabled}
+                        onChange={(e) =>
+                          setSettings(
+                            (s) =>
+                              s && { ...s, a2a_enabled: e.target.checked },
+                          )
+                        }
+                      />
+                      <span>Start an A2A-compatible HTTP server for agent-to-agent communication</span>
+                    </label>
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>LAN Access</span>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        type="checkbox"
+                        checked={settings.a2a_bind_lan}
+                        onChange={(e) =>
+                          setSettings(
+                            (s) =>
+                              s && { ...s, a2a_bind_lan: e.target.checked },
+                          )
+                        }
+                      />
+                      <span style={{ color: settings.a2a_bind_lan ? "var(--error)" : undefined }}>
+                        {settings.a2a_bind_lan
+                          ? "Listening on all interfaces (0.0.0.0) — accessible from LAN"
+                          : "Local only (127.0.0.1)"}
+                      </span>
+                    </label>
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Port</span>
+                    <input
+                      className="omni-input"
+                      type="number"
+                      min={1024}
+                      max={65535}
+                      value={settings.a2a_port}
+                      onChange={(e) =>
+                        setSettings(
+                          (s) =>
+                            s && {
+                              ...s,
+                              a2a_port: parseInt(e.target.value) || 1423,
+                            },
+                        )
+                      }
+                    />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Token</span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", width: "100%" }}>
+                      <input
+                        className="omni-input"
+                        type="text"
+                        readOnly
+                        value={settings.a2a_token ?? "(not generated — enable and save to generate)"}
+                        style={{ flex: 1, fontFamily: "monospace", fontSize: 12 }}
+                      />
+                      <button
+                        type="button"
+                        className="omni-button"
+                        style={{ whiteSpace: "nowrap" }}
+                        disabled={!settings.a2a_token}
+                        onClick={() => {
+                          if (settings.a2a_token) {
+                            navigator.clipboard.writeText(settings.a2a_token);
+                          }
+                        }}
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                  <div style={rowStyle(true)}>
+                    <span style={rowLabelStyle}>Server URL</span>
+                    <input
+                      className="omni-input"
+                      type="text"
+                      readOnly
+                      value={`http://${settings.a2a_bind_lan ? "0.0.0.0" : "127.0.0.1"}:${settings.a2a_port}`}
+                      style={{ fontFamily: "monospace", fontSize: 12 }}
                     />
                   </div>
                 </div>

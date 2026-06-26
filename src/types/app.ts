@@ -51,6 +51,18 @@ export interface AppSettings {
   /** Base URL of the separated backend the desktop shell connects to. Empty =
    * env override / built-in default `http://127.0.0.1:1422`. */
   backend_url: string;
+
+  // ── A2A server settings ────────────────────────────────────────────────
+  /** Enable the A2A (Agent-to-Agent) HTTP server. Off by default. */
+  a2a_enabled: boolean;
+  /** When true the A2A server binds 0.0.0.0 (LAN-accessible) instead of
+   * 127.0.0.1 (local-only). Advanced setting. */
+  a2a_bind_lan: boolean;
+  /** TCP port for the A2A server. Default 1423. */
+  a2a_port: number;
+  /** Bearer token for A2A authentication. Auto-generated when enabled if
+   * absent. */
+  a2a_token: string | null;
 }
 
 export interface PluginInfo {

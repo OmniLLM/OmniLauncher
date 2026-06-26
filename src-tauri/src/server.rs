@@ -110,6 +110,15 @@ struct SaveSettingsRequest {
     /// and legacy posts remain compatible.
     #[serde(default)]
     backend_url: String,
+    /// A2A server fields — mirrored so the settings round-trip preserves them.
+    #[serde(default)]
+    a2a_enabled: bool,
+    #[serde(default)]
+    a2a_bind_lan: bool,
+    #[serde(default = "crate::settings::default_a2a_port")]
+    a2a_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    a2a_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -578,6 +587,10 @@ and try again."
                         max_results: input.max_results,
                         background_url: input.background_url,
                         backend_url: input.backend_url,
+                        a2a_enabled: input.a2a_enabled,
+                        a2a_bind_lan: input.a2a_bind_lan,
+                        a2a_port: input.a2a_port,
+                        a2a_token: input.a2a_token,
                         ..current
                     };
                     {

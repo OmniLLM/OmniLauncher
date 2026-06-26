@@ -89,6 +89,10 @@ pub fn default_ai_loop_detector_enabled() -> bool {
     true
 }
 
+pub fn default_a2a_port() -> u16 {
+    1423
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub ai_base_url: String,
@@ -137,6 +141,23 @@ pub struct AppSettings {
     /// default (`http://127.0.0.1:1422`).
     #[serde(default)]
     pub backend_url: String,
+
+    // ── A2A server settings ─────────────────────────────────────────────────
+    /// Enable the A2A (Agent-to-Agent) HTTP server. Off by default.
+    #[serde(default)]
+    pub a2a_enabled: bool,
+    /// When true the A2A server binds `0.0.0.0` (LAN-accessible) instead of
+    /// `127.0.0.1` (local-only). Advanced setting — off by default.
+    #[serde(default)]
+    pub a2a_bind_lan: bool,
+    /// TCP port for the A2A server. Default 1423.
+    #[serde(default = "default_a2a_port")]
+    pub a2a_port: u16,
+    /// Bearer token for A2A authentication. Auto-generated the first time the
+    /// A2A server is enabled if absent. Stored in `settings.json` alongside
+    /// other config (unlike the backend token which lives in a separate file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a2a_token: Option<String>,
 
     // ── legacy single-server fields (migrated on first load) ──────────────────
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -201,6 +222,10 @@ impl Default for AppSettings {
             github_servers: vec![],
             capture_selection_on_open: false,
             backend_url: String::new(),
+            a2a_enabled: false,
+            a2a_bind_lan: false,
+            a2a_port: default_a2a_port(),
+            a2a_token: None,
             github_token: String::new(),
             github_server: String::new(),
             github_orgs: vec![],
@@ -720,6 +745,10 @@ mod settings_tests {
             github_servers: vec![],
             capture_selection_on_open: false,
             backend_url: String::new(),
+            a2a_enabled: false,
+            a2a_bind_lan: false,
+            a2a_port: default_a2a_port(),
+            a2a_token: None,
             github_token: String::new(),
             github_server: String::new(),
             github_orgs: vec![],

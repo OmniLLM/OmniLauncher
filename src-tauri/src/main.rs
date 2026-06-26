@@ -2030,6 +2030,48 @@ fn main() {
 
         let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
         rt.block_on(async move {
+            // ── Conditionally start the A2A server alongside the main API server ──
+            if settings.a2a_enabled {
+                let mut a2a_settings = settings.clone();
+
+                // Auto-generate token if absent.
+                if a2a_settings.a2a_token.as_ref().map_or(true, |t| t.trim().is_empty()) {
+                    let new_token = server::generate_auth_token();
+                    log::info!("a2a: generated new auth token (first enable)");
+                    a2a_settings.a2a_token = Some(new_token.clone());
+                    save_settings(&a2a_settings);
+                }
+
+                let a2a_token = a2a_settings.a2a_token.clone().unwrap_or_default();
+                let a2a_host = if a2a_settings.a2a_bind_lan {
+                    "0.0.0.0".to_string()
+                } else {
+                    "127.0.0.1".to_string()
+                };
+                let a2a_port = a2a_settings.a2a_port;
+
+                let a2a_state = omnilauncher_lib::a2a::server::A2aServerState {
+                    adapter: omnilauncher_lib::a2a::adapter::A2aAdapterState {
+                        plugin_manager: state.plugin_manager.clone(),
+                        ai_client: state.ai_client.clone(),
+                        settings: state.settings.clone(),
+                        conversation: state.conversation.clone(),
+                        skill_manager: state.skill_manager.clone(),
+                        task_registry: Arc::new(Mutex::new(
+                            omnilauncher_lib::a2a::tasks::TaskRegistry::new(100),
+                        )),
+                    },
+                    auth_token: Arc::new(a2a_token),
+                };
+
+                tokio::spawn(async move {
+                    omnilauncher_lib::a2a::server::spawn_a2a_server(
+                        a2a_state, a2a_host, a2a_port,
+                    )
+                    .await;
+                });
+            }
+
             server::spawn_api_server(state, host, port).await;
         });
         return;

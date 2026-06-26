@@ -49,6 +49,10 @@ const realSettings: AppSettings = {
   max_results: 25,
   background_url: "https://example.com/bg.png",
   backend_url: "http://wsl-backend:1422",
+  a2a_enabled: false,
+  a2a_bind_lan: false,
+  a2a_port: 1423,
+  a2a_token: null,
 };
 
 beforeEach(() => {

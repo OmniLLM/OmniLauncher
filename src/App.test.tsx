@@ -77,6 +77,10 @@ vi.mock("./lib/runtime", () => ({
             max_results: 30,
             background_url: "",
             backend_url: "",
+            a2a_enabled: false,
+            a2a_bind_lan: false,
+            a2a_port: 1423,
+            a2a_token: null,
           } as AppSettings as T;
         case "search":
           return searchResults as T;
