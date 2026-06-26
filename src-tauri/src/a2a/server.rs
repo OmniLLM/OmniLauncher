@@ -387,6 +387,68 @@ fn a2a_base_url(settings: &crate::AppSettings) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use super::super::tasks::TaskRegistry;
+    use crate::{
+        ai::{client::AiClient, router::ConversationContext},
+        create_plugin_manager_builtin_only, AppSettings, SkillManager,
+    };
+    use tokio::sync::Mutex;
+
+    fn test_server_state() -> A2aServerState {
+        let mut settings = AppSettings::default();
+        settings.a2a_port = 18123;
+
+        A2aServerState {
+            adapter: A2aAdapterState {
+                plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
+                ai_client: Arc::new(Mutex::new(AiClient::new(
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ))),
+                settings: Arc::new(Mutex::new(settings)),
+                conversation: Arc::new(Mutex::new(ConversationContext::new(10))),
+                skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+                task_registry: Arc::new(Mutex::new(TaskRegistry::new(10))),
+            },
+            auth_token: Arc::new("test-token".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_card_route_requires_bearer_token_and_returns_card() {
+        let state = test_server_state();
+
+        let unauthorized = handle_a2a_request(
+            &state,
+            "GET",
+            "/.well-known/agent.json",
+            "GET /.well-known/agent.json HTTP/1.1\r\n\r\n",
+        )
+        .await;
+        assert_eq!(unauthorized.status, "401 Unauthorized");
+
+        let authorized = handle_a2a_request(
+            &state,
+            "GET",
+            "/.well-known/agent.json",
+            "GET /.well-known/agent.json HTTP/1.1\r\nAuthorization: Bearer test-token\r\n\r\n",
+        )
+        .await;
+
+        assert_eq!(authorized.status, "200 OK");
+        let card: super::super::types::AgentCard = serde_json::from_str(&authorized.body).unwrap();
+        assert_eq!(card.name, "OmniLauncher");
+        assert_eq!(card.url, "http://127.0.0.1:18123");
+        assert!(card
+            .authentication
+            .schemes
+            .iter()
+            .any(|scheme| scheme == "bearer"));
+        assert!(!card.skills.is_empty());
+    }
 
     #[test]
     fn extract_bearer_token_standard() {
