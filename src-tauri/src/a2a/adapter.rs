@@ -9,10 +9,11 @@ use crate::{
 };
 
 use super::{
+    capabilities::{build_capabilities, capability_to_agent_skill},
     tasks::TaskRegistry,
     types::{
         A2aArtifact, A2aError, A2aMessage, A2aPart, A2aTask, AgentAuthentication,
-        AgentCapabilities, AgentCard, AgentSkill, MessageSendRequest,
+        AgentCapabilities, AgentCard, MessageSendRequest,
     },
 };
 
@@ -40,52 +41,10 @@ pub fn build_agent_card(
     base_url: &str,
     pm: &PluginManager,
 ) -> AgentCard {
-    let mut skills: Vec<AgentSkill> = Vec::new();
-
-    // Expose all plugins with AI tool schemas as first-class skills.
-    for schema in pm.all_tool_schemas() {
-        if let Some(func) = schema.get("function") {
-            let name = func
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let desc = func
-                .get("description")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let params = func.get("parameters").cloned();
-
-            skills.push(AgentSkill {
-                id: name.clone(),
-                name,
-                description: desc,
-                input_schema: params,
-                tags: vec![],
-            });
-        }
-    }
-
-    // Also expose plugins that lack tool schemas with conservative descriptions.
-    for plugin in &pm.plugins {
-        let name = plugin.name().to_string();
-        // Skip if already covered by a tool schema above.
-        if skills.iter().any(|s| s.id == name || s.name == name) {
-            continue;
-        }
-        let desc = plugin.description().to_string();
-        let mut tags = Vec::new();
-        if let Some(kw) = plugin.keyword() {
-            tags.push(kw.to_string());
-        }
-        skills.push(AgentSkill {
-            id: name.clone(),
-            name,
-            description: if desc.is_empty() { None } else { Some(desc) },
-            input_schema: None,
-            tags,
-        });
-    }
+    let skills = build_capabilities(pm, None)
+        .iter()
+        .map(capability_to_agent_skill)
+        .collect();
 
     AgentCard {
         name: "OmniLauncher".to_string(),
@@ -316,6 +275,43 @@ fn extract_tool_args(request: &MessageSendRequest) -> serde_json::Value {
 mod tests {
     use super::*;
 
+    use async_trait::async_trait;
+    use crate::plugins::{Plugin, Query, QueryResult};
+
+    struct QueryOnlyPlugin;
+
+    #[async_trait]
+    impl Plugin for QueryOnlyPlugin {
+        fn name(&self) -> &str {
+            "Query Only Test"
+        }
+
+        fn description(&self) -> &str {
+            "Searches query-only test data"
+        }
+
+        fn keyword(&self) -> Option<&str> {
+            Some("qo")
+        }
+
+        async fn query(&self, q: &Query) -> Vec<QueryResult> {
+            if q.raw.contains("needle") {
+                vec![QueryResult {
+                    id: "query-only-hit".to_string(),
+                    title: "Needle Result".to_string(),
+                    subtitle: Some("Found by query-only plugin".to_string()),
+                    icon: None,
+                    score: 100,
+                    action_type: "none".to_string(),
+                    action_data: String::new(),
+                    source: Some("Query Only Test".to_string()),
+                }]
+            } else {
+                vec![]
+            }
+        }
+    }
+
     #[test]
     fn agent_card_includes_auth_and_capabilities() {
         let pm = PluginManager::new();
@@ -335,6 +331,27 @@ mod tests {
 
         // Should have at least some skills from built-in plugins.
         assert!(!card.skills.is_empty(), "expected skills from built-in plugins");
+    }
+
+    #[test]
+    fn agent_card_includes_query_only_plugin_capability() {
+        let mut pm = PluginManager::new();
+        pm.register(Box::new(QueryOnlyPlugin));
+
+        let card = build_agent_card("http://127.0.0.1:1423", &pm);
+
+        let query_skill = card
+            .skills
+            .iter()
+            .find(|skill| skill.id == "plugin:query:Query Only Test")
+            .expect("query-only plugin should be exposed as an A2A capability");
+        assert_eq!(query_skill.name, "Query Only Test");
+        assert_eq!(
+            query_skill.description.as_deref(),
+            Some("Searches query-only test data")
+        );
+        assert!(query_skill.tags.iter().any(|tag| tag == "qo"));
+        assert!(query_skill.input_schema.is_some());
     }
 
     #[test]
