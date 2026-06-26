@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    capabilities::{build_capabilities, capability_to_agent_skill},
+    capabilities::{self, build_capabilities, capability_to_agent_skill},
     tasks::TaskRegistry,
     types::{
         A2aArtifact, A2aError, A2aMessage, A2aPart, A2aTask, AgentAuthentication,
@@ -130,22 +130,8 @@ async fn execute_direct_tool(
     tool_name: &str,
     request: &MessageSendRequest,
 ) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
-    // Extract tool arguments from the first message's data part, or use the
-    // text as a simple input.
-    let args = extract_tool_args(request);
-
     let pm = state.plugin_manager.lock().await;
-    let output = pm.execute_tool(tool_name, args).await;
-
-    if output == "Tool not found" {
-        return Err(format!("Tool not found: {tool_name}"));
-    }
-
-    let message = A2aMessage {
-        role: "agent".to_string(),
-        parts: vec![A2aPart::Text { text: output }],
-    };
-    Ok((vec![message], vec![]))
+    capabilities::execute_capability(&pm, tool_name, request).await
 }
 
 /// Execute a conversational AI request.
@@ -251,32 +237,21 @@ fn extract_text_summary(request: &MessageSendRequest) -> String {
     "(empty request)".to_string()
 }
 
-/// Extract tool arguments from a message-send request.
-///
-/// If the first message contains a `Data` part, use it as the JSON arguments.
-/// Otherwise, wrap the text content as a `{"input": "..."}` object.
-fn extract_tool_args(request: &MessageSendRequest) -> serde_json::Value {
-    for msg in &request.messages {
-        for part in &msg.parts {
-            match part {
-                A2aPart::Data { data } => return data.clone(),
-                A2aPart::Text { text } => {
-                    return serde_json::json!({ "input": text });
-                }
-            }
-        }
-    }
-    serde_json::json!({})
-}
-
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::sync::Arc;
+
     use async_trait::async_trait;
-    use crate::plugins::{Plugin, Query, QueryResult};
+    use crate::{
+        ai::{client::AiClient, router::ConversationContext},
+        plugins::{Plugin, Query, QueryResult},
+        AppSettings, SkillManager,
+    };
+    use tokio::sync::Mutex;
 
     struct QueryOnlyPlugin;
 
@@ -309,6 +284,24 @@ mod tests {
             } else {
                 vec![]
             }
+        }
+    }
+
+    fn test_adapter_state_with_plugin(plugin: Box<dyn Plugin>) -> A2aAdapterState {
+        let mut pm = PluginManager::new();
+        pm.register(plugin);
+
+        A2aAdapterState {
+            plugin_manager: Arc::new(Mutex::new(pm)),
+            ai_client: Arc::new(Mutex::new(AiClient::new(
+                String::new(),
+                String::new(),
+                String::new(),
+            ))),
+            settings: Arc::new(Mutex::new(AppSettings::default())),
+            conversation: Arc::new(Mutex::new(ConversationContext::new(10))),
+            skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+            task_registry: Arc::new(Mutex::new(TaskRegistry::new(10))),
         }
     }
 
@@ -354,6 +347,29 @@ mod tests {
         assert!(query_skill.input_schema.is_some());
     }
 
+    #[tokio::test]
+    async fn message_send_invokes_query_only_capability() {
+        let state = test_adapter_state_with_plugin(Box::new(QueryOnlyPlugin));
+        let request = MessageSendRequest {
+            tool: Some("plugin:query:Query Only Test".to_string()),
+            messages: vec![A2aMessage {
+                role: "user".to_string(),
+                parts: vec![A2aPart::Data {
+                    data: serde_json::json!({ "query": "needle" }),
+                }],
+            }],
+        };
+
+        let task = handle_message_send(&state, request).await.unwrap();
+
+        assert_eq!(task.status.state, crate::a2a::types::A2aTaskState::Completed);
+        let artifact = task.artifacts.first().expect("query results artifact");
+        let A2aPart::Data { data } = &artifact.parts[0] else {
+            panic!("query results artifact should be structured data");
+        };
+        assert_eq!(data["results"][0]["title"], "Needle Result");
+    }
+
     #[test]
     fn extract_text_summary_from_request() {
         let req = MessageSendRequest {
@@ -383,33 +399,4 @@ mod tests {
         assert!(summary.ends_with('…'));
     }
 
-    #[test]
-    fn extract_tool_args_from_data_part() {
-        let req = MessageSendRequest {
-            messages: vec![A2aMessage {
-                role: "user".to_string(),
-                parts: vec![A2aPart::Data {
-                    data: serde_json::json!({"expression": "2+2"}),
-                }],
-            }],
-            tool: Some("calculator".to_string()),
-        };
-        let args = extract_tool_args(&req);
-        assert_eq!(args["expression"], "2+2");
-    }
-
-    #[test]
-    fn extract_tool_args_from_text_part() {
-        let req = MessageSendRequest {
-            messages: vec![A2aMessage {
-                role: "user".to_string(),
-                parts: vec![A2aPart::Text {
-                    text: "2+2".to_string(),
-                }],
-            }],
-            tool: Some("calculator".to_string()),
-        };
-        let args = extract_tool_args(&req);
-        assert_eq!(args["input"], "2+2");
-    }
 }

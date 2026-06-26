@@ -1,11 +1,11 @@
 use serde_json::{json, Value};
 
 use crate::{
-    plugins::{PluginManager, QueryResult},
+    plugins::{PluginManager, Query, QueryResult},
     SkillManager,
 };
 
-use super::types::AgentSkill;
+use super::types::{A2aArtifact, A2aMessage, A2aPart, AgentSkill, MessageSendRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum A2aCapabilityKind {
@@ -143,8 +143,164 @@ fn skill_input_schema() -> Value {
             "query": {
                 "type": "string",
                 "description": "Skill request or task text"
+            },
+            "op": {
+                "type": "string",
+                "description": "Skill runner operation: tool_call, query, or execute"
+            },
+            "args": {
+                "type": "object",
+                "description": "Structured arguments for tool_call"
+            },
+            "action_data": {
+                "type": "string",
+                "description": "Action data for execute"
             }
-        },
-        "required": ["query"]
+        }
     })
+}
+
+pub async fn execute_capability(
+    pm: &PluginManager,
+    capability_id: &str,
+    request: &MessageSendRequest,
+) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
+    let capabilities = build_capabilities(pm, None);
+    let capability = capabilities
+        .iter()
+        .find(|cap| cap.id == capability_id || cap.target == capability_id)
+        .ok_or_else(|| format!("Tool not found: {capability_id}"))?;
+
+    match capability.kind {
+        A2aCapabilityKind::ToolSchemaPlugin => execute_tool_schema_plugin(pm, capability, request).await,
+        A2aCapabilityKind::QueryPlugin => execute_query_plugin(pm, capability, request).await,
+        A2aCapabilityKind::LauncherQuery => execute_launcher_query(pm, request).await,
+        A2aCapabilityKind::Skill => execute_skill(pm, capability, request).await,
+    }
+}
+
+async fn execute_tool_schema_plugin(
+    pm: &PluginManager,
+    capability: &A2aCapability,
+    request: &MessageSendRequest,
+) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
+    let args = extract_tool_args(request);
+    let output = pm.execute_tool(&capability.target, args).await;
+    if output == "Tool not found" {
+        return Err(format!("Tool not found: {}", capability.target));
+    }
+    Ok(text_response(output))
+}
+
+async fn execute_query_plugin(
+    pm: &PluginManager,
+    capability: &A2aCapability,
+    request: &MessageSendRequest,
+) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
+    let query_text = extract_query_text(request);
+    let query = Query {
+        raw: query_text.clone(),
+        terms: query_text.split_whitespace().map(str::to_string).collect(),
+    };
+    let plugin = pm
+        .plugins
+        .iter()
+        .find(|plugin| plugin.name() == capability.target)
+        .ok_or_else(|| format!("Tool not found: {}", capability.id))?;
+    let results = plugin.query(&query).await;
+    Ok(query_results_response(results))
+}
+
+async fn execute_launcher_query(
+    pm: &PluginManager,
+    request: &MessageSendRequest,
+) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
+    let query_text = extract_query_text(request);
+    let results = pm.query_all(&query_text).await;
+    Ok(query_results_response(results))
+}
+
+async fn execute_skill(
+    pm: &PluginManager,
+    capability: &A2aCapability,
+    request: &MessageSendRequest,
+) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
+    let mut args = extract_tool_args(request);
+    if !args.is_object() {
+        args = json!({ "query": extract_query_text(request) });
+    }
+    if let Some(obj) = args.as_object_mut() {
+        obj.insert("skill".to_string(), Value::String(capability.target.clone()));
+        obj.entry("op".to_string())
+            .or_insert_with(|| Value::String("query".to_string()));
+        if !obj.contains_key("query") {
+            let query = extract_query_text(request);
+            if !query.is_empty() {
+                obj.insert("query".to_string(), Value::String(query));
+            }
+        }
+    }
+
+    let output = pm.execute_tool("execute_skill", args).await;
+    if output == "Tool not found" {
+        return Err("Tool not found: execute_skill".to_string());
+    }
+    Ok(text_response(output))
+}
+
+fn text_response(output: String) -> (Vec<A2aMessage>, Vec<A2aArtifact>) {
+    (
+        vec![A2aMessage {
+            role: "agent".to_string(),
+            parts: vec![A2aPart::Text { text: output }],
+        }],
+        vec![],
+    )
+}
+
+fn query_results_response(results: Vec<QueryResult>) -> (Vec<A2aMessage>, Vec<A2aArtifact>) {
+    let count = results.len();
+    let artifact = A2aArtifact {
+        name: Some("query_results".to_string()),
+        description: Some(format!("{count} launcher results")),
+        parts: vec![A2aPart::Data {
+            data: query_results_artifact(results),
+        }],
+        index: 0,
+    };
+    let message = A2aMessage {
+        role: "agent".to_string(),
+        parts: vec![A2aPart::Text {
+            text: format!("Found {count} result(s)"),
+        }],
+    };
+    (vec![message], vec![artifact])
+}
+
+fn extract_tool_args(request: &MessageSendRequest) -> Value {
+    request
+        .messages
+        .first()
+        .and_then(|message| message.parts.first())
+        .map(|part| match part {
+            A2aPart::Data { data } => data.clone(),
+            A2aPart::Text { text } => json!({ "input": text }),
+        })
+        .unwrap_or_else(|| json!({}))
+}
+
+fn extract_query_text(request: &MessageSendRequest) -> String {
+    request
+        .messages
+        .first()
+        .and_then(|message| message.parts.first())
+        .map(|part| match part {
+            A2aPart::Data { data } => data
+                .get("query")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            A2aPart::Text { text } => text.clone(),
+        })
+        .unwrap_or_default()
 }
