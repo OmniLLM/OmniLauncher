@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use serde::{de::DeserializeOwned, Serialize};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-};
+use tokio::net::TcpListener;
 
+use crate::http_util::{
+    self, encode_response, extract_auth, json_response, parse_json, read_body,
+    split_path_query, AuthScheme, CorsPolicy, HttpLimits,
+};
 use crate::live_server::LiveResponse;
 
 use super::{
@@ -35,14 +35,10 @@ pub async fn spawn_a2a_server(state: A2aServerState, host: String, port: u16) {
         }
     };
 
-    log::info!(
-        "a2a: server listening on http://{}:{}",
-        host,
-        port
-    );
+    log::info!("a2a: server listening on http://{}:{}", host, port);
 
     loop {
-        let (mut stream, addr) = match listener.accept().await {
+        let (mut stream, _addr) = match listener.accept().await {
             Ok(parts) => parts,
             Err(error) => {
                 log::warn!("a2a: accept error: {}", error);
@@ -52,12 +48,12 @@ pub async fn spawn_a2a_server(state: A2aServerState, host: String, port: u16) {
 
         let state = state.clone();
         tokio::spawn(async move {
-            let request = match read_http_request(&mut stream).await {
+            let request = match http_util::read_http_request(&mut stream, HttpLimits::DEFAULT).await
+            {
                 Ok(r) => r,
                 Err(resp) => {
-                    let bytes = encode_response(resp);
-                    let _ = stream.write_all(&bytes).await;
-                    let _ = stream.shutdown().await;
+                    let bytes = encode_response(resp, Some(CorsPolicy::A2A));
+                    http_util::write_and_close(&mut stream, &bytes).await;
                     return;
                 }
             };
@@ -70,11 +66,8 @@ pub async fn spawn_a2a_server(state: A2aServerState, host: String, port: u16) {
 
             let response = handle_a2a_request(&state, method, &path, &request).await;
 
-            let bytes = encode_response(response);
-            if let Err(error) = stream.write_all(&bytes).await {
-                log::debug!("a2a: write error to {}: {}", addr, error);
-            }
-            let _ = stream.shutdown().await;
+            let bytes = encode_response(response, Some(CorsPolicy::A2A));
+            http_util::write_and_close(&mut stream, &bytes).await;
         });
     }
 }
@@ -94,7 +87,7 @@ async fn handle_a2a_request(
 
     // ── Auth guard ──────────────────────────────────────────────────────
     let expected = state.auth_token.as_str();
-    match extract_bearer_token(request) {
+    match extract_auth(request, AuthScheme::Bearer) {
         Some(tok) if tok == expected => {}
         _ => {
             return LiveResponse::text(
@@ -118,7 +111,7 @@ async fn handle_a2a_request(
         // Send message (synchronous)
         ("POST", "/message:send") => {
             let body = read_body(request);
-            match parse_json::<MessageSendRequest>(&body) {
+            match parse_json::<MessageSendRequest>(&body, false) {
                 Ok(req) => match adapter::handle_message_send(&state.adapter, req).await {
                     Ok(task) => json_response(&task),
                     Err(err) => error_response("500 Internal Server Error", &err),
@@ -128,14 +121,10 @@ async fn handle_a2a_request(
         }
 
         // Streaming — explicitly unsupported
-        ("POST", "/message:stream") => {
-            error_response(
-                "501 Not Implemented",
-                &A2aError::unsupported_operation(
-                    "Streaming is not supported in this version",
-                ),
-            )
-        }
+        ("POST", "/message:stream") => error_response(
+            "501 Not Implemented",
+            &A2aError::unsupported_operation("Streaming is not supported in this version"),
+        ),
 
         // Task list
         ("GET", "/tasks") => {
@@ -144,9 +133,7 @@ async fn handle_a2a_request(
         }
 
         // Task-specific routes: /tasks/{id} and /tasks/{id}:cancel
-        _ if path.starts_with("/tasks/") => {
-            handle_task_route(state, method, path).await
-        }
+        _ if path.starts_with("/tasks/") => handle_task_route(state, method, path).await,
 
         // 404
         _ => LiveResponse::text("404 Not Found", "Not Found".to_string()),
@@ -155,11 +142,7 @@ async fn handle_a2a_request(
 
 /// Handle routes under `/tasks/{id}` and `/tasks/{id}:cancel` and
 /// `/tasks/{id}:subscribe`.
-async fn handle_task_route(
-    state: &A2aServerState,
-    method: &str,
-    path: &str,
-) -> LiveResponse {
+async fn handle_task_route(state: &A2aServerState, method: &str, path: &str) -> LiveResponse {
     // Strip the "/tasks/" prefix to get "{id}" or "{id}:cancel" or "{id}:subscribe".
     let remainder = &path["/tasks/".len()..];
 
@@ -206,122 +189,11 @@ async fn handle_task_route(
     }
 }
 
-// ── HTTP helpers ────────────────────────────────────────────────────────────
-//
-// These are duplicated from `live_server.rs` / `server.rs` — both files keep
-// their copies private, which is the established pattern in this codebase.
+// ── A2A-specific helpers (not shared) ───────────────────────────────────────
 
-/// Read a complete HTTP request from `stream`, returning it as a `String`.
-async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Result<String, LiveResponse> {
-    const HEADER_CAP: usize = 64 * 1024;
-    const BODY_CAP: usize = 16 * 1024 * 1024;
-    const TIMEOUT_SECS: u64 = 30;
-
-    let result = tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_SECS), async {
-        let mut raw: Vec<u8> = Vec::with_capacity(4096);
-        let mut tmp = [0u8; 4096];
-        let header_end = loop {
-            let n = stream
-                .read(&mut tmp)
-                .await
-                .map_err(|_| LiveResponse::text("400 Bad Request", "read error".to_string()))?;
-            if n == 0 {
-                return Err(LiveResponse::text(
-                    "400 Bad Request",
-                    "connection closed".to_string(),
-                ));
-            }
-            raw.extend_from_slice(&tmp[..n]);
-            if raw.len() > HEADER_CAP {
-                return Err(LiveResponse::text(
-                    "431 Request Header Fields Too Large",
-                    "header too large".to_string(),
-                ));
-            }
-            if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                break pos + 4;
-            }
-        };
-
-        let header_str = String::from_utf8_lossy(&raw[..header_end]);
-        let content_length: Option<usize> = header_str
-            .lines()
-            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
-            .and_then(|l| l["content-length:".len()..].trim().parse().ok());
-
-        if let Some(cl) = content_length {
-            if cl > BODY_CAP {
-                return Err(LiveResponse::text(
-                    "413 Payload Too Large",
-                    "request body too large".to_string(),
-                ));
-            }
-            let already = raw.len() - header_end;
-            let remaining = cl.saturating_sub(already);
-            if remaining > 0 {
-                let old_len = raw.len();
-                raw.resize(old_len + remaining, 0);
-                stream.read_exact(&mut raw[old_len..]).await.map_err(|_| {
-                    LiveResponse::text("400 Bad Request", "body read error".to_string())
-                })?;
-            }
-        }
-
-        Ok(String::from_utf8_lossy(&raw).into_owned())
-    })
-    .await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(_elapsed) => Err(LiveResponse::text(
-            "408 Request Timeout",
-            "request timed out".to_string(),
-        )),
-    }
-}
-
-fn split_path_query(target: &str) -> (String, String) {
-    match target.split_once('?') {
-        Some((p, q)) => (normalize_path(p), q.to_string()),
-        None => (normalize_path(target), String::new()),
-    }
-}
-
-fn normalize_path(path: &str) -> String {
-    let trimmed = path.trim();
-    if trimmed.is_empty() || trimmed == "/" {
-        "/".to_string()
-    } else {
-        format!("/{}", trimmed.trim_matches('/'))
-    }
-}
-
-fn read_body(request: &str) -> String {
-    match request.find("\r\n\r\n") {
-        Some(pos) => request[pos + 4..].to_string(),
-        None => String::new(),
-    }
-}
-
-fn parse_json<T: DeserializeOwned>(body: &str) -> Result<T, LiveResponse> {
-    serde_json::from_str(body).map_err(|e| {
-        LiveResponse::text(
-            "400 Bad Request",
-            format!("invalid JSON: {e}"),
-        )
-    })
-}
-
-fn json_response<T: Serialize>(value: &T) -> LiveResponse {
-    match serde_json::to_string(value) {
-        Ok(json) => LiveResponse::json(json),
-        Err(e) => LiveResponse::text(
-            "500 Internal Server Error",
-            format!("serialization error: {e}"),
-        ),
-    }
-}
-
+/// Build a JSON error response from an [`A2aError`]. Kept here because it
+/// carries A2A-specific wire format (error code, JSON shape) that the other
+/// servers don't use.
 fn error_response(status: &'static str, err: &A2aError) -> LiveResponse {
     match serde_json::to_string(err) {
         Ok(json) => LiveResponse {
@@ -331,45 +203,6 @@ fn error_response(status: &'static str, err: &A2aError) -> LiveResponse {
         },
         Err(e) => LiveResponse::text(status, format!("error serialization failed: {e}")),
     }
-}
-
-fn encode_response(response: LiveResponse) -> Vec<u8> {
-    let header = format!(
-        "HTTP/1.1 {}\r\n\
-         Content-Type: {}\r\n\
-         Cache-Control: no-store, no-cache, must-revalidate\r\n\
-         Pragma: no-cache\r\n\
-         Expires: 0\r\n\
-         Access-Control-Allow-Origin: *\r\n\
-         Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-         Access-Control-Allow-Headers: Content-Type, Authorization\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\r\n",
-        response.status,
-        response.content_type,
-        response.body.len()
-    );
-    [header.into_bytes(), response.body.into_bytes()].concat()
-}
-
-// ── Auth ────────────────────────────────────────────────────────────────────
-
-/// Extract a Bearer token from the HTTP request headers.
-fn extract_bearer_token(request: &str) -> Option<&str> {
-    for line in request.lines() {
-        let lower = line.to_ascii_lowercase();
-        if lower.starts_with("authorization:") {
-            let value = line["authorization:".len()..].trim();
-            if value.len() >= 7 && value[..7].eq_ignore_ascii_case("bearer ") {
-                return Some(value[7..].trim());
-            }
-        }
-        // Stop at the header/body boundary.
-        if line.is_empty() {
-            break;
-        }
-    }
-    None
 }
 
 /// Build the A2A base URL from current settings.
@@ -383,6 +216,12 @@ fn a2a_base_url(settings: &crate::AppSettings) -> String {
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
+//
+// Helpers that used to live in this file (read_http_request, normalize_path,
+// split_path_query, read_body, parse_json, json_response, encode_response,
+// extract_bearer_token) are now exhaustively tested in `crate::http_util`.
+// We only keep integration-style tests here that exercise A2A routing and
+// auth at the request-handler level.
 
 #[cfg(test)]
 mod tests {
@@ -450,91 +289,25 @@ mod tests {
         assert!(!card.skills.is_empty());
     }
 
-    #[test]
-    fn extract_bearer_token_standard() {
-        let req = "GET / HTTP/1.1\r\nAuthorization: Bearer abc123\r\n\r\n";
-        assert_eq!(extract_bearer_token(req), Some("abc123"));
+    #[tokio::test]
+    async fn options_returns_204_without_auth() {
+        let state = test_server_state();
+        let resp = handle_a2a_request(&state, "OPTIONS", "/anything", "OPTIONS / HTTP/1.1\r\n\r\n")
+            .await;
+        assert_eq!(resp.status, "204 No Content");
     }
 
-    #[test]
-    fn extract_bearer_token_case_insensitive() {
-        let req = "GET / HTTP/1.1\r\nauthorization: bearer MyToken\r\n\r\n";
-        assert_eq!(extract_bearer_token(req), Some("MyToken"));
-    }
-
-    #[test]
-    fn extract_bearer_token_missing() {
-        let req = "GET / HTTP/1.1\r\nContent-Type: application/json\r\n\r\n";
-        assert_eq!(extract_bearer_token(req), None);
-    }
-
-    #[test]
-    fn extract_bearer_token_no_bearer_prefix() {
-        let req = "GET / HTTP/1.1\r\nAuthorization: Basic abc123\r\n\r\n";
-        assert_eq!(extract_bearer_token(req), None);
-    }
-
-    #[test]
-    fn normalize_path_strips_trailing_slash() {
-        assert_eq!(normalize_path("/tasks/"), "/tasks");
-    }
-
-    #[test]
-    fn normalize_path_handles_root() {
-        assert_eq!(normalize_path("/"), "/");
-    }
-
-    #[test]
-    fn normalize_path_handles_empty() {
-        assert_eq!(normalize_path(""), "/");
-    }
-
-    #[test]
-    fn split_path_query_with_query_string() {
-        let (path, query) = split_path_query("/tasks?limit=10");
-        assert_eq!(path, "/tasks");
-        assert_eq!(query, "limit=10");
-    }
-
-    #[test]
-    fn split_path_query_without_query() {
-        let (path, query) = split_path_query("/tasks");
-        assert_eq!(path, "/tasks");
-        assert_eq!(query, "");
-    }
-
-    #[test]
-    fn read_body_from_request() {
-        let req = "POST / HTTP/1.1\r\nContent-Length: 13\r\n\r\n{\"key\":\"val\"}";
-        assert_eq!(read_body(req), "{\"key\":\"val\"}");
-    }
-
-    #[test]
-    fn parse_json_valid() {
-        #[derive(serde::Deserialize)]
-        struct T {
-            x: i32,
-        }
-        let result: Result<T, _> = parse_json("{\"x\": 42}");
-        assert_eq!(result.unwrap().x, 42);
-    }
-
-    #[test]
-    fn parse_json_invalid_returns_400() {
-        #[derive(Debug, serde::Deserialize)]
-        struct T {
-            _x: i32,
-        }
-        let result: Result<T, _> = parse_json("not json");
-        let err = result.unwrap_err();
-        assert_eq!(err.status, "400 Bad Request");
-    }
-
-    #[test]
-    fn json_response_serializes() {
-        let resp = json_response(&serde_json::json!({"ok": true}));
-        assert_eq!(resp.status, "200 OK");
-        assert!(resp.body.contains("\"ok\":true"));
+    #[tokio::test]
+    async fn unknown_route_returns_404() {
+        let state = test_server_state();
+        let resp = handle_a2a_request(
+            &state,
+            "GET",
+            "/does/not/exist",
+            "GET /does/not/exist HTTP/1.1\r\nAuthorization: Bearer test-token\r\n\r\n",
+        )
+        .await;
+        assert_eq!(resp.status, "404 Not Found");
     }
 
     #[test]

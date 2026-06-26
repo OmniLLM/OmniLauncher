@@ -4,6 +4,7 @@ pub mod dashboard;
 pub mod db;
 pub mod gh_helper;
 pub mod guardrails;
+pub mod http_util;
 pub mod launcher_config;
 pub mod live_server;
 pub mod log_masking;

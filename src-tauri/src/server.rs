@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::TcpListener,
     sync::{broadcast, Mutex, RwLock},
 };
@@ -9,6 +9,10 @@ use tokio::{
 use crate::{
     ai::{client::AiClient, router::ConversationContext},
     launcher_config::LauncherConfig,
+    http_util::{
+        self, encode_response, extract_auth, json_response, parse_json,
+        read_body, read_http_request, split_path_query, AuthScheme, CorsPolicy, HttpLimits,
+    },
     live_server::LiveResponse,
     plugins::QueryResult,
     save_settings, AppSettings, SkillManager,
@@ -199,118 +203,8 @@ struct VisionRequest {
     image_base64: String,
 }
 
-fn json_response<T: Serialize>(value: &T) -> LiveResponse {
-    match serde_json::to_string(value) {
-        Ok(body) => LiveResponse::json(body),
-        Err(error) => LiveResponse::text("500 Internal Server Error", error.to_string()),
-    }
-}
-
-fn parse_json<T: for<'de> Deserialize<'de>>(body: &str) -> Result<T, LiveResponse> {
-    serde_json::from_str(body).map_err(|error| {
-        log::warn!(
-            "server JSON parse error: {} (body_bytes={})",
-            error,
-            body.len()
-        );
-        LiveResponse::text("400 Bad Request", format!("Invalid JSON: {error}"))
-    })
-}
-
-async fn read_body(request: &str) -> String {
-    request
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or_default()
-        .to_string()
-}
-
 fn request_body_len(request: &str) -> usize {
-    request
-        .split("\r\n\r\n")
-        .nth(1)
-        .map(str::len)
-        .unwrap_or_default()
-}
-
-/// Read a complete HTTP request from `stream`, returning it as a `String`.
-///
-/// * Reads until `\r\n\r\n` (header terminator), with a 64 KiB cap and a
-///   30-second overall timeout — replies 431 if exceeded.
-/// * Parses `Content-Length` and reads exactly that many additional bytes,
-///   rejecting payloads larger than 16 MiB with 413.
-async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Result<String, LiveResponse> {
-    const HEADER_CAP: usize = 64 * 1024;
-    const BODY_CAP: usize = 16 * 1024 * 1024;
-    const TIMEOUT_SECS: u64 = 30;
-
-    let result = tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_SECS), async {
-        // ── Phase 1: read until \r\n\r\n ─────────────────────────────
-        let mut raw: Vec<u8> = Vec::with_capacity(4096);
-        let mut tmp = [0u8; 4096];
-        let header_end = loop {
-            let n = stream
-                .read(&mut tmp)
-                .await
-                .map_err(|_| LiveResponse::text("400 Bad Request", "read error".to_string()))?;
-            if n == 0 {
-                return Err(LiveResponse::text(
-                    "400 Bad Request",
-                    "connection closed".to_string(),
-                ));
-            }
-            raw.extend_from_slice(&tmp[..n]);
-            if raw.len() > HEADER_CAP {
-                return Err(LiveResponse::text(
-                    "431 Request Header Fields Too Large",
-                    "header too large".to_string(),
-                ));
-            }
-            // Look for the header terminator.
-            if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                break pos + 4; // byte offset of the first body byte
-            }
-        };
-
-        // ── Phase 2: parse Content-Length ────────────────────────────
-        let header_bytes = &raw[..header_end];
-        let header_str = String::from_utf8_lossy(header_bytes);
-        let content_length: Option<usize> = header_str
-            .lines()
-            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
-            .and_then(|l| l["content-length:".len()..].trim().parse().ok());
-
-        // ── Phase 3: read body ────────────────────────────────────────
-        if let Some(cl) = content_length {
-            if cl > BODY_CAP {
-                return Err(LiveResponse::text(
-                    "413 Payload Too Large",
-                    "request body too large".to_string(),
-                ));
-            }
-            // We may already have some body bytes in `raw`.
-            let already = raw.len() - header_end;
-            let remaining = cl.saturating_sub(already);
-            if remaining > 0 {
-                let old_len = raw.len();
-                raw.resize(old_len + remaining, 0);
-                stream.read_exact(&mut raw[old_len..]).await.map_err(|_| {
-                    LiveResponse::text("400 Bad Request", "body read error".to_string())
-                })?;
-            }
-        }
-
-        Ok(String::from_utf8_lossy(&raw).into_owned())
-    })
-    .await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(_elapsed) => Err(LiveResponse::text(
-            "408 Request Timeout",
-            "request timed out".to_string(),
-        )),
-    }
+    read_body(request).len()
 }
 
 async fn serve_api_listener(listener: TcpListener, state: ServerState) {
@@ -333,10 +227,10 @@ async fn serve_api_listener(listener: TcpListener, state: ServerState) {
         let state = state.clone();
         tokio::spawn(async move {
             // ── Read request (header loop + body) ────────────────────────
-            let request = match read_http_request(&mut stream).await {
+            let request = match read_http_request(&mut stream, HttpLimits::DEFAULT).await {
                 Ok(r) => r,
                 Err(response) => {
-                    let bytes = encode_response(response);
+                    let bytes = encode_response(response, Some(CorsPolicy::APP));
                     let _ = stream.write_all(&bytes).await;
                     let _ = stream.shutdown().await;
                     return;
@@ -394,9 +288,8 @@ async fn serve_api_listener(listener: TcpListener, state: ServerState) {
                 response.body.len(),
                 elapsed_ms
             );
-            let bytes = encode_response(response);
-            let _ = stream.write_all(&bytes).await;
-            let _ = stream.shutdown().await;
+            let bytes = encode_response(response, Some(CorsPolicy::APP));
+            http_util::write_and_close(&mut stream, &bytes).await;
         });
     }
 }
@@ -423,35 +316,6 @@ pub fn generate_auth_token() -> String {
     })
 }
 
-/// Extract the auth token from a raw HTTP request string.
-///
-/// Accepts EITHER of two header forms so both the desktop shell (which uses
-/// the custom `X-OmniLauncher-Token` header) and standard HTTP clients
-/// (browsers, `curl`, scripts using `Authorization: Bearer <token>`) work.
-/// When both are present, `X-OmniLauncher-Token` wins (it's the project's
-/// canonical form).
-fn extract_auth_header(request: &str) -> Option<&str> {
-    let mut bearer: Option<&str> = None;
-    for line in request.lines() {
-        let lower = line.to_ascii_lowercase();
-        if lower.starts_with("x-omnilauncher-token:") {
-            return Some(line["x-omnilauncher-token:".len()..].trim());
-        }
-        if bearer.is_none() && lower.starts_with("authorization:") {
-            let value = line["authorization:".len()..].trim();
-            // Case-insensitive "Bearer " prefix check — RFC 6750 §2.1.
-            if value.len() >= 7 && value[..7].eq_ignore_ascii_case("bearer ") {
-                bearer = Some(value[7..].trim());
-            }
-        }
-        // Stop at the header/body boundary.
-        if line.is_empty() {
-            break;
-        }
-    }
-    bearer
-}
-
 async fn handle_request(
     state: &ServerState,
     method: &str,
@@ -464,7 +328,7 @@ async fn handle_request(
     // the per-launch token in X-OmniLauncher-Token.
     if method != "OPTIONS" && path != "/health" {
         let expected_token = state.auth_token.as_str();
-        match extract_auth_header(request) {
+        match extract_auth(request, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }) {
             Some(tok) if tok == expected_token => {}
             _ => {
                 return LiveResponse::text(
@@ -487,8 +351,8 @@ async fn handle_request(
         ("OPTIONS", _) => LiveResponse::text("204 No Content", String::new()),
         ("GET", "/health") => LiveResponse::json("{\"ok\":true}".to_string()),
         ("POST", "/api/search") => {
-            let body = read_body(request).await;
-            match parse_json::<SearchRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SearchRequest>(&body, true) {
                 Ok(input) => json_response(&search_backend(input.query, state).await),
                 Err(error) => error,
             }
@@ -506,8 +370,8 @@ async fn handle_request(
             json_response(&settings)
         }
         ("POST", "/api/settings") => {
-            let body = read_body(request).await;
-            match parse_json::<SaveSettingsRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SaveSettingsRequest>(&body, true) {
                 Ok(input) => {
                     log::debug!(
                         "server save settings request: base_url={} model={} theme={} max_results={} background_url={} api_key_present={}",
@@ -628,8 +492,8 @@ and try again."
             }
         }
         ("POST", "/api/models") => {
-            let body = read_body(request).await;
-            match parse_json::<ModelsRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<ModelsRequest>(&body, true) {
                 Ok(input) => match list_models_backend(input.base_url, input.api_key).await {
                     Ok(models) => json_response(&models),
                     Err(error) => LiveResponse::text("500 Internal Server Error", error),
@@ -640,8 +504,8 @@ and try again."
         ("GET", "/api/launcher-config") => json_response(&LauncherConfig::current()),
         ("GET", "/api/favorites") => json_response(&crate::db::favorites::list_favorites()),
         ("POST", "/api/favorites") => {
-            let body = read_body(request).await;
-            match parse_json::<FavoriteRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<FavoriteRequest>(&body, true) {
                 Ok(input) => match crate::db::favorites::add_favorite(&input.result) {
                     Ok(()) => json_response(&true),
                     Err(error) => LiveResponse::text("500 Internal Server Error", error),
@@ -662,8 +526,8 @@ and try again."
             json_response(&ctx.session_id)
         }
         ("POST", "/api/sessions/switch") => {
-            let body = read_body(request).await;
-            match parse_json::<SessionRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SessionRequest>(&body, true) {
                 Ok(input) => match switch_session_backend(input.session_id, state).await {
                     Ok(payload) => json_response(&payload),
                     Err(error) => LiveResponse::text("500 Internal Server Error", error),
@@ -672,8 +536,8 @@ and try again."
             }
         }
         ("POST", "/api/sessions/delete") => {
-            let body = read_body(request).await;
-            match parse_json::<SessionRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SessionRequest>(&body, true) {
                 Ok(input) => match delete_session_backend(input.session_id, state).await {
                     Ok(id) => json_response(&id),
                     Err(error) => LiveResponse::text("500 Internal Server Error", error),
@@ -686,8 +550,8 @@ and try again."
             Err(error) => LiveResponse::text("500 Internal Server Error", error),
         },
         ("POST", "/api/ai/query") => {
-            let body = read_body(request).await;
-            match parse_json::<AiQueryRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<AiQueryRequest>(&body, true) {
                 Ok(input) => match ai_query_backend(input.query, state.clone()).await {
                     Ok(()) => json_response(&true),
                     Err(error) => LiveResponse::text("500 Internal Server Error", error),
@@ -700,8 +564,8 @@ and try again."
             Err(error) => LiveResponse::text("500 Internal Server Error", error),
         },
         ("POST", "/api/execute-result") => {
-            let body = read_body(request).await;
-            match parse_json::<ExecuteResultRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<ExecuteResultRequest>(&body, true) {
                 Ok(input) => match execute_result_backend(input.result, state).await {
                     Ok(ok) => json_response(&ok),
                     Err(error) => LiveResponse::text("500 Internal Server Error", error),
@@ -726,8 +590,8 @@ and try again."
         }
         ("GET", "/api/skills/usage") => json_response(&crate::skills::curator::snapshot()),
         ("POST", "/api/skills/install") => {
-            let body = read_body(request).await;
-            match parse_json::<SkillSourceRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SkillSourceRequest>(&body, true) {
                 Ok(input) => {
                     let mgr = state.skill_manager.clone();
                     let res = tokio::task::spawn_blocking(move || {
@@ -751,8 +615,8 @@ and try again."
             }
         }
         ("POST", "/api/skills/update") => {
-            let body = read_body(request).await;
-            match parse_json::<SkillNameRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SkillNameRequest>(&body, true) {
                 Ok(input) => {
                     let mgr = state.skill_manager.clone();
                     let res = tokio::task::spawn_blocking(move || {
@@ -770,8 +634,8 @@ and try again."
             }
         }
         ("POST", "/api/skills/delete") => {
-            let body = read_body(request).await;
-            match parse_json::<SkillNameRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SkillNameRequest>(&body, true) {
                 Ok(input) => {
                     let mut mgr = state.skill_manager.lock().await;
                     match mgr.delete_skill(&input.name) {
@@ -783,8 +647,8 @@ and try again."
             }
         }
         ("POST", "/api/skills/pin") => {
-            let body = read_body(request).await;
-            match parse_json::<SkillPinRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SkillPinRequest>(&body, true) {
                 Ok(input) => {
                     crate::skills::curator::set_pinned(&input.name, input.pinned);
                     json_response(&true)
@@ -832,8 +696,8 @@ and try again."
             }
         }
         ("POST", "/api/skills/consolidation/apply") => {
-            let body = read_body(request).await;
-            match parse_json::<ConsolidationApplyRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<ConsolidationApplyRequest>(&body, true) {
                 Ok(input) => {
                     let mut mgr = state.skill_manager.lock().await;
                     match crate::skills::consolidate::apply(&input.proposal, &mut mgr) {
@@ -852,8 +716,8 @@ and try again."
             json_response(&crate::plugins::runtime_deps::list_runtime_dependencies())
         }
         ("POST", "/api/plugins/install") => {
-            let body = read_body(request).await;
-            match parse_json::<PluginInstallRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<PluginInstallRequest>(&body, true) {
                 Ok(input) => {
                     match crate::plugins::plugin_manager_cmd::install_plugin(
                         input.source,
@@ -872,8 +736,8 @@ and try again."
             }
         }
         ("POST", "/api/plugins/update") => {
-            let body = read_body(request).await;
-            match parse_json::<PluginNameRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<PluginNameRequest>(&body, true) {
                 Ok(input) => {
                     match crate::plugins::plugin_manager_cmd::update_plugin(input.name).await {
                         Ok(msg) => {
@@ -887,8 +751,8 @@ and try again."
             }
         }
         ("POST", "/api/plugins/collections/update") => {
-            let body = read_body(request).await;
-            match parse_json::<CollectionUpdateRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<CollectionUpdateRequest>(&body, true) {
                 Ok(input) => {
                     match crate::plugins::plugin_manager_cmd::update_plugin_collection_all(
                         input.collection_source,
@@ -908,8 +772,8 @@ and try again."
             }
         }
         ("POST", "/api/plugins/collections/remove") => {
-            let body = read_body(request).await;
-            match parse_json::<CollectionRemoveRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<CollectionRemoveRequest>(&body, true) {
                 Ok(input) => match crate::plugins::plugin_manager_cmd::remove_plugin_collection(
                     input.repo_dirs,
                 )
@@ -925,8 +789,8 @@ and try again."
             }
         }
         ("POST", "/api/plugins/runtime-deps/install") => {
-            let body = read_body(request).await;
-            match parse_json::<RuntimeDepInstallRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<RuntimeDepInstallRequest>(&body, true) {
                 Ok(input) => match install_runtime_dep_backend(&input.id, state).await {
                     Ok(msg) => json_response(&msg),
                     Err(e) => LiveResponse::text("500 Internal Server Error", e),
@@ -936,8 +800,8 @@ and try again."
         }
         // ─── Slash commands ─────────────────────────────────────────────────
         ("POST", "/api/slash/preview") => {
-            let body = read_body(request).await;
-            match parse_json::<SlashRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SlashRequest>(&body, true) {
                 Ok(input) => {
                     let pm = state.plugin_manager.lock().await;
                     json_response(&slash_preview_backend(&input.query, &pm).await)
@@ -946,8 +810,8 @@ and try again."
             }
         }
         ("POST", "/api/slash/execute") => {
-            let body = read_body(request).await;
-            match parse_json::<SlashRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<SlashRequest>(&body, true) {
                 Ok(input) => {
                     let pm = state.plugin_manager.lock().await;
                     let mut skill_mgr = state.skill_manager.lock().await;
@@ -961,8 +825,8 @@ and try again."
         }
         // ─── Vision ─────────────────────────────────────────────────────────
         ("POST", "/api/vision/analyze") => {
-            let body = read_body(request).await;
-            match parse_json::<VisionRequest>(&body) {
+            let body = read_body(request);
+            match parse_json::<VisionRequest>(&body, true) {
                 Ok(input) => {
                     match vision_analyze_backend(&input.prompt, &input.image_base64, state).await {
                         Ok(text) => json_response(&text),
@@ -973,13 +837,6 @@ and try again."
             }
         }
         _ => LiveResponse::text("404 Not Found", "Not Found".to_string()),
-    }
-}
-
-fn split_path_query(target: &str) -> (String, String) {
-    match target.split_once('?') {
-        Some((path, query)) => (normalize_path(path), query.to_string()),
-        None => (normalize_path(target), String::new()),
     }
 }
 
@@ -1019,29 +876,11 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn normalize_path(path: &str) -> String {
-    let trimmed = path.trim();
-    if trimmed.is_empty() || trimmed == "/" {
-        "/".to_string()
-    } else {
-        format!("/{}", trimmed.trim_matches('/'))
-    }
-}
-
-fn encode_response(response: LiveResponse) -> Vec<u8> {
-    let header = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token, Authorization\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        response.status,
-        response.content_type,
-        response.body.len()
-    );
-    [header.into_bytes(), response.body.into_bytes()].concat()
-}
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
 
     async fn spawn_test_server(state: ServerState) -> u16 {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -1090,7 +929,7 @@ mod tests {
     #[test]
     fn encoded_response_includes_cors_preflight_headers() {
         let response = LiveResponse::text("204 No Content", String::new());
-        let encoded = String::from_utf8(encode_response(response)).unwrap();
+        let encoded = String::from_utf8(encode_response(response, Some(CorsPolicy::APP))).unwrap();
 
         assert!(encoded.starts_with("HTTP/1.1 204 No Content\r\n"));
         assert!(encoded.contains("Access-Control-Allow-Origin: *\r\n"));
@@ -1103,7 +942,7 @@ mod tests {
     #[test]
     fn encoded_json_response_has_correct_content_type() {
         let response = LiveResponse::json(r#"{"ok":true}"#.to_string());
-        let encoded = String::from_utf8(encode_response(response)).unwrap();
+        let encoded = String::from_utf8(encode_response(response, Some(CorsPolicy::APP))).unwrap();
 
         assert!(encoded.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(encoded.contains("Content-Type: application/json; charset=utf-8\r\n"));
@@ -1114,7 +953,7 @@ mod tests {
     fn encoded_response_has_correct_content_length() {
         let body = "Hello, World!";
         let response = LiveResponse::text("200 OK", body.to_string());
-        let encoded = String::from_utf8(encode_response(response)).unwrap();
+        let encoded = String::from_utf8(encode_response(response, Some(CorsPolicy::APP))).unwrap();
 
         let expected_header = format!("Content-Length: {}\r\n", body.len());
         assert!(encoded.contains(&expected_header));
@@ -1123,7 +962,7 @@ mod tests {
     #[test]
     fn encoded_response_includes_cache_control_headers() {
         let response = LiveResponse::json("{}".to_string());
-        let encoded = String::from_utf8(encode_response(response)).unwrap();
+        let encoded = String::from_utf8(encode_response(response, Some(CorsPolicy::APP))).unwrap();
 
         assert!(encoded.contains("Cache-Control: no-store, no-cache, must-revalidate\r\n"));
         assert!(encoded.contains("Pragma: no-cache\r\n"));
@@ -1133,7 +972,7 @@ mod tests {
     #[test]
     fn encoded_response_includes_connection_close() {
         let response = LiveResponse::text("200 OK", "test".to_string());
-        let encoded = String::from_utf8(encode_response(response)).unwrap();
+        let encoded = String::from_utf8(encode_response(response, Some(CorsPolicy::APP))).unwrap();
 
         assert!(encoded.contains("Connection: close\r\n"));
     }
@@ -1141,7 +980,7 @@ mod tests {
     #[test]
     fn encoded_response_empty_body() {
         let response = LiveResponse::text("204 No Content", String::new());
-        let encoded = String::from_utf8(encode_response(response)).unwrap();
+        let encoded = String::from_utf8(encode_response(response, Some(CorsPolicy::APP))).unwrap();
 
         assert!(encoded.contains("Content-Length: 0\r\n"));
         // Headers end with \r\n\r\n, body is empty
@@ -1189,27 +1028,27 @@ mod tests {
 
     #[test]
     fn normalize_path_strips_trailing_slash() {
-        assert_eq!(normalize_path("/api/test/"), "/api/test");
+        assert_eq!(http_util::normalize_path("/api/test/"), "/api/test");
     }
 
     #[test]
     fn normalize_path_handles_root() {
-        assert_eq!(normalize_path("/"), "/");
+        assert_eq!(http_util::normalize_path("/"), "/");
     }
 
     #[test]
     fn normalize_path_handles_empty() {
-        assert_eq!(normalize_path(""), "/");
+        assert_eq!(http_util::normalize_path(""), "/");
     }
 
     #[test]
     fn normalize_path_preserves_normal_path() {
-        assert_eq!(normalize_path("/api/ai/query"), "/api/ai/query");
+        assert_eq!(http_util::normalize_path("/api/ai/query"), "/api/ai/query");
     }
 
     #[test]
     fn normalize_path_trims_whitespace() {
-        assert_eq!(normalize_path("  /api/test  "), "/api/test");
+        assert_eq!(http_util::normalize_path("  /api/test  "), "/api/test");
     }
 
     // ── read_body tests ────────────────────────────────────────────────
@@ -1217,21 +1056,21 @@ mod tests {
     #[tokio::test]
     async fn read_body_extracts_body_after_headers() {
         let raw_request = "POST /api/search HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"query\":\"hello\"}";
-        let body = read_body(raw_request).await;
+        let body = read_body(raw_request);
         assert_eq!(body, "{\"query\":\"hello\"}");
     }
 
     #[tokio::test]
     async fn read_body_returns_empty_for_no_body() {
         let raw_request = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        let body = read_body(raw_request).await;
+        let body = read_body(raw_request);
         assert_eq!(body, "");
     }
 
     #[tokio::test]
     async fn read_body_returns_empty_for_malformed_request() {
         let raw_request = "GET /health HTTP/1.1";
-        let body = read_body(raw_request).await;
+        let body = read_body(raw_request);
         assert_eq!(body, "");
     }
 
@@ -1259,14 +1098,14 @@ mod tests {
 
     #[test]
     fn parse_json_valid() {
-        let result: Result<SearchRequest, _> = parse_json(r#"{"query":"hello"}"#);
+        let result: Result<SearchRequest, _> = parse_json(r#"{"query":"hello"}"#, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().query, "hello");
     }
 
     #[test]
     fn parse_json_invalid_returns_400() {
-        let result: Result<SearchRequest, _> = parse_json("not json");
+        let result: Result<SearchRequest, _> = parse_json("not json", true);
         assert!(result.is_err());
         let error_response = result.unwrap_err();
         assert_eq!(error_response.status, "400 Bad Request");
@@ -1275,13 +1114,13 @@ mod tests {
 
     #[test]
     fn parse_json_missing_field_returns_400() {
-        let result: Result<SearchRequest, _> = parse_json(r#"{"wrong_field":"hello"}"#);
+        let result: Result<SearchRequest, _> = parse_json(r#"{"wrong_field":"hello"}"#, true);
         assert!(result.is_err());
     }
 
     #[test]
     fn parse_json_empty_string_returns_400() {
-        let result: Result<SearchRequest, _> = parse_json("");
+        let result: Result<SearchRequest, _> = parse_json("", true);
         assert!(result.is_err());
     }
 
@@ -1896,40 +1735,40 @@ Content-Length: 0\r\n\r\n",
     #[test]
     fn extract_auth_header_returns_none_when_no_auth_present() {
         let req = req_with_headers(&[]);
-        assert_eq!(extract_auth_header(&req), None);
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), None);
     }
 
     #[test]
     fn extract_auth_header_reads_custom_header() {
         let req = req_with_headers(&["X-OmniLauncher-Token: secret-abc"]);
-        assert_eq!(extract_auth_header(&req), Some("secret-abc"));
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("secret-abc"));
     }
 
     #[test]
     fn extract_auth_header_custom_header_is_case_insensitive() {
         let req = req_with_headers(&["x-omnilauncher-TOKEN: secret-abc"]);
-        assert_eq!(extract_auth_header(&req), Some("secret-abc"));
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("secret-abc"));
     }
 
     #[test]
     fn extract_auth_header_reads_authorization_bearer() {
         let req = req_with_headers(&["Authorization: Bearer my-token-xyz"]);
-        assert_eq!(extract_auth_header(&req), Some("my-token-xyz"));
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("my-token-xyz"));
     }
 
     #[test]
     fn extract_auth_header_bearer_prefix_is_case_insensitive() {
         let req = req_with_headers(&["Authorization: BEARER my-token-xyz"]);
-        assert_eq!(extract_auth_header(&req), Some("my-token-xyz"));
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("my-token-xyz"));
         let req = req_with_headers(&["authorization: bearer my-token-xyz"]);
-        assert_eq!(extract_auth_header(&req), Some("my-token-xyz"));
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("my-token-xyz"));
     }
 
     #[test]
     fn extract_auth_header_rejects_non_bearer_authorization() {
         // Basic auth shouldn't masquerade as a token.
         let req = req_with_headers(&["Authorization: Basic dXNlcjpwYXNz"]);
-        assert_eq!(extract_auth_header(&req), None);
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), None);
     }
 
     #[test]
@@ -1939,7 +1778,7 @@ Content-Length: 0\r\n\r\n",
             "Authorization: Bearer bearer-token",
             "X-OmniLauncher-Token: custom-token",
         ]);
-        assert_eq!(extract_auth_header(&req), Some("custom-token"));
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("custom-token"));
 
         // Order shouldn't matter — even if Authorization comes after, the
         // custom header still wins because we early-return on the first
@@ -1948,15 +1787,15 @@ Content-Length: 0\r\n\r\n",
             "X-OmniLauncher-Token: custom-token",
             "Authorization: Bearer bearer-token",
         ]);
-        assert_eq!(extract_auth_header(&req), Some("custom-token"));
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("custom-token"));
     }
 
     #[test]
     fn extract_auth_header_trims_surrounding_whitespace() {
         let req = req_with_headers(&["X-OmniLauncher-Token:    spaced-token   "]);
-        assert_eq!(extract_auth_header(&req), Some("spaced-token"));
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("spaced-token"));
         let req = req_with_headers(&["Authorization: Bearer    bearer-spaced   "]);
-        assert_eq!(extract_auth_header(&req), Some("bearer-spaced"));
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("bearer-spaced"));
     }
 
     #[test]
@@ -1964,7 +1803,7 @@ Content-Length: 0\r\n\r\n",
         // A token in the body must NOT be treated as a header.
         let mut req = req_with_headers(&[]);
         req.push_str("X-OmniLauncher-Token: smuggled\r\n");
-        assert_eq!(extract_auth_header(&req), None);
+        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), None);
     }
 }
 

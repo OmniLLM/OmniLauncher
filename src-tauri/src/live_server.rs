@@ -1,9 +1,9 @@
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-    sync::RwLock,
+use tokio::{net::TcpListener, sync::RwLock};
+
+use crate::http_util::{
+    self, encode_response, normalize_path, read_http_request, split_path_query, HttpLimits,
 };
 
 #[derive(Debug)]
@@ -102,7 +102,7 @@ impl LiveServer {
         log::info!("live server listening on http://127.0.0.1:{}", port);
 
         loop {
-            let (mut stream, addr) = match listener.accept().await {
+            let (mut stream, _addr) = match listener.accept().await {
                 Ok(parts) => parts,
                 Err(error) => {
                     log::warn!("live server accept error: {}", error);
@@ -113,14 +113,11 @@ impl LiveServer {
             let routes = self.routes.clone();
             let query_routes = self.query_routes.clone();
             tokio::spawn(async move {
-                let request = match read_http_request(&mut stream).await {
+                let request = match read_http_request(&mut stream, HttpLimits::DEFAULT).await {
                     Ok(r) => r,
                     Err(resp) => {
-                        let bytes = encode_response(resp);
-                        if let Err(error) = stream.write_all(&bytes).await {
-                            log::debug!("live server write error to {}: {}", addr, error);
-                        }
-                        let _ = stream.shutdown().await;
+                        let bytes = encode_response(resp, None);
+                        http_util::write_and_close(&mut stream, &bytes).await;
                         return;
                     }
                 };
@@ -140,112 +137,9 @@ impl LiveServer {
                     }
                 };
 
-                let bytes = encode_response(response);
-                if let Err(error) = stream.write_all(&bytes).await {
-                    log::debug!("live server write error to {}: {}", addr, error);
-                }
-                let _ = stream.shutdown().await;
+                let bytes = encode_response(response, None);
+                http_util::write_and_close(&mut stream, &bytes).await;
             });
         }
     }
-}
-
-/// Read a complete HTTP request from `stream`, returning it as a `String`.
-///
-/// * Reads until `\r\n\r\n` with a 64 KiB header cap and a 30-second timeout.
-/// * Parses `Content-Length` and reads exactly that many additional body bytes,
-///   rejecting payloads larger than 16 MiB.
-async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Result<String, LiveResponse> {
-    const HEADER_CAP: usize = 64 * 1024;
-    const BODY_CAP: usize = 16 * 1024 * 1024;
-    const TIMEOUT_SECS: u64 = 30;
-
-    let result = tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_SECS), async {
-        let mut raw: Vec<u8> = Vec::with_capacity(4096);
-        let mut tmp = [0u8; 4096];
-        let header_end = loop {
-            let n = stream
-                .read(&mut tmp)
-                .await
-                .map_err(|_| LiveResponse::text("400 Bad Request", "read error".to_string()))?;
-            if n == 0 {
-                return Err(LiveResponse::text(
-                    "400 Bad Request",
-                    "connection closed".to_string(),
-                ));
-            }
-            raw.extend_from_slice(&tmp[..n]);
-            if raw.len() > HEADER_CAP {
-                return Err(LiveResponse::text(
-                    "431 Request Header Fields Too Large",
-                    "header too large".to_string(),
-                ));
-            }
-            if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                break pos + 4;
-            }
-        };
-
-        let header_str = String::from_utf8_lossy(&raw[..header_end]);
-        let content_length: Option<usize> = header_str
-            .lines()
-            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
-            .and_then(|l| l["content-length:".len()..].trim().parse().ok());
-
-        if let Some(cl) = content_length {
-            if cl > BODY_CAP {
-                return Err(LiveResponse::text(
-                    "413 Payload Too Large",
-                    "request body too large".to_string(),
-                ));
-            }
-            let already = raw.len() - header_end;
-            let remaining = cl.saturating_sub(already);
-            if remaining > 0 {
-                let old_len = raw.len();
-                raw.resize(old_len + remaining, 0);
-                stream.read_exact(&mut raw[old_len..]).await.map_err(|_| {
-                    LiveResponse::text("400 Bad Request", "body read error".to_string())
-                })?;
-            }
-        }
-
-        Ok(String::from_utf8_lossy(&raw).into_owned())
-    })
-    .await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(_elapsed) => Err(LiveResponse::text(
-            "408 Request Timeout",
-            "request timed out".to_string(),
-        )),
-    }
-}
-
-/// Split a request target like `/foo/bar?x=1&y=2` into (`/foo/bar`, `x=1&y=2`).
-fn split_path_query(target: &str) -> (String, String) {
-    match target.split_once('?') {
-        Some((p, q)) => (normalize_path(p), q.to_string()),
-        None => (normalize_path(target), String::new()),
-    }
-}
-
-fn normalize_path(path: &str) -> String {
-    let trimmed = path.trim();
-    if trimmed.is_empty() || trimmed == "/" {
-        "/".to_string()
-    } else {
-        format!("/{}", trimmed.trim_matches('/'))
-    }
-}
-
-fn encode_response(response: LiveResponse) -> Vec<u8> {
-    let header = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        response.status,
-        response.content_type,
-        response.body.len()
-    );
-    [header.into_bytes(), response.body.into_bytes()].concat()
 }
