@@ -104,7 +104,8 @@ async fn handle_a2a_request(
             let pm = state.adapter.plugin_manager.lock().await;
             let settings = state.adapter.settings.lock().await;
             let base_url = a2a_base_url(&settings);
-            let card = adapter::build_agent_card(&base_url, &pm);
+            let skills = state.adapter.skill_manager.lock().await;
+            let card = adapter::build_agent_card_with_skills(&base_url, &pm, Some(&skills));
             json_response(&card)
         }
 
@@ -235,6 +236,28 @@ mod tests {
     };
     use tokio::sync::Mutex;
 
+    fn test_skill_manager() -> SkillManager {
+        let skill_root = tempfile::tempdir().unwrap();
+        let skill_dir = skill_root.path().join("route-demo-skill");
+        std::fs::create_dir(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: route-demo-skill
+description: Route demo skill for A2A discovery
+tags: route, a2a
+---
+
+# Route Demo Skill
+"#,
+        )
+        .unwrap();
+
+        let mut skill_manager = SkillManager::new();
+        skill_manager.load_from_dir(skill_root.path());
+        skill_manager
+    }
+
     fn test_server_state() -> A2aServerState {
         let mut settings = AppSettings::default();
         settings.a2a_port = 18123;
@@ -249,7 +272,7 @@ mod tests {
                 ))),
                 settings: Arc::new(Mutex::new(settings)),
                 conversation: Arc::new(Mutex::new(ConversationContext::new(10))),
-                skill_manager: Arc::new(Mutex::new(SkillManager::new())),
+                skill_manager: Arc::new(Mutex::new(test_skill_manager())),
                 task_registry: Arc::new(Mutex::new(TaskRegistry::new(10))),
             },
             auth_token: Arc::new("test-token".to_string()),
@@ -286,7 +309,25 @@ mod tests {
             .schemes
             .iter()
             .any(|scheme| scheme == "bearer"));
-        assert!(!card.skills.is_empty());
+        assert!(
+            card.skills
+                .iter()
+                .any(|skill| skill.id == "plugin:tool:app_launcher"),
+            "expected plugin-derived capabilities to remain exposed"
+        );
+
+        let route_skill = card
+            .skills
+            .iter()
+            .find(|skill| skill.id == "skill:route-demo-skill")
+            .expect("loaded skill should be exposed by the discovery route");
+        assert_eq!(route_skill.name, "route-demo-skill");
+        assert_eq!(
+            route_skill.description.as_deref(),
+            Some("Route demo skill for A2A discovery")
+        );
+        assert!(route_skill.tags.iter().any(|tag| tag == "route"));
+        assert!(route_skill.input_schema.is_some());
     }
 
     #[tokio::test]
