@@ -580,7 +580,14 @@ and try again."
         ("POST", "/api/window/hide") => json_response(&true),
         // ─── Skills ─────────────────────────────────────────────────────────
         ("GET", "/api/skills") => {
-            let mgr = state.skill_manager.lock().await;
+            let mut mgr = state.skill_manager.lock().await;
+            // Treat the filesystem as the source of truth for the skills UI.
+            // Skills may be installed by another process/path (for example the
+            // Tauri shell vs. the separated HTTP backend, or a previous install
+            // that wrote files before this process loaded them). Reloading here
+            // keeps `/skills` from showing a stale in-memory list after a
+            // successful install to `<data_dir>/skills`.
+            mgr.reload();
             let metas: Vec<crate::SkillInfo> = mgr
                 .list_meta()
                 .into_iter()
@@ -987,7 +994,42 @@ mod tests {
         assert!(encoded.ends_with("\r\n\r\n"));
     }
 
-    // ── split_path_query tests ─────────────────────────────────────────
+    #[tokio::test]
+    async fn get_skills_reloads_from_disk() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.lock().await;
+        let dir = tempfile::tempdir().expect("tmpdir");
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", dir.path());
+
+        let state = test_server_state();
+        std::fs::create_dir_all(dir.path().join("skills").join("disk-only")).unwrap();
+        std::fs::write(
+            dir.path().join("skills").join("disk-only").join("SKILL.md"),
+            r#"---
+name: disk-only
+description: Created on disk after the server state was initialized
+version: 1.0.0
+triggers: [disk]
+tags: [test]
+---
+
+Loaded from disk.
+"#,
+        )
+        .unwrap();
+
+        let request = "GET /api/skills HTTP/1.1\r\nX-OmniLauncher-Token: test-token\r\n\r\n";
+        let response = handle_request(&state, "GET", "/api/skills", "", request).await;
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+
+        assert_eq!(response.status, "200 OK");
+        assert!(
+            response.body.contains("disk-only"),
+            "expected disk-only skill in response body: {}",
+            response.body
+        );
+    }
+
+    // ── split_path_query tests ──────────────────────────────────────────
 
     #[test]
     fn split_path_query_no_query_string() {
