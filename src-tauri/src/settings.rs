@@ -169,15 +169,11 @@ pub struct AppSettings {
 }
 
 impl AppSettings {
-    /// Effective AI API key: the value stored in settings, or — when empty —
-    /// the `OMNILLM_API_KEY` env var. Returns an empty string when neither is
-    /// set. The env var is read on every call so updates take effect without
-    /// a restart and we never persist it to disk.
+    /// Effective AI API key. After `apply_env_overrides`, this is already the
+    /// resolved value (env wins over settings.json). Kept as a method so
+    /// callers don't need to change.
     pub fn resolve_ai_api_key(&self) -> String {
-        if !self.ai_api_key.is_empty() {
-            return self.ai_api_key.clone();
-        }
-        std::env::var("OMNILLM_API_KEY").unwrap_or_default()
+        self.ai_api_key.clone()
     }
 }
 
@@ -201,6 +197,400 @@ pub fn resolve_backend_auth_token(_settings: &AppSettings) -> String {
         .and_then(|path| std::fs::read_to_string(path).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
+}
+
+// ── Universal settings overrides ────────────────────────────────────────────
+//
+// Precedence (highest → lowest):
+//   1. CLI args   (`--ai-model=gpt-4`)
+//   2. Env vars   (`OMNILAUNCHER_AI_MODEL=gpt-4`)
+//   3. settings.json on disk
+//   4. Hardcoded defaults
+//
+// Callers should apply in reverse order of priority so higher wins:
+//   let mut s = load_settings();         // disk + defaults
+//   apply_env_overrides(&mut s);         // env wins over disk
+//   apply_cli_overrides(&mut s, &args);  // CLI wins over env
+
+/// Mapping entry: env var name → field setter.
+struct EnvOverride {
+    /// Primary env var name, e.g. `OMNILAUNCHER_AI_MODEL`.
+    var: &'static str,
+    /// Legacy alias (checked only if primary is absent), e.g. `OMNILLM_API_KEY`.
+    alias: Option<&'static str>,
+    /// Apply the raw string value to the given settings.
+    apply: fn(&mut AppSettings, &str),
+}
+
+/// Read the first non-empty value from `var`, then `alias` (if any).
+fn read_env(var: &str, alias: Option<&str>) -> Option<String> {
+    for name in std::iter::once(var).chain(alias) {
+        if let Ok(val) = std::env::var(name) {
+            let trimmed = val.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+    None
+}
+
+/// All supported env var → field mappings.
+///
+/// Fields deliberately excluded:
+/// - `github_servers` (`Vec<GitHubServer>`) — complex nested type, configured
+///   via the UI or `gh` CLI auto-detect.
+/// - `github_token`, `github_server`, `github_orgs` — legacy migration-only
+///   fields superseded by `github_servers`.
+fn env_overrides() -> Vec<EnvOverride> {
+    vec![
+        EnvOverride {
+            var: "OMNILAUNCHER_AI_BASE_URL",
+            alias: None,
+            apply: |s, v| s.ai_base_url = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_AI_MODEL",
+            alias: None,
+            apply: |s, v| s.ai_model = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_AI_API_KEY",
+            alias: Some("OMNILLM_API_KEY"),
+            apply: |s, v| s.ai_api_key = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_AI_TIMEOUT_SECS",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<u64>() {
+                    s.ai_timeout_secs = n;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_AI_MAX_TOOL_ITERATIONS",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<usize>() {
+                    s.ai_max_tool_iterations = n;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_AI_MAX_RETRY_ATTEMPTS",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<u32>() {
+                    s.ai_max_retry_attempts = n;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_AI_RETRY_BASE_DELAY_MS",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<u64>() {
+                    s.ai_retry_base_delay_ms = n;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_AI_LOOP_DETECTOR_ENABLED",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.ai_loop_detector_enabled = b;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_THEME",
+            alias: None,
+            apply: |s, v| s.theme = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_HOTKEY",
+            alias: None,
+            apply: |s, v| s.hotkey = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_MAX_RESULTS",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<usize>() {
+                    s.max_results = n;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_BACKGROUND_URL",
+            alias: None,
+            apply: |s, v| s.background_url = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_PLUGIN_DIRS",
+            alias: None,
+            apply: |s, v| {
+                s.plugin_dirs = v
+                    .split(':')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_CAPTURE_SELECTION_ON_OPEN",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.capture_selection_on_open = b;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_BACKEND_URL",
+            alias: None,
+            apply: |s, v| s.backend_url = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_ENABLED",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.a2a_enabled = b;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_BIND_LAN",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.a2a_bind_lan = b;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_PORT",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<u16>() {
+                    s.a2a_port = n;
+                }
+            },
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_TOKEN",
+            alias: None,
+            apply: |s, v| s.a2a_token = Some(v.to_string()),
+        },
+    ]
+}
+
+/// Apply environment variable overrides to settings. Fields for which the
+/// corresponding env var is not set (or empty) are left untouched.
+pub fn apply_env_overrides(settings: &mut AppSettings) {
+    for entry in env_overrides() {
+        if let Some(val) = read_env(entry.var, entry.alias) {
+            log::info!("settings override: {} from env", entry.var);
+            (entry.apply)(settings, &val);
+        }
+    }
+}
+
+/// CLI override mapping: `--flag-name` → field setter.
+struct CliOverride {
+    /// Long flag name without leading `--`, e.g. `ai-model`.
+    flag: &'static str,
+    /// Apply the raw string value to the given settings.
+    apply: fn(&mut AppSettings, &str),
+}
+
+fn cli_overrides() -> Vec<CliOverride> {
+    vec![
+        CliOverride {
+            flag: "ai-base-url",
+            apply: |s, v| s.ai_base_url = v.to_string(),
+        },
+        CliOverride {
+            flag: "ai-model",
+            apply: |s, v| s.ai_model = v.to_string(),
+        },
+        CliOverride {
+            flag: "ai-api-key",
+            apply: |s, v| s.ai_api_key = v.to_string(),
+        },
+        CliOverride {
+            flag: "ai-timeout-secs",
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<u64>() {
+                    s.ai_timeout_secs = n;
+                }
+            },
+        },
+        CliOverride {
+            flag: "ai-max-tool-iterations",
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<usize>() {
+                    s.ai_max_tool_iterations = n;
+                }
+            },
+        },
+        CliOverride {
+            flag: "ai-max-retry-attempts",
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<u32>() {
+                    s.ai_max_retry_attempts = n;
+                }
+            },
+        },
+        CliOverride {
+            flag: "ai-retry-base-delay-ms",
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<u64>() {
+                    s.ai_retry_base_delay_ms = n;
+                }
+            },
+        },
+        CliOverride {
+            flag: "ai-loop-detector-enabled",
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.ai_loop_detector_enabled = b;
+                }
+            },
+        },
+        CliOverride {
+            flag: "theme",
+            apply: |s, v| s.theme = v.to_string(),
+        },
+        CliOverride {
+            flag: "hotkey",
+            apply: |s, v| s.hotkey = v.to_string(),
+        },
+        CliOverride {
+            flag: "max-results",
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<usize>() {
+                    s.max_results = n;
+                }
+            },
+        },
+        CliOverride {
+            flag: "background-url",
+            apply: |s, v| s.background_url = v.to_string(),
+        },
+        CliOverride {
+            flag: "plugin-dirs",
+            apply: |s, v| {
+                s.plugin_dirs = v
+                    .split(':')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+            },
+        },
+        CliOverride {
+            flag: "capture-selection-on-open",
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.capture_selection_on_open = b;
+                }
+            },
+        },
+        CliOverride {
+            flag: "backend-url",
+            apply: |s, v| s.backend_url = v.to_string(),
+        },
+        CliOverride {
+            flag: "a2a-enabled",
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.a2a_enabled = b;
+                }
+            },
+        },
+        CliOverride {
+            flag: "a2a-bind-lan",
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.a2a_bind_lan = b;
+                }
+            },
+        },
+        CliOverride {
+            flag: "a2a-port",
+            apply: |s, v| {
+                if let Ok(n) = v.parse::<u16>() {
+                    s.a2a_port = n;
+                }
+            },
+        },
+        CliOverride {
+            flag: "a2a-token",
+            apply: |s, v| s.a2a_token = Some(v.to_string()),
+        },
+    ]
+}
+
+/// Apply CLI argument overrides to settings. Accepts `--flag=value` or
+/// `--flag value` syntax. Unknown flags are silently ignored (they may be
+/// consumed by Tauri or other subsystems).
+pub fn apply_cli_overrides(settings: &mut AppSettings, args: &[String]) {
+    let overrides = cli_overrides();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if !arg.starts_with("--") {
+            i += 1;
+            continue;
+        }
+        let stripped = &arg[2..]; // remove leading --
+
+        // Try `--flag=value` first
+        if let Some(eq_pos) = stripped.find('=') {
+            let flag = &stripped[..eq_pos];
+            let val = &stripped[eq_pos + 1..];
+            if let Some(entry) = overrides.iter().find(|o| o.flag == flag) {
+                log::info!("settings override: --{} from CLI", entry.flag);
+                (entry.apply)(settings, val);
+            }
+            i += 1;
+            continue;
+        }
+
+        // Try `--flag value` (next arg is the value)
+        if let Some(entry) = overrides.iter().find(|o| o.flag == stripped) {
+            if i + 1 < args.len() && !args[i + 1].starts_with("--") {
+                log::info!("settings override: --{} from CLI", entry.flag);
+                (entry.apply)(settings, &args[i + 1]);
+                i += 2;
+                continue;
+            }
+        }
+
+        i += 1;
+    }
+}
+
+/// Parse a string as a boolean. Accepts `true/false`, `1/0`, `yes/no`,
+/// `on/off` (case-insensitive).
+fn parse_bool(s: &str) -> Result<bool, ()> {
+    match s.to_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Ok(true),
+        "false" | "0" | "no" | "off" => Ok(false),
+        _ => Err(()),
+    }
+}
+
+/// Load settings from disk and apply env + CLI overrides in precedence order.
+/// This is the primary entry point for all startup paths.
+pub fn load_settings_with_overrides(args: &[String]) -> AppSettings {
+    let mut settings = load_settings();
+    apply_env_overrides(&mut settings);
+    apply_cli_overrides(&mut settings, args);
+    settings
 }
 
 impl Default for AppSettings {
@@ -234,13 +624,7 @@ impl Default for AppSettings {
 }
 
 pub fn settings_path() -> std::path::PathBuf {
-    let config_dir = dirs::home_dir()
-        .unwrap_or_else(|| {
-            log::warn!("Could not determine home directory; using current directory for settings");
-            std::path::PathBuf::from(".")
-        })
-        .join(".config");
-    config_dir.join("omnilauncher").join("settings.json")
+    crate::path_config::config_dir().join("settings.json")
 }
 
 pub fn load_settings() -> AppSettings {
@@ -604,6 +988,21 @@ mod settings_tests {
     }
 
     #[test]
+    fn settings_path_honors_omnilauncher_config_dir() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.blocking_lock();
+        let tmp = std::env::temp_dir().join(format!(
+            "omnilauncher-settings-path-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", tmp.to_string_lossy().as_ref());
+
+        assert_eq!(settings_path(), tmp.join("settings.json"));
+
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+    }
+
+    #[test]
     fn test_default_settings_values() {
         let s = AppSettings::default();
         assert_eq!(s.theme, "system");
@@ -829,6 +1228,116 @@ mod settings_tests {
         assert!(appears_customized(&s));
     }
 
+    #[test]
+    fn env_overrides_use_primary_ai_api_key_before_legacy_alias() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.blocking_lock();
+        std::env::set_var("OMNILAUNCHER_AI_API_KEY", " primary-key ");
+        std::env::set_var("OMNILLM_API_KEY", "legacy-key");
+
+        let mut s = default_shaped_settings();
+        apply_env_overrides(&mut s);
+
+        assert_eq!(s.ai_api_key, "primary-key");
+
+        std::env::remove_var("OMNILAUNCHER_AI_API_KEY");
+        std::env::remove_var("OMNILLM_API_KEY");
+    }
+
+    #[test]
+    fn cli_overrides_win_over_env_overrides() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.blocking_lock();
+        std::env::set_var("OMNILAUNCHER_AI_MODEL", "env-model");
+        std::env::set_var("OMNILAUNCHER_MAX_RESULTS", "12");
+
+        let mut s = default_shaped_settings();
+        apply_env_overrides(&mut s);
+        apply_cli_overrides(
+            &mut s,
+            &[
+                "omnilauncher".to_string(),
+                "--ai-model=cli-model".to_string(),
+                "--max-results".to_string(),
+                "25".to_string(),
+            ],
+        );
+
+        assert_eq!(s.ai_model, "cli-model");
+        assert_eq!(s.max_results, 25);
+
+        std::env::remove_var("OMNILAUNCHER_AI_MODEL");
+        std::env::remove_var("OMNILAUNCHER_MAX_RESULTS");
+    }
+
+    #[test]
+    fn cli_overrides_parse_booleans_ports_tokens_and_plugin_dirs() {
+        let mut s = default_shaped_settings();
+
+        apply_cli_overrides(
+            &mut s,
+            &[
+                "omnilauncher".to_string(),
+                "--ai-loop-detector-enabled=off".to_string(),
+                "--capture-selection-on-open".to_string(),
+                "yes".to_string(),
+                "--a2a-enabled=1".to_string(),
+                "--a2a-bind-lan".to_string(),
+                "true".to_string(),
+                "--a2a-port=1555".to_string(),
+                "--a2a-token".to_string(),
+                "cli-token".to_string(),
+                "--plugin-dirs=/one:/two: :/three".to_string(),
+            ],
+        );
+
+        assert!(!s.ai_loop_detector_enabled);
+        assert!(s.capture_selection_on_open);
+        assert!(s.a2a_enabled);
+        assert!(s.a2a_bind_lan);
+        assert_eq!(s.a2a_port, 1555);
+        assert_eq!(s.a2a_token.as_deref(), Some("cli-token"));
+        assert_eq!(s.plugin_dirs, vec!["/one", "/two", "/three"]);
+    }
+
+    #[test]
+    fn load_settings_with_overrides_applies_disk_env_then_cli_precedence() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.blocking_lock();
+        let tmp = std::env::temp_dir().join(format!(
+            "omnilauncher-overrides-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("test tmp dir");
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", tmp.to_string_lossy().as_ref());
+        std::env::set_var("OMNILAUNCHER_AI_MODEL", "env-model");
+        std::env::set_var("OMNILAUNCHER_A2A_TOKEN", "env-token");
+
+        let mut disk = default_shaped_settings();
+        disk.ai_model = "disk-model".to_string();
+        disk.max_results = 7;
+        std::fs::write(
+            settings_path(),
+            serde_json::to_string_pretty(&disk).unwrap(),
+        )
+        .unwrap();
+
+        let s = load_settings_with_overrides(&[
+            "omnilauncher".to_string(),
+            "--max-results=33".to_string(),
+            "--a2a-token".to_string(),
+            "cli-token".to_string(),
+        ]);
+
+        assert_eq!(s.ai_model, "env-model");
+        assert_eq!(s.max_results, 33);
+        assert_eq!(s.a2a_token.as_deref(), Some("cli-token"));
+
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+        std::env::remove_var("OMNILAUNCHER_AI_MODEL");
+        std::env::remove_var("OMNILAUNCHER_A2A_TOKEN");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// Regression test for the "rebuild backend wipes settings.json" bug:
     /// save_settings must copy the existing file to `settings.json.bak` BEFORE
     /// overwriting, so the user can always recover the previous configuration
@@ -871,7 +1380,10 @@ mod settings_tests {
         let mut s2 = default_shaped_settings();
         s2.ai_api_key = "second-key".to_string();
         assert!(save_settings(&s2));
-        assert!(bak_path.exists(), "settings.json.bak must exist after second save");
+        assert!(
+            bak_path.exists(),
+            "settings.json.bak must exist after second save"
+        );
 
         // The .bak content must reflect the FIRST save (so it's a true backup
         // of what was about to be overwritten, not a copy of the new value).

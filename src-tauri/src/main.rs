@@ -7,7 +7,9 @@ use omnilauncher_lib::{
     },
     create_plugin_manager_builtin_only,
     live_server::LiveServer,
-    load_settings, save_settings, server, AppSettings, QueryResult, SkillInfo, SkillManager,
+    save_settings, server,
+    settings::load_settings_with_overrides,
+    AppSettings, QueryResult, SkillInfo, SkillManager,
 };
 use simplelog::{ColorChoice, ConfigBuilder, LevelFilter, TermLogger, TerminalMode, WriteLogger};
 use std::{
@@ -399,7 +401,8 @@ fn register_launcher_shortcut<R: tauri::Runtime>(
 
 pub fn run() {
     log::info!("Starting OmniLauncher runtime");
-    let settings = load_settings();
+    let args: Vec<String> = std::env::args().collect();
+    let settings = load_settings_with_overrides(&args);
     log::debug!(
         "Loaded settings (base_url={}, model={}, max_results={})",
         settings.ai_base_url,
@@ -795,10 +798,7 @@ async fn sync_window_geometry(
         );
 
         window
-            .set_size(Size::Logical(LogicalSize::new(
-                window_width,
-                window_height,
-            )))
+            .set_size(Size::Logical(LogicalSize::new(window_width, window_height)))
             .map_err(|e| e.to_string())?;
         window
             .set_position(Position::Logical(LogicalPosition::new(window_x, window_y)))
@@ -1948,7 +1948,7 @@ fn main() {
     log_startup_banner(role, debug_enabled);
 
     if server_mode {
-        let settings = load_settings();
+        let settings = load_settings_with_overrides(&args);
         let ai_client = AiClient::with_retry(
             settings.ai_base_url.clone(),
             settings.resolve_ai_api_key(),
@@ -2034,15 +2034,27 @@ fn main() {
             if settings.a2a_enabled {
                 let mut a2a_settings = settings.clone();
 
-                // Auto-generate token if absent.
-                if a2a_settings.a2a_token.as_ref().map_or(true, |t| t.trim().is_empty()) {
-                    let new_token = server::generate_auth_token();
-                    log::info!("a2a: generated new auth token (first enable)");
-                    a2a_settings.a2a_token = Some(new_token.clone());
-                    save_settings(&a2a_settings);
-                }
+                // By this point env/CLI overrides have already been applied to
+                // `settings.a2a_token`. Only generate a new token when no
+                // source provided one (first enable).
+                let a2a_token = match a2a_settings
+                    .a2a_token
+                    .as_ref()
+                    .filter(|t| !t.trim().is_empty())
+                {
+                    Some(token) => {
+                        log::info!("a2a: using existing token");
+                        token.clone()
+                    }
+                    None => {
+                        let new_token = server::generate_auth_token();
+                        log::info!("a2a: generated new auth token (first enable)");
+                        a2a_settings.a2a_token = Some(new_token.clone());
+                        save_settings(&a2a_settings);
+                        new_token
+                    }
+                };
 
-                let a2a_token = a2a_settings.a2a_token.clone().unwrap_or_default();
                 let a2a_host = if a2a_settings.a2a_bind_lan {
                     "0.0.0.0".to_string()
                 } else {
@@ -2065,10 +2077,8 @@ fn main() {
                 };
 
                 tokio::spawn(async move {
-                    omnilauncher_lib::a2a::server::spawn_a2a_server(
-                        a2a_state, a2a_host, a2a_port,
-                    )
-                    .await;
+                    omnilauncher_lib::a2a::server::spawn_a2a_server(a2a_state, a2a_host, a2a_port)
+                        .await;
                 });
             }
 
