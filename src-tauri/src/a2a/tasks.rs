@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use super::types::{
-    A2aArtifact, A2aMessage, A2aPart, A2aTask, A2aTaskState, A2aTaskStatus,
-};
+use super::types::{A2aArtifact, A2aMessage, A2aPart, A2aTask, A2aTaskState, A2aTaskStatus};
 
 /// In-memory record for a single A2A task.
 #[derive(Debug, Clone)]
@@ -34,9 +32,7 @@ impl TaskRecord {
         let status_message = if let Some(ref err) = self.error {
             Some(A2aMessage {
                 role: "agent".to_string(),
-                parts: vec![A2aPart::Text {
-                    text: err.clone(),
-                }],
+                parts: vec![A2aPart::Text { text: err.clone() }],
             })
         } else {
             self.output_messages.last().cloned()
@@ -380,11 +376,7 @@ mod tests {
     #[test]
     fn create_submitted_with_context_id_stores_and_echoes_it() {
         let mut reg = TaskRegistry::new(100);
-        let id = reg.create_submitted(
-            "q".to_string(),
-            None,
-            Some("ctx-abc".to_string()),
-        );
+        let id = reg.create_submitted("q".to_string(), None, Some("ctx-abc".to_string()));
         let record = reg.get(&id).expect("task should exist");
         assert_eq!(record.context_id.as_deref(), Some("ctx-abc"));
 

@@ -40,10 +40,7 @@ pub struct A2aAdapterState {
 ///
 /// Iterates all plugin tool schemas and generates conservative descriptions for
 /// plugins that lack explicit schemas.
-pub fn build_agent_card(
-    base_url: &str,
-    pm: &PluginManager,
-) -> AgentCard {
+pub fn build_agent_card(base_url: &str, pm: &PluginManager) -> AgentCard {
     build_agent_card_with_skills(base_url, pm, None)
 }
 
@@ -218,10 +215,7 @@ async fn execute_conversational(
 // ── Task operations ─────────────────────────────────────────────────────────
 
 /// Handle `GET /tasks/{id}`.
-pub async fn handle_task_get(
-    state: &A2aAdapterState,
-    task_id: &str,
-) -> Result<A2aTask, A2aError> {
+pub async fn handle_task_get(state: &A2aAdapterState, task_id: &str) -> Result<A2aTask, A2aError> {
     let reg = state.task_registry.lock().await;
     reg.get(task_id)
         .map(|r| r.to_a2a_task())
@@ -332,12 +326,12 @@ mod tests {
 
     use std::sync::Arc;
 
-    use async_trait::async_trait;
     use crate::{
         ai::{client::AiClient, router::ConversationContext},
         plugins::{Plugin, Query, QueryResult},
         AppSettings, SkillManager,
     };
+    use async_trait::async_trait;
     use tokio::sync::Mutex;
 
     struct QueryOnlyPlugin;
@@ -410,7 +404,10 @@ mod tests {
         let card = build_agent_card("http://127.0.0.1:1423", &pm);
 
         // Should have at least some skills from built-in plugins.
-        assert!(!card.skills.is_empty(), "expected skills from built-in plugins");
+        assert!(
+            !card.skills.is_empty(),
+            "expected skills from built-in plugins"
+        );
     }
 
     #[test]
@@ -455,11 +452,7 @@ tags: demo, a2a
         skill_manager.load_from_dir(skill_root.path());
         let pm = PluginManager::new();
 
-        let card = build_agent_card_with_skills(
-            "http://127.0.0.1:1423",
-            &pm,
-            Some(&skill_manager),
-        );
+        let card = build_agent_card_with_skills("http://127.0.0.1:1423", &pm, Some(&skill_manager));
 
         let skill = card
             .skills
@@ -489,7 +482,10 @@ tags: demo, a2a
 
         let task = handle_message_send(&state, request, None).await.unwrap();
 
-        assert_eq!(task.status.state, crate::a2a::types::A2aTaskState::Completed);
+        assert_eq!(
+            task.status.state,
+            crate::a2a::types::A2aTaskState::Completed
+        );
         let artifact = task.artifacts.first().expect("query results artifact");
         let A2aPart::Data { data } = &artifact.parts[0] else {
             panic!("query results artifact should be structured data");
@@ -614,5 +610,4 @@ tags: demo, a2a
             "artifact_id must be populated for wire-compatible output"
         );
     }
-
 }

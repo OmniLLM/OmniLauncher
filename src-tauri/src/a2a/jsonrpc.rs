@@ -223,7 +223,10 @@ mod tests {
         let resp = parse(&dispatch(&state, body).await);
         assert_eq!(resp["jsonrpc"], "2.0");
         assert_eq!(resp["id"], 1);
-        assert!(resp["result"].is_object(), "result must be present on success");
+        assert!(
+            resp["result"].is_object(),
+            "result must be present on success"
+        );
         assert!(resp["error"].is_null());
         assert_eq!(resp["result"]["status"]["state"], "completed");
     }

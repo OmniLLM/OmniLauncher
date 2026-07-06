@@ -271,8 +271,8 @@ tags: route, a2a
     #[tokio::test]
     async fn options_returns_204_without_auth() {
         let state = test_server_state();
-        let resp = handle_a2a_request(&state, "OPTIONS", "/anything", "OPTIONS / HTTP/1.1\r\n\r\n")
-            .await;
+        let resp =
+            handle_a2a_request(&state, "OPTIONS", "/anything", "OPTIONS / HTTP/1.1\r\n\r\n").await;
         assert_eq!(resp.status, "204 No Content");
     }
 

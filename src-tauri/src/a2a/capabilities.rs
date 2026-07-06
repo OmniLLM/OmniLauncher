@@ -72,7 +72,11 @@ pub fn build_capabilities(pm: &PluginManager, skills: Option<&SkillManager>) -> 
         capabilities.push(A2aCapability {
             id: format!("plugin:query:{plugin_name}"),
             name: plugin_name.clone(),
-            description: if description.is_empty() { None } else { Some(description) },
+            description: if description.is_empty() {
+                None
+            } else {
+                Some(description)
+            },
             input_schema: Some(query_input_schema()),
             tags,
             kind: A2aCapabilityKind::QueryPlugin,
@@ -83,7 +87,9 @@ pub fn build_capabilities(pm: &PluginManager, skills: Option<&SkillManager>) -> 
     capabilities.push(A2aCapability {
         id: "launcher:query_all".to_string(),
         name: "launcher_query_all".to_string(),
-        description: Some("Search all OmniLauncher plugins and return launcher results".to_string()),
+        description: Some(
+            "Search all OmniLauncher plugins and return launcher results".to_string(),
+        ),
         input_schema: Some(query_input_schema()),
         tags: vec!["launcher".to_string(), "query".to_string()],
         kind: A2aCapabilityKind::LauncherQuery,
@@ -172,7 +178,9 @@ pub async fn execute_capability(
         .ok_or_else(|| format!("Tool not found: {capability_id}"))?;
 
     match capability.kind {
-        A2aCapabilityKind::ToolSchemaPlugin => execute_tool_schema_plugin(pm, capability, request).await,
+        A2aCapabilityKind::ToolSchemaPlugin => {
+            execute_tool_schema_plugin(pm, capability, request).await
+        }
         A2aCapabilityKind::QueryPlugin => execute_query_plugin(pm, capability, request).await,
         A2aCapabilityKind::LauncherQuery => execute_launcher_query(pm, request).await,
         A2aCapabilityKind::Skill => execute_skill(pm, capability, request).await,
@@ -230,7 +238,10 @@ async fn execute_skill(
         args = json!({ "query": extract_query_text(request) });
     }
     if let Some(obj) = args.as_object_mut() {
-        obj.insert("skill".to_string(), Value::String(capability.target.clone()));
+        obj.insert(
+            "skill".to_string(),
+            Value::String(capability.target.clone()),
+        );
         obj.entry("op".to_string())
             .or_insert_with(|| Value::String("query".to_string()));
         if !obj.contains_key("query") {
