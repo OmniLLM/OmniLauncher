@@ -662,23 +662,51 @@ pub fn load_settings() -> AppSettings {
                     if s.github_servers.is_empty() {
                         s.github_servers = detect_gh_hosts();
                     }
+                    log::info!(
+                        "Settings loaded from existing file at {}",
+                        path.display()
+                    );
                     return s;
                 }
                 Err(err) => {
                     log::warn!("Failed to parse settings from {}: {err}", path.display());
+                    // Do NOT overwrite a malformed file — the user may want to fix
+                    // it manually. Return defaults in memory only.
                 }
             },
             Err(err) => {
                 log::warn!("Failed to read settings from {}: {err}", path.display());
+                // Do NOT overwrite an unreadable file — could be a transient
+                // permissions issue. Return defaults in memory only.
             }
         }
     } else {
         log::info!(
-            "Settings file does not exist at {}; using defaults",
+            "Settings file does not exist at {}; creating with defaults",
             path.display()
         );
+        // Create the file with defaults so the user has something to edit.
+        // This is the ONLY path that creates settings.json automatically.
+        let defaults = AppSettings {
+            github_servers: detect_gh_hosts(),
+            ..AppSettings::default()
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(&defaults) {
+            match std::fs::write(&path, &json) {
+                Ok(()) => log::info!("Created default settings file at {}", path.display()),
+                Err(err) => log::warn!(
+                    "Failed to create default settings file at {}: {err}",
+                    path.display()
+                ),
+            }
+        }
+        return defaults;
     }
-    // Auto-detect gh CLI authenticated hosts for fresh installs
+    // Fallback: file exists but failed to read/parse — use defaults in memory
+    // without touching the file on disk.
     AppSettings {
         github_servers: detect_gh_hosts(),
         ..AppSettings::default()
@@ -1397,6 +1425,85 @@ mod settings_tests {
             !bak_body.contains("second-key"),
             "backup must NOT contain the just-saved value"
         );
+
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression test for the "restart overwrites config" bug:
+    /// When settings.json already exists on disk, load_settings must read it
+    /// and NOT overwrite it. Only when the file is absent should it create one.
+    #[test]
+    fn load_settings_reads_existing_file_without_overwriting() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.blocking_lock();
+        let tmp = std::env::temp_dir().join(format!(
+            "omnilauncher-no-overwrite-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("test tmp dir");
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", tmp.to_string_lossy().as_ref());
+
+        // Write a customized settings file to disk.
+        let mut custom = default_shaped_settings();
+        custom.ai_api_key = "user-secret-key".to_string();
+        custom.ai_model = "my-custom-model".to_string();
+        custom.max_results = 42;
+        let custom_json = serde_json::to_string_pretty(&custom).unwrap();
+        std::fs::write(settings_path(), &custom_json).unwrap();
+
+        // load_settings must return the values from disk.
+        let loaded = load_settings();
+        assert_eq!(loaded.ai_api_key, "user-secret-key");
+        assert_eq!(loaded.ai_model, "my-custom-model");
+        assert_eq!(loaded.max_results, 42);
+
+        // Verify the file on disk was NOT modified.
+        let after = std::fs::read_to_string(settings_path()).unwrap();
+        assert_eq!(
+            after, custom_json,
+            "settings.json on disk must not be modified by load_settings"
+        );
+
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// When settings.json does not exist, load_settings must create it with
+    /// defaults so the user has a file to edit.
+    #[test]
+    fn load_settings_creates_file_when_absent() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.blocking_lock();
+        let tmp = std::env::temp_dir().join(format!(
+            "omnilauncher-create-missing-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("test tmp dir");
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", tmp.to_string_lossy().as_ref());
+
+        let path = settings_path();
+        assert!(!path.exists(), "precondition: file must not exist");
+
+        let loaded = load_settings();
+        // Should return defaults.
+        assert_eq!(loaded.theme, "system");
+        assert_eq!(loaded.hotkey, "Ctrl+Shift+O");
+        assert_eq!(loaded.max_results, 10);
+
+        // File must now exist on disk.
+        assert!(
+            path.exists(),
+            "load_settings must create settings.json when it is absent"
+        );
+
+        // The file must be valid JSON that round-trips.
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: AppSettings = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.theme, "system");
+        assert_eq!(parsed.max_results, 10);
 
         std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
         let _ = std::fs::remove_dir_all(&tmp);
