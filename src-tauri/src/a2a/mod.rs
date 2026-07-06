@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod capabilities;
+pub mod jsonrpc;
 pub mod server;
 pub mod tasks;
 pub mod types;
