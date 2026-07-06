@@ -109,6 +109,7 @@ prepare_binaries() {
     ok "Prepared role binaries (role=$role):"
     [ -f "$FRONTEND_EXE" ] && echo "  frontend: $FRONTEND_EXE"
     [ -f "$BACKEND_EXE" ]  && echo "  backend:  $BACKEND_EXE"
+    return 0
 }
 
 # Make sure the role-named binaries needed by the caller exist. Role-aware
