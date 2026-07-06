@@ -79,6 +79,7 @@ pub enum A2aPart {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct A2aArtifact {
+    pub artifact_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,6 +128,8 @@ pub struct A2aTaskStatus {
 #[serde(rename_all = "camelCase")]
 pub struct A2aTask {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
     pub status: A2aTaskStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<A2aArtifact>,
@@ -399,6 +402,7 @@ mod tests {
     fn a2a_task_roundtrip() {
         let task = A2aTask {
             id: "task-001".to_string(),
+            context_id: Some("ctx-1".to_string()),
             status: A2aTaskStatus {
                 state: A2aTaskState::Completed,
                 message: Some(A2aMessage {
@@ -410,6 +414,7 @@ mod tests {
                 timestamp: Some("2026-06-25T12:00:00Z".to_string()),
             },
             artifacts: vec![A2aArtifact {
+                artifact_id: "art-1".to_string(),
                 name: Some("result".to_string()),
                 description: None,
                 parts: vec![A2aPart::Data {
@@ -423,8 +428,10 @@ mod tests {
         let json = serde_json::to_string_pretty(&task).unwrap();
         let back: A2aTask = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, "task-001");
+        assert_eq!(back.context_id.as_deref(), Some("ctx-1"));
         assert_eq!(back.status.state, A2aTaskState::Completed);
         assert_eq!(back.artifacts.len(), 1);
+        assert_eq!(back.artifacts[0].artifact_id, "art-1");
     }
 
     #[test]
@@ -547,5 +554,54 @@ mod tests {
         let json = r#"{"id":"task-xyz"}"#;
         let params: TaskIdParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.id, "task-xyz");
+    }
+
+    #[test]
+    fn a2a_task_serializes_context_id_when_present() {
+        let task = A2aTask {
+            id: "t-1".to_string(),
+            context_id: Some("ctx-42".to_string()),
+            status: A2aTaskStatus {
+                state: A2aTaskState::Completed,
+                message: None,
+                timestamp: None,
+            },
+            artifacts: vec![],
+            history: vec![],
+        };
+        let json = serde_json::to_string(&task).unwrap();
+        assert!(json.contains("\"contextId\":\"ctx-42\""));
+    }
+
+    #[test]
+    fn a2a_task_omits_context_id_when_none() {
+        let task = A2aTask {
+            id: "t-1".to_string(),
+            context_id: None,
+            status: A2aTaskStatus {
+                state: A2aTaskState::Completed,
+                message: None,
+                timestamp: None,
+            },
+            artifacts: vec![],
+            history: vec![],
+        };
+        let json = serde_json::to_string(&task).unwrap();
+        assert!(!json.contains("contextId"));
+    }
+
+    #[test]
+    fn a2a_artifact_serializes_artifact_id() {
+        let artifact = A2aArtifact {
+            artifact_id: "art-abc".to_string(),
+            name: Some("results".to_string()),
+            description: None,
+            parts: vec![A2aPart::Text {
+                text: "hi".to_string(),
+            }],
+            index: 0,
+        };
+        let json = serde_json::to_string(&artifact).unwrap();
+        assert!(json.contains("\"artifactId\":\"art-abc\""));
     }
 }
