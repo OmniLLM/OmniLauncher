@@ -106,8 +106,8 @@ async fn handle_a2a_request(
         // exposing both keeps us compatible with strict clients while not
         // breaking older ones.
         ("GET", "/.well-known/agent-card.json") | ("GET", "/.well-known/agent.json") => {
-            let pm = state.adapter.plugin_manager.lock().await;
-            let settings = state.adapter.settings.lock().await;
+            let pm = state.adapter.plugin_manager.read().await;
+            let settings = state.adapter.settings.read().await;
             let base_url = a2a_base_url(&settings);
             let skills = state.adapter.skill_manager.lock().await;
             let card = adapter::build_agent_card_with_skills(&base_url, &pm, Some(&skills));
@@ -177,7 +177,7 @@ mod tests {
         ai::{client::AiClient, router::ConversationContext},
         create_plugin_manager_builtin_only, AppSettings, SkillManager,
     };
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, RwLock};
 
     fn test_skill_manager() -> SkillManager {
         let skill_root = tempfile::tempdir().unwrap();
@@ -207,13 +207,13 @@ tags: route, a2a
 
         A2aServerState {
             adapter: A2aAdapterState {
-                plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
-                ai_client: Arc::new(Mutex::new(AiClient::new(
+                plugin_manager: Arc::new(RwLock::new(create_plugin_manager_builtin_only())),
+                ai_client: Arc::new(RwLock::new(AiClient::new(
                     String::new(),
                     String::new(),
                     String::new(),
                 ))),
-                settings: Arc::new(Mutex::new(settings)),
+                settings: Arc::new(RwLock::new(settings)),
                 conversation: Arc::new(Mutex::new(ConversationContext::new(10))),
                 skill_manager: Arc::new(Mutex::new(test_skill_manager())),
                 task_registry: Arc::new(Mutex::new(TaskRegistry::new(10))),

@@ -160,7 +160,7 @@ mod tests {
     use crate::{AppSettings, SkillManager};
     use async_trait::async_trait;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, RwLock};
 
     struct EchoQueryPlugin;
 
@@ -193,13 +193,13 @@ mod tests {
         let mut pm = crate::plugins::PluginManager::new();
         pm.register(Box::new(EchoQueryPlugin));
         A2aAdapterState {
-            plugin_manager: Arc::new(Mutex::new(pm)),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(pm)),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 String::new(),
                 String::new(),
                 String::new(),
             ))),
-            settings: Arc::new(Mutex::new(AppSettings::default())),
+            settings: Arc::new(RwLock::new(AppSettings::default())),
             conversation: Arc::new(Mutex::new(ConversationContext::new(10))),
             skill_manager: Arc::new(Mutex::new(SkillManager::new())),
             task_registry: Arc::new(Mutex::new(TaskRegistry::new(10))),
@@ -208,6 +208,28 @@ mod tests {
 
     fn parse(body: &str) -> Value {
         serde_json::from_str(body).unwrap()
+    }
+
+    /// Poll `tasks/get` until the task reaches a terminal state.
+    ///
+    /// Background execution means `message/send` now returns the task in
+    /// `working` state and the actual execution runs in a `tokio::spawn`
+    /// task. Tests that inspect the final result must wait for the
+    /// background task to finish.
+    async fn await_terminal_via_rpc(state: &A2aAdapterState, task_id: &str) -> Value {
+        let get_body = format!(
+            r#"{{"jsonrpc":"2.0","id":999,"method":"tasks/get","params":{{"id":"{task_id}"}}}}"#
+        );
+        for _ in 0..3000 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let resp = parse(&dispatch(state, &get_body).await);
+            if let Some(state_str) = resp["result"]["status"]["state"].as_str() {
+                if matches!(state_str, "completed" | "failed" | "canceled" | "rejected") {
+                    return resp;
+                }
+            }
+        }
+        panic!("task {task_id} did not reach terminal state within 30 s");
     }
 
     #[tokio::test]
@@ -228,7 +250,11 @@ mod tests {
             "result must be present on success"
         );
         assert!(resp["error"].is_null());
-        assert_eq!(resp["result"]["status"]["state"], "completed");
+        // Background execution — the initial response is `working`; poll
+        // `tasks/get` for the terminal state.
+        let task_id = resp["result"]["id"].as_str().unwrap();
+        let final_resp = await_terminal_via_rpc(&state, task_id).await;
+        assert_eq!(final_resp["result"]["status"]["state"], "completed");
     }
 
     #[tokio::test]
@@ -245,7 +271,9 @@ mod tests {
             }
         }"#;
         let resp = parse(&dispatch(&state, body).await);
-        assert_eq!(resp["result"]["status"]["state"], "completed");
+        let task_id = resp["result"]["id"].as_str().unwrap();
+        let final_resp = await_terminal_via_rpc(&state, task_id).await;
+        assert_eq!(final_resp["result"]["status"]["state"], "completed");
     }
 
     #[tokio::test]

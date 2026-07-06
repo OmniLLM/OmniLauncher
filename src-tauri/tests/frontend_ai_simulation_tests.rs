@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use omnilauncher_lib::{
     ai::{client::AiClient, router::ConversationContext},
@@ -33,13 +33,13 @@ async fn frontend_like_ai_query_alibaba_ecs_returns_a_number() {
     skill_manager.reload();
 
     let state = ServerState {
-        plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
-        ai_client: Arc::new(Mutex::new(AiClient::new(
+        plugin_manager: Arc::new(RwLock::new(create_plugin_manager_builtin_only())),
+        ai_client: Arc::new(RwLock::new(AiClient::new(
             settings.ai_base_url.clone(),
             settings.resolve_ai_api_key(),
             settings.ai_model.clone(),
         ))),
-        settings: Arc::new(Mutex::new(settings.clone())),
+        settings: Arc::new(RwLock::new(settings.clone())),
         conversation: Arc::new(Mutex::new(ConversationContext::default())),
         ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
         current_ai_task: Arc::new(Mutex::new(None)),

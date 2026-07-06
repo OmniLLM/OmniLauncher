@@ -25,6 +25,7 @@ pub struct Skill {
     pub body: String,
 }
 
+#[derive(Clone)]
 pub struct SkillManager {
     skills: Vec<Skill>,
 }

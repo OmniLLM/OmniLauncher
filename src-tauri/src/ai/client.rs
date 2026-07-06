@@ -291,7 +291,8 @@ impl AiClient {
         tools: Vec<serde_json::Value>,
         tool_choice: ToolChoice,
     ) -> Result<ChatResponse, AiError> {
-        self.chat_with_tools_once(messages, tools, tool_choice).await
+        self.chat_with_tools_once(messages, tools, tool_choice)
+            .await
     }
 
     /// Single (non-retrying) API call — used internally by `chat_with_tools_choice`.
@@ -447,7 +448,10 @@ impl AiClient {
             "AI response parsed: finish_reason={:?} content_len={} tool_calls={}",
             finish_reason,
             content.as_ref().map(|c| c.len()).unwrap_or(0),
-            tool_calls.as_ref().map(|tcs: &Vec<ToolCall>| tcs.len()).unwrap_or(0),
+            tool_calls
+                .as_ref()
+                .map(|tcs: &Vec<ToolCall>| tcs.len())
+                .unwrap_or(0),
         );
 
         Ok(ChatResponse {

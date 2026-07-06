@@ -147,7 +147,10 @@ fn truncate_with_marker(s: &str, budget: usize) -> String {
         return s.to_string();
     }
     let truncated: String = s.chars().take(budget).collect();
-    format!("{truncated}…(elided {} more chars)", s.chars().count() - budget)
+    format!(
+        "{truncated}…(elided {} more chars)",
+        s.chars().count() - budget
+    )
 }
 
 impl Router {
@@ -615,8 +618,8 @@ impl Router {
                             .last()
                             .map(|m| m.role.as_str())
                             .unwrap_or("");
-                        let mid_task_text_only = !tools.is_empty()
-                            && last_role_before_this_turn == "tool";
+                        let mid_task_text_only =
+                            !tools.is_empty() && last_role_before_this_turn == "tool";
                         let first_turn_text_only = !tools.is_empty()
                             && last_role_before_this_turn == "user"
                             && !first_turn_nudge_used;
@@ -867,8 +870,7 @@ impl Router {
                                 .last()
                                 .map(|m| m.content_str().to_string())
                                 .unwrap_or_default();
-                            let last_result_masked =
-                                crate::log_masking::mask_str(&last_result_raw);
+                            let last_result_masked = crate::log_masking::mask_str(&last_result_raw);
                             let last_result_snippet =
                                 truncate_with_marker(&last_result_masked, SNIPPET_BUDGET);
 
@@ -2018,24 +2020,35 @@ mod tests {
         // The matrix is encoded as `match` arms in the loop body. We test the
         // structural classifier functions directly by simulating the relevant
         // boolean inputs.
-        let mid_task = |last_role: &str, has_tools: bool| -> bool {
-            has_tools && last_role == "tool"
-        };
+        let mid_task =
+            |last_role: &str, has_tools: bool| -> bool { has_tools && last_role == "tool" };
         let first_turn = |last_role: &str, has_tools: bool, used: bool| -> bool {
             has_tools && last_role == "user" && !used
         };
 
         // Mid-task triggers ONLY after a tool result
         assert!(mid_task("tool", true));
-        assert!(!mid_task("user", true), "user message is first-turn, not mid-task");
+        assert!(
+            !mid_task("user", true),
+            "user message is first-turn, not mid-task"
+        );
         assert!(!mid_task("tool", false), "no tools available → don't nudge");
-        assert!(!mid_task("assistant", true), "should never see an assistant as last message");
+        assert!(
+            !mid_task("assistant", true),
+            "should never see an assistant as last message"
+        );
 
         // First-turn triggers ONLY on the user query and only once
         assert!(first_turn("user", true, false));
         assert!(!first_turn("user", true, true), "one-shot cap");
-        assert!(!first_turn("tool", true, false), "tool result is mid-task, not first-turn");
-        assert!(!first_turn("user", false, false), "no tools available → don't nudge");
+        assert!(
+            !first_turn("tool", true, false),
+            "tool result is mid-task, not first-turn"
+        );
+        assert!(
+            !first_turn("user", false, false),
+            "no tools available → don't nudge"
+        );
     }
 }
 
@@ -2070,9 +2083,18 @@ mod loop_detector_tests {
     #[test]
     fn test_is_loop_negative_differing_results() {
         let mut window: VecDeque<(String, String)> = VecDeque::new();
-        window.push_back(("openstack|region=se1".to_string(), "error: auth expired".to_string()));
-        window.push_back(("openstack|region=se1".to_string(), "error: token refresh required".to_string()));
-        window.push_back(("openstack|region=se1".to_string(), "ok: 12 servers".to_string()));
+        window.push_back((
+            "openstack|region=se1".to_string(),
+            "error: auth expired".to_string(),
+        ));
+        window.push_back((
+            "openstack|region=se1".to_string(),
+            "error: token refresh required".to_string(),
+        ));
+        window.push_back((
+            "openstack|region=se1".to_string(),
+            "ok: 12 servers".to_string(),
+        ));
         assert!(
             !Router::is_loop(&window),
             "identical requests with differing results must NOT be a loop"
@@ -2085,9 +2107,18 @@ mod loop_detector_tests {
     #[test]
     fn test_is_loop_positive_identical_pairs() {
         let mut window: VecDeque<(String, String)> = VecDeque::new();
-        window.push_back(("openstack|region=se1".to_string(), "ok: 5 servers".to_string()));
-        window.push_back(("openstack|region=se1".to_string(), "ok: 5 servers".to_string()));
-        window.push_back(("openstack|region=se1".to_string(), "ok: 5 servers".to_string()));
+        window.push_back((
+            "openstack|region=se1".to_string(),
+            "ok: 5 servers".to_string(),
+        ));
+        window.push_back((
+            "openstack|region=se1".to_string(),
+            "ok: 5 servers".to_string(),
+        ));
+        window.push_back((
+            "openstack|region=se1".to_string(),
+            "ok: 5 servers".to_string(),
+        ));
         assert!(
             Router::is_loop(&window),
             "three pairwise-identical (request, result) tuples IS a loop"

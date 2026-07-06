@@ -6,13 +6,16 @@ use tokio::{
     sync::{broadcast, Mutex, RwLock},
 };
 
+// Re-export so callers within the crate can use the same RwLock type.
+pub use tokio::sync::RwLock as TokioRwLock;
+
 use crate::{
     ai::{client::AiClient, router::ConversationContext},
-    launcher_config::LauncherConfig,
     http_util::{
-        self, encode_response, extract_auth, json_response, parse_json,
-        read_body, read_http_request, split_path_query, AuthScheme, CorsPolicy, HttpLimits,
+        self, encode_response, extract_auth, json_response, parse_json, read_body,
+        read_http_request, split_path_query, AuthScheme, CorsPolicy, HttpLimits,
     },
+    launcher_config::LauncherConfig,
     live_server::LiveResponse,
     plugins::QueryResult,
     save_settings, AppSettings, SkillManager,
@@ -20,9 +23,9 @@ use crate::{
 
 #[derive(Clone)]
 pub struct ServerState {
-    pub plugin_manager: Arc<Mutex<crate::PluginManager>>,
-    pub ai_client: Arc<Mutex<AiClient>>,
-    pub settings: Arc<Mutex<AppSettings>>,
+    pub plugin_manager: Arc<RwLock<crate::PluginManager>>,
+    pub ai_client: Arc<RwLock<AiClient>>,
+    pub settings: Arc<RwLock<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
     pub ai_in_flight: Arc<tokio::sync::Semaphore>,
     pub current_ai_task: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
@@ -328,7 +331,12 @@ async fn handle_request(
     // the per-launch token in X-OmniLauncher-Token.
     if method != "OPTIONS" && path != "/health" {
         let expected_token = state.auth_token.as_str();
-        match extract_auth(request, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }) {
+        match extract_auth(
+            request,
+            AuthScheme::HeaderOrBearer {
+                header: "X-OmniLauncher-Token",
+            },
+        ) {
             Some(tok) if tok == expected_token => {}
             _ => {
                 return LiveResponse::text(
@@ -358,7 +366,7 @@ async fn handle_request(
             }
         }
         ("GET", "/api/settings") => {
-            let settings = state.settings.lock().await.clone();
+            let settings = state.settings.read().await.clone();
             log::debug!(
                 "server get settings: base_url={} model={} theme={} max_results={} background_url={}",
                 settings.ai_base_url,
@@ -393,11 +401,11 @@ async fn handle_request(
                     // save from a never-customized install is still allowed.
                     //
                     // We check the RAW INPUT FIELDS (not the merged `updated`
-                    // below) because the `..state.settings.lock().await.clone()`
+                    // below) because the `..state.settings.read().await.clone()`
                     // spread re-fills github_servers/plugin_dirs from
                     // in-memory state, masking the wipe shape after the merge.
                     // The danger is the EXPLICITLY mapped fields being wiped.
-                    let current = state.settings.lock().await.clone();
+                    let current = state.settings.read().await.clone();
                     let input_is_factory_default = input.ai_api_key.is_empty()
                         && input.background_url.is_empty()
                         && input.backend_url.is_empty()
@@ -458,11 +466,11 @@ and try again."
                         ..current
                     };
                     {
-                        let mut settings = state.settings.lock().await;
+                        let mut settings = state.settings.write().await;
                         *settings = updated.clone();
                     }
                     {
-                        let mut client = state.ai_client.lock().await;
+                        let mut client = state.ai_client.write().await;
                         *client = AiClient::with_retry(
                             updated.ai_base_url.clone(),
                             updated.resolve_ai_api_key(),
@@ -693,7 +701,7 @@ and try again."
                     .filter_map(|m| mgr.get_by_name(&m.name).cloned())
                     .collect()
             };
-            let ai = state.ai_client.lock().await;
+            let ai = state.ai_client.read().await;
             match crate::skills::consolidate::propose(&skills_clone, &ai).await {
                 Ok(proposals) => json_response(&proposals),
                 Err(e) => LiveResponse::text(
@@ -810,7 +818,7 @@ and try again."
             let body = read_body(request);
             match parse_json::<SlashRequest>(&body, true) {
                 Ok(input) => {
-                    let pm = state.plugin_manager.lock().await;
+                    let pm = state.plugin_manager.read().await;
                     json_response(&slash_preview_backend(&input.query, &pm).await)
                 }
                 Err(error) => error,
@@ -820,7 +828,7 @@ and try again."
             let body = read_body(request);
             match parse_json::<SlashRequest>(&body, true) {
                 Ok(input) => {
-                    let pm = state.plugin_manager.lock().await;
+                    let pm = state.plugin_manager.read().await;
                     let mut skill_mgr = state.skill_manager.lock().await;
                     let resp =
                         crate::ai::router::Router::slash_command(&input.query, &pm, &mut skill_mgr)
@@ -900,13 +908,13 @@ mod tests {
     fn test_server_state() -> ServerState {
         let settings = AppSettings::default();
         ServerState {
-            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(crate::PluginManager::new())),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 settings.ai_base_url.clone(),
                 settings.resolve_ai_api_key(),
                 settings.ai_model.clone(),
             ))),
-            settings: Arc::new(Mutex::new(settings)),
+            settings: Arc::new(RwLock::new(settings)),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
             ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
             current_ai_task: Arc::new(Mutex::new(None)),
@@ -1204,13 +1212,13 @@ Loaded from disk.
 
         let settings = AppSettings::default();
         let state = ServerState {
-            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(crate::PluginManager::new())),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 settings.ai_base_url.clone(),
                 settings.resolve_ai_api_key(),
                 settings.ai_model.clone(),
             ))),
-            settings: Arc::new(Mutex::new(settings)),
+            settings: Arc::new(RwLock::new(settings)),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
             ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
             current_ai_task: Arc::new(Mutex::new(None)),
@@ -1237,13 +1245,13 @@ Loaded from disk.
 
         let settings = AppSettings::default();
         let state = ServerState {
-            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(crate::PluginManager::new())),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 settings.ai_base_url.clone(),
                 settings.resolve_ai_api_key(),
                 settings.ai_model.clone(),
             ))),
-            settings: Arc::new(Mutex::new(settings)),
+            settings: Arc::new(RwLock::new(settings)),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
             ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
             current_ai_task: Arc::new(Mutex::new(None)),
@@ -1267,7 +1275,7 @@ Loaded from disk.
     /// with custom values for `ai_max_retry_attempts` and `ai_retry_base_delay_ms` through
     /// the real HTTP handler and asserts both the in-memory state AND the JSON response
     /// reflect the requested values. Before the fix the server silently dropped the fields
-    /// (struct didn't declare them) and the `..state.settings.lock().await.clone()` spread
+    /// (struct didn't declare them) and the `..state.settings.read().await.clone()` spread
     /// then re-filled them from the OLD in-memory state — so the user's input vanished.
     #[tokio::test]
     async fn post_settings_persists_ai_retry_fields_to_state() {
@@ -1277,13 +1285,13 @@ Loaded from disk.
         // Seed the state with the documented defaults so we can prove the POST changed them.
         let settings = AppSettings::default();
         let state = ServerState {
-            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(crate::PluginManager::new())),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 settings.ai_base_url.clone(),
                 settings.resolve_ai_api_key(),
                 settings.ai_model.clone(),
             ))),
-            settings: Arc::new(Mutex::new(settings)),
+            settings: Arc::new(RwLock::new(settings)),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
             ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
             current_ai_task: Arc::new(Mutex::new(None)),
@@ -1319,7 +1327,7 @@ Loaded from disk.
         }
 
         assert_eq!(response.status, "200 OK", "POST should succeed");
-        let stored = state.settings.lock().await.clone();
+        let stored = state.settings.read().await.clone();
         assert_eq!(
             stored.ai_max_retry_attempts, 8,
             "ai_max_retry_attempts must be persisted into state (not silently dropped)"
@@ -1356,13 +1364,13 @@ Loaded from disk.
         });
 
         let state = ServerState {
-            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(crate::PluginManager::new())),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 settings.ai_base_url.clone(),
                 settings.resolve_ai_api_key(),
                 settings.ai_model.clone(),
             ))),
-            settings: Arc::new(Mutex::new(settings)),
+            settings: Arc::new(RwLock::new(settings)),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
             ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
             current_ai_task: Arc::new(Mutex::new(None)),
@@ -1405,7 +1413,7 @@ Loaded from disk.
             "guard must reject default-shaped payload when live state is customized"
         );
         // Critically, the in-memory state must NOT have been mutated.
-        let after = state.settings.lock().await.clone();
+        let after = state.settings.read().await.clone();
         assert_eq!(
             after.ai_api_key, "sk-real-user-key",
             "user's API key must survive the rejected POST"
@@ -1428,13 +1436,13 @@ Loaded from disk.
         // Pristine state — no API key, no github servers, no backend URL.
         let settings = AppSettings::default();
         let state = ServerState {
-            plugin_manager: Arc::new(Mutex::new(crate::PluginManager::new())),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(crate::PluginManager::new())),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 settings.ai_base_url.clone(),
                 settings.resolve_ai_api_key(),
                 settings.ai_model.clone(),
             ))),
-            settings: Arc::new(Mutex::new(settings)),
+            settings: Arc::new(RwLock::new(settings)),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
             ai_in_flight: Arc::new(tokio::sync::Semaphore::new(1)),
             current_ai_task: Arc::new(Mutex::new(None)),
@@ -1716,7 +1724,7 @@ Content-Length: 0\r\n\r\n",
     /// Regression test: `ai_max_retry_attempts` and `ai_retry_base_delay_ms` must round-trip
     /// through `SaveSettingsRequest`. Previously they were silently dropped by the server
     /// payload struct, so the values typed in the Preferences window never reached disk —
-    /// a `..state.settings.lock().await.clone()` spread filled them in from the in-memory
+    /// a `..state.settings.read().await.clone()` spread filled them in from the in-memory
     /// state instead, masking the loss.
     #[test]
     fn save_settings_request_preserves_ai_retry_fields() {
@@ -1777,40 +1785,96 @@ Content-Length: 0\r\n\r\n",
     #[test]
     fn extract_auth_header_returns_none_when_no_auth_present() {
         let req = req_with_headers(&[]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), None);
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            None
+        );
     }
 
     #[test]
     fn extract_auth_header_reads_custom_header() {
         let req = req_with_headers(&["X-OmniLauncher-Token: secret-abc"]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("secret-abc"));
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            Some("secret-abc")
+        );
     }
 
     #[test]
     fn extract_auth_header_custom_header_is_case_insensitive() {
         let req = req_with_headers(&["x-omnilauncher-TOKEN: secret-abc"]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("secret-abc"));
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            Some("secret-abc")
+        );
     }
 
     #[test]
     fn extract_auth_header_reads_authorization_bearer() {
         let req = req_with_headers(&["Authorization: Bearer my-token-xyz"]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("my-token-xyz"));
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            Some("my-token-xyz")
+        );
     }
 
     #[test]
     fn extract_auth_header_bearer_prefix_is_case_insensitive() {
         let req = req_with_headers(&["Authorization: BEARER my-token-xyz"]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("my-token-xyz"));
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            Some("my-token-xyz")
+        );
         let req = req_with_headers(&["authorization: bearer my-token-xyz"]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("my-token-xyz"));
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            Some("my-token-xyz")
+        );
     }
 
     #[test]
     fn extract_auth_header_rejects_non_bearer_authorization() {
         // Basic auth shouldn't masquerade as a token.
         let req = req_with_headers(&["Authorization: Basic dXNlcjpwYXNz"]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), None);
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            None
+        );
     }
 
     #[test]
@@ -1820,7 +1884,15 @@ Content-Length: 0\r\n\r\n",
             "Authorization: Bearer bearer-token",
             "X-OmniLauncher-Token: custom-token",
         ]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("custom-token"));
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            Some("custom-token")
+        );
 
         // Order shouldn't matter — even if Authorization comes after, the
         // custom header still wins because we early-return on the first
@@ -1829,15 +1901,39 @@ Content-Length: 0\r\n\r\n",
             "X-OmniLauncher-Token: custom-token",
             "Authorization: Bearer bearer-token",
         ]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("custom-token"));
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            Some("custom-token")
+        );
     }
 
     #[test]
     fn extract_auth_header_trims_surrounding_whitespace() {
         let req = req_with_headers(&["X-OmniLauncher-Token:    spaced-token   "]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("spaced-token"));
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            Some("spaced-token")
+        );
         let req = req_with_headers(&["Authorization: Bearer    bearer-spaced   "]);
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), Some("bearer-spaced"));
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            Some("bearer-spaced")
+        );
     }
 
     #[test]
@@ -1845,7 +1941,15 @@ Content-Length: 0\r\n\r\n",
         // A token in the body must NOT be treated as a header.
         let mut req = req_with_headers(&[]);
         req.push_str("X-OmniLauncher-Token: smuggled\r\n");
-        assert_eq!(extract_auth(&req, AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" }), None);
+        assert_eq!(
+            extract_auth(
+                &req,
+                AuthScheme::HeaderOrBearer {
+                    header: "X-OmniLauncher-Token"
+                }
+            ),
+            None
+        );
     }
 }
 
@@ -1858,7 +1962,7 @@ pub async fn vision_analyze_backend(
     state: &ServerState,
 ) -> Result<String, String> {
     let (base_url, api_key, model) = {
-        let settings = state.settings.lock().await;
+        let settings = state.settings.read().await;
         (
             settings.ai_base_url.trim_end_matches('/').to_string(),
             settings.resolve_ai_api_key(),
@@ -1923,7 +2027,7 @@ pub async fn vision_analyze_backend(
 }
 
 pub async fn search_backend(query: String, state: &ServerState) -> Vec<QueryResult> {
-    let pm = state.plugin_manager.lock().await;
+    let pm = state.plugin_manager.read().await;
     pm.query_all(&query).await
 }
 
@@ -2099,7 +2203,7 @@ pub async fn slash_preview_backend(query: &str, pm: &crate::PluginManager) -> Ve
 /// changed external plugins become visible without restarting the backend.
 async fn reload_external_plugins_state(state: &ServerState) {
     let settings = crate::load_settings();
-    let mut pm = state.plugin_manager.lock().await;
+    let mut pm = state.plugin_manager.write().await;
     pm.reload_external_plugins(&settings.plugin_dirs);
 }
 
@@ -2277,8 +2381,8 @@ pub async fn ai_query_backend(query: String, state: ServerState) -> Result<(), S
     let conversation = state.conversation.clone();
     let skill_mgr = state.skill_manager.clone();
     let event_bus = state.event_bus.clone();
-    let max_tool_iterations = state.settings.lock().await.ai_max_tool_iterations;
-    let loop_detector_enabled = state.settings.lock().await.ai_loop_detector_enabled;
+    let max_tool_iterations = state.settings.read().await.ai_max_tool_iterations;
+    let loop_detector_enabled = state.settings.read().await.ai_loop_detector_enabled;
 
     let handle = tauri::async_runtime::spawn(async move {
         let _permit = permit;
@@ -2298,16 +2402,19 @@ pub async fn ai_query_backend(query: String, state: ServerState) -> Result<(), S
         });
 
         let routed = std::panic::AssertUnwindSafe(async {
-            let pm_lock = pm.lock().await;
-            let client = ai_client.lock().await;
+            let pm_lock = pm.read().await;
+            let client = ai_client.read().await;
             let ctx = conversation.lock().await;
-            let mut skill_lock = skill_mgr.lock().await;
+            // Clone the skill manager so we don't hold its Mutex for the
+            // entire multi-round-trip AI call. Changes made by ai_route
+            // (e.g. skill-loading) are local to this request.
+            let mut skill_clone = skill_mgr.lock().await.clone();
             Router::ai_route(
                 &query,
                 &pm_lock,
                 &client,
                 &ctx,
-                &mut skill_lock,
+                &mut skill_clone,
                 Some(progress_tx),
                 max_tool_iterations,
                 loop_detector_enabled,
@@ -2360,14 +2467,14 @@ pub async fn execute_result_backend(
                 Some((name, id)) => (name.to_string(), id.to_string()),
                 None => return Ok(false),
             };
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             pm.execute_action(&plugin_name, &inner_id, &action_data)
                 .await
                 .is_some()
         }
         "copy" => true,
         "todo_add" => {
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             pm.execute_tool(
                 "todo_memory",
                 serde_json::json!({ "action": "add", "text": result.action_data }),
@@ -2376,7 +2483,7 @@ pub async fn execute_result_backend(
             true
         }
         "todo_remove" => {
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             pm.execute_tool(
                 "todo_memory",
                 serde_json::json!({ "action": "remove", "text": result.action_data }),
@@ -2385,7 +2492,7 @@ pub async fn execute_result_backend(
             true
         }
         "todo_done" => {
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             pm.execute_tool(
                 "todo_memory",
                 serde_json::json!({ "action": "done", "text": result.action_data }),
@@ -2394,7 +2501,7 @@ pub async fn execute_result_backend(
             true
         }
         "todo_undone" => {
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             pm.execute_tool(
                 "todo_memory",
                 serde_json::json!({ "action": "undone", "text": result.action_data }),

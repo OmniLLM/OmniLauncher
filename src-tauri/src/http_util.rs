@@ -380,8 +380,7 @@ mod tests {
         let r = LiveResponse::text("204 No Content", String::new());
         let encoded = String::from_utf8(encode_response(r, Some(CorsPolicy::APP))).unwrap();
         assert!(encoded.contains("Access-Control-Allow-Origin: *\r\n"));
-        assert!(encoded
-            .contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"));
+        assert!(encoded.contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"));
         assert!(encoded.contains(
             "Access-Control-Allow-Headers: Content-Type, X-OmniLauncher-Token, Authorization\r\n"
         ));
@@ -392,8 +391,7 @@ mod tests {
         let r = LiveResponse::text("204 No Content", String::new());
         let encoded = String::from_utf8(encode_response(r, Some(CorsPolicy::A2A))).unwrap();
         assert!(encoded.contains("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"));
-        assert!(encoded
-            .contains("Access-Control-Allow-Headers: Content-Type, Authorization\r\n"));
+        assert!(encoded.contains("Access-Control-Allow-Headers: Content-Type, Authorization\r\n"));
         assert!(!encoded.contains("DELETE"));
         assert!(!encoded.contains("X-OmniLauncher-Token"));
     }
@@ -427,7 +425,12 @@ mod tests {
     #[test]
     fn parse_json_valid() {
         let r: Result<Probe, _> = parse_json(r#"{"query":"hello"}"#, false);
-        assert_eq!(r.unwrap(), Probe { query: "hello".to_string() });
+        assert_eq!(
+            r.unwrap(),
+            Probe {
+                query: "hello".to_string()
+            }
+        );
     }
 
     #[test]
@@ -468,35 +471,45 @@ mod tests {
     #[test]
     fn extract_auth_header_or_bearer_returns_none_when_no_auth() {
         let req = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
-        let scheme = AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" };
+        let scheme = AuthScheme::HeaderOrBearer {
+            header: "X-OmniLauncher-Token",
+        };
         assert_eq!(extract_auth(req, scheme), None);
     }
 
     #[test]
     fn extract_auth_header_or_bearer_reads_custom_header() {
         let req = "GET / HTTP/1.1\r\nX-OmniLauncher-Token: secret-abc\r\n\r\n";
-        let scheme = AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" };
+        let scheme = AuthScheme::HeaderOrBearer {
+            header: "X-OmniLauncher-Token",
+        };
         assert_eq!(extract_auth(req, scheme), Some("secret-abc"));
     }
 
     #[test]
     fn extract_auth_header_or_bearer_custom_header_case_insensitive() {
         let req = "GET / HTTP/1.1\r\nx-OMNILAUNCHER-token: secret-abc\r\n\r\n";
-        let scheme = AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" };
+        let scheme = AuthScheme::HeaderOrBearer {
+            header: "X-OmniLauncher-Token",
+        };
         assert_eq!(extract_auth(req, scheme), Some("secret-abc"));
     }
 
     #[test]
     fn extract_auth_header_or_bearer_reads_bearer_fallback() {
         let req = "GET / HTTP/1.1\r\nAuthorization: Bearer fallback-token\r\n\r\n";
-        let scheme = AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" };
+        let scheme = AuthScheme::HeaderOrBearer {
+            header: "X-OmniLauncher-Token",
+        };
         assert_eq!(extract_auth(req, scheme), Some("fallback-token"));
     }
 
     #[test]
     fn extract_auth_header_or_bearer_bearer_case_insensitive() {
         let req = "GET / HTTP/1.1\r\nAuthorization: bearer token-xyz\r\n\r\n";
-        let scheme = AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" };
+        let scheme = AuthScheme::HeaderOrBearer {
+            header: "X-OmniLauncher-Token",
+        };
         assert_eq!(extract_auth(req, scheme), Some("token-xyz"));
         let req2 = "GET / HTTP/1.1\r\nAuthorization: BEARER token-xyz\r\n\r\n";
         assert_eq!(extract_auth(req2, scheme), Some("token-xyz"));
@@ -505,13 +518,17 @@ mod tests {
     #[test]
     fn extract_auth_header_or_bearer_rejects_non_bearer_authorization() {
         let req = "GET / HTTP/1.1\r\nAuthorization: Basic dXNlcjpwYXNz\r\n\r\n";
-        let scheme = AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" };
+        let scheme = AuthScheme::HeaderOrBearer {
+            header: "X-OmniLauncher-Token",
+        };
         assert_eq!(extract_auth(req, scheme), None);
     }
 
     #[test]
     fn extract_auth_header_or_bearer_custom_wins_when_both_present() {
-        let scheme = AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" };
+        let scheme = AuthScheme::HeaderOrBearer {
+            header: "X-OmniLauncher-Token",
+        };
         let req = "GET / HTTP/1.1\r\nX-OmniLauncher-Token: custom-token\r\nAuthorization: Bearer bearer-token\r\n\r\n";
         assert_eq!(extract_auth(req, scheme), Some("custom-token"));
         // Order reversed → custom still wins.
@@ -522,7 +539,9 @@ mod tests {
     #[test]
     fn extract_auth_trims_surrounding_whitespace() {
         let req = "GET / HTTP/1.1\r\nX-OmniLauncher-Token:   spaced-token   \r\n\r\n";
-        let scheme = AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" };
+        let scheme = AuthScheme::HeaderOrBearer {
+            header: "X-OmniLauncher-Token",
+        };
         assert_eq!(extract_auth(req, scheme), Some("spaced-token"));
     }
 
@@ -530,7 +549,9 @@ mod tests {
     fn extract_auth_stops_at_header_body_boundary() {
         // Auth-like header in body should NOT be picked up.
         let req = "POST /x HTTP/1.1\r\nHost: x\r\n\r\nAuthorization: Bearer leaked\r\n";
-        let scheme = AuthScheme::HeaderOrBearer { header: "X-OmniLauncher-Token" };
+        let scheme = AuthScheme::HeaderOrBearer {
+            header: "X-OmniLauncher-Token",
+        };
         assert_eq!(extract_auth(req, scheme), None);
     }
 }

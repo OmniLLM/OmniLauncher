@@ -41,8 +41,10 @@ fn value_patterns() -> &'static [Regex] {
     RES.get_or_init(|| {
         vec![
             // PEM-encoded private key blocks (RSA, EC, plain, etc.).
-            Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----")
-                .expect("PEM regex compiles"),
+            Regex::new(
+                r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+            )
+            .expect("PEM regex compiles"),
             // JWTs: three base64url segments joined by '.'. Min 10 chars per
             // segment keeps it from matching ordinary dotted identifiers.
             Regex::new(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")
@@ -163,8 +165,14 @@ mod tests {
             "content": format!("{{\n  \"private_key\": \"{}\"\n}}", key.replace('\n', "\\n"))
         });
         let masked = mask_json(&input);
-        assert!(!masked.contains("MIIEvgIBADAN"), "PEM body leaked: {masked}");
-        assert!(masked.contains("\"path\":\"/tmp/gcp_sa.json\""), "path preserved");
+        assert!(
+            !masked.contains("MIIEvgIBADAN"),
+            "PEM body leaked: {masked}"
+        );
+        assert!(
+            masked.contains("\"path\":\"/tmp/gcp_sa.json\""),
+            "path preserved"
+        );
     }
 
     #[test]
@@ -181,7 +189,10 @@ mod tests {
             "headers": { "Authorization": "Bearer eyJabcdefghij1234567890klmno" }
         });
         let masked = mask_json(&input);
-        assert!(masked.contains("\"Authorization\":\"***\""), "got: {masked}");
+        assert!(
+            masked.contains("\"Authorization\":\"***\""),
+            "got: {masked}"
+        );
         assert!(!masked.contains("eyJabcdefghij"));
     }
 

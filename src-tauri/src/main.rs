@@ -23,7 +23,7 @@ use tauri::{
     Emitter, LogicalPosition, LogicalSize, Manager, Position, Size,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 
 fn window_pos_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -224,9 +224,9 @@ fn log_startup_banner(role: &str, debug_enabled: bool) {
 }
 
 pub struct AppState {
-    pub plugin_manager: Arc<Mutex<omnilauncher_lib::PluginManager>>,
-    pub ai_client: Arc<Mutex<AiClient>>,
-    pub settings: Arc<Mutex<AppSettings>>,
+    pub plugin_manager: Arc<RwLock<omnilauncher_lib::PluginManager>>,
+    pub ai_client: Arc<RwLock<AiClient>>,
+    pub settings: Arc<RwLock<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
     pub ai_in_flight: Arc<Semaphore>,
     /// Handle to the currently running AI agent task, if any.
@@ -441,9 +441,9 @@ pub fn run() {
     // PluginManager protects against early keystrokes hitting an
     // un-loaded plugin.
     let state = AppState {
-        plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
-        ai_client: Arc::new(Mutex::new(ai_client)),
-        settings: Arc::new(Mutex::new(settings)),
+        plugin_manager: Arc::new(RwLock::new(create_plugin_manager_builtin_only())),
+        ai_client: Arc::new(RwLock::new(ai_client)),
+        settings: Arc::new(RwLock::new(settings)),
         conversation: Arc::new(Mutex::new({
             let mut ctx = ConversationContext::default();
             // Re-hydrate from SQLite so follow-up questions survive restarts.
@@ -710,7 +710,7 @@ fn frontend_log(level: String, message: String) -> Result<(), String> {
 /// the frontend's `serverTokenPromise` stays a one-call resolution path.
 #[tauri::command]
 fn get_server_token(state: tauri::State<'_, AppState>) -> String {
-    let settings = state.settings.blocking_lock().clone();
+    let settings = state.settings.blocking_read().clone();
     resolve_auth_token(&settings)
 }
 
@@ -826,7 +826,7 @@ async fn search(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<QueryResult>, String> {
     log::trace!("search invoked with query={query}");
-    let pm = state.plugin_manager.lock().await;
+    let pm = state.plugin_manager.read().await;
     Ok(pm.query_all(&query).await)
 }
 
@@ -861,8 +861,8 @@ async fn ai_query(
     let ai_client = state.ai_client.clone();
     let conversation = state.conversation.clone();
     let skill_mgr = state.skill_manager.clone();
-    let max_tool_iterations = state.settings.lock().await.ai_max_tool_iterations;
-    let loop_detector_enabled = state.settings.lock().await.ai_loop_detector_enabled;
+    let max_tool_iterations = state.settings.read().await.ai_max_tool_iterations;
+    let loop_detector_enabled = state.settings.read().await.ai_loop_detector_enabled;
 
     let handle = tauri::async_runtime::spawn(async move {
         // Keep permit alive for duration of task
@@ -886,16 +886,18 @@ async fn ai_query(
         // Run the agent loop and catch panics so the frontend always gets a
         // terminal event (ai-done or ai-error) instead of spinning forever.
         let routed = std::panic::AssertUnwindSafe(async {
-            let pm_lock = pm.lock().await;
-            let client = ai_client.lock().await;
+            let pm_lock = pm.read().await;
+            let client = ai_client.read().await;
             let ctx = conversation.lock().await;
-            let mut skill_lock = skill_mgr.lock().await;
+            // Clone the skill manager so we don't hold its Mutex for the
+            // entire multi-round-trip AI call.
+            let mut skill_clone = skill_mgr.lock().await.clone();
             Router::ai_route(
                 &query,
                 &pm_lock,
                 &client,
                 &ctx,
-                &mut skill_lock,
+                &mut skill_clone,
                 Some(progress_tx),
                 max_tool_iterations,
                 loop_detector_enabled,
@@ -1040,7 +1042,7 @@ async fn execute_slash_command(
     state: tauri::State<'_, AppState>,
 ) -> Result<omnilauncher_lib::AiResponse, String> {
     log::debug!("execute_slash_command invoked with query={query}");
-    let pm = state.plugin_manager.lock().await;
+    let pm = state.plugin_manager.read().await;
     let mut skill_mgr = state.skill_manager.lock().await;
     let response = Router::slash_command(&query, &pm, &mut skill_mgr).await;
     Ok(response)
@@ -1052,7 +1054,7 @@ async fn slash_preview(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<QueryResult>, String> {
     log::trace!("slash_preview invoked with query={query}");
-    let pm = state.plugin_manager.lock().await;
+    let pm = state.plugin_manager.read().await;
     Ok(omnilauncher_lib::server::slash_preview_backend(&query, &pm).await)
 }
 
@@ -1121,7 +1123,7 @@ async fn execute_result(
                     return Ok(false);
                 }
             };
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             match pm
                 .execute_action(&plugin_name, &inner_id, &action_data)
                 .await
@@ -1237,7 +1239,7 @@ async fn execute_result(
             }
         }
         "todo_add" => {
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             pm.execute_tool(
                 "todo_memory",
                 serde_json::json!({ "action": "add", "text": result.action_data }),
@@ -1246,7 +1248,7 @@ async fn execute_result(
             true
         }
         "todo_remove" => {
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             pm.execute_tool(
                 "todo_memory",
                 serde_json::json!({ "action": "remove", "text": result.action_data }),
@@ -1255,7 +1257,7 @@ async fn execute_result(
             true
         }
         "todo_done" => {
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             pm.execute_tool(
                 "todo_memory",
                 serde_json::json!({ "action": "done", "text": result.action_data }),
@@ -1264,7 +1266,7 @@ async fn execute_result(
             true
         }
         "todo_undone" => {
-            let pm = state.plugin_manager.lock().await;
+            let pm = state.plugin_manager.read().await;
             pm.execute_tool(
                 "todo_memory",
                 serde_json::json!({ "action": "undone", "text": result.action_data }),
@@ -1359,7 +1361,7 @@ async fn list_models(base_url: String, api_key: String) -> Result<Vec<String>, S
 #[tauri::command]
 async fn get_settings(state: tauri::State<'_, AppState>) -> Result<AppSettings, String> {
     log::trace!("get_settings invoked");
-    let settings = state.settings.lock().await;
+    let settings = state.settings.read().await;
     Ok(settings.clone())
 }
 
@@ -1411,7 +1413,7 @@ async fn save_settings_cmd(
     // payload that looks exactly like factory defaults. This catches the
     // exact silent-fallback regression the SettingsWindow.tsx fix prevents,
     // even if a future caller bypasses or regresses that frontend check.
-    let current_for_guard = state.settings.lock().await.clone();
+    let current_for_guard = state.settings.read().await.clone();
     if omnilauncher_lib::settings::looks_like_factory_defaults(&settings)
         && omnilauncher_lib::settings::appears_customized(&current_for_guard)
     {
@@ -1428,7 +1430,7 @@ async fn save_settings_cmd(
         );
     }
 
-    let current_hotkey = state.settings.lock().await.hotkey.clone();
+    let current_hotkey = state.settings.read().await.hotkey.clone();
     let mut changed_shortcut: Option<(Option<Shortcut>, Shortcut)> = None;
     if current_hotkey != settings.hotkey {
         let next_shortcut = parse_shortcut(&settings.hotkey)
@@ -1465,13 +1467,13 @@ async fn save_settings_cmd(
         return Err("Failed to save settings".to_string());
     }
 
-    let mut current = state.settings.lock().await;
+    let mut current = state.settings.write().await;
     *current = settings.clone();
     let mut ctx = state.conversation.lock().await;
     ctx.max_turns = settings.ai_max_tool_iterations;
     drop(ctx);
     // Recreate AiClient with new settings
-    let mut client = state.ai_client.lock().await;
+    let mut client = state.ai_client.write().await;
     *client = AiClient::with_retry(
         settings.ai_base_url.clone(),
         settings.resolve_ai_api_key(),
@@ -1606,7 +1608,7 @@ async fn propose_skill_consolidation(
             .filter_map(|m| mgr.get_by_name(&m.name).cloned())
             .collect()
     };
-    let ai = state.ai_client.lock().await;
+    let ai = state.ai_client.read().await;
     omnilauncher_lib::skills::consolidate::propose(&skills_clone, &ai)
         .await
         .map_err(|e| format!("LLM propose failed: {e}"))
@@ -1630,7 +1632,7 @@ async fn apply_skill_consolidation(
 /// visible immediately, without restarting the launcher.
 async fn reload_external_plugins(state: &tauri::State<'_, AppState>) {
     let settings = omnilauncher_lib::load_settings();
-    let mut pm = state.plugin_manager.lock().await;
+    let mut pm = state.plugin_manager.write().await;
     pm.reload_external_plugins(&settings.plugin_dirs);
 }
 
@@ -1830,7 +1832,7 @@ async fn list_quarantined_plugins(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
     log::trace!("list_quarantined_plugins invoked");
-    let pm = state.plugin_manager.lock().await;
+    let pm = state.plugin_manager.read().await;
     Ok(omnilauncher_lib::plugins::plugin_manager_cmd::list_quarantined_plugins(&pm))
 }
 
@@ -2009,9 +2011,9 @@ fn main() {
             omnilauncher_lib::db::conversation::load_recent_for_session(sid, 20);
 
         let state = server::ServerState {
-            plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
-            ai_client: Arc::new(Mutex::new(ai_client)),
-            settings: Arc::new(Mutex::new(settings.clone())),
+            plugin_manager: Arc::new(RwLock::new(create_plugin_manager_builtin_only())),
+            ai_client: Arc::new(RwLock::new(ai_client)),
+            settings: Arc::new(RwLock::new(settings.clone())),
             conversation: Arc::new(Mutex::new(conversation)),
             ai_in_flight: Arc::new(Semaphore::new(1)),
             current_ai_task: Arc::new(Mutex::new(None)),
@@ -2132,13 +2134,13 @@ mod tests {
     async fn rejects_second_ai_request_while_one_is_in_progress() {
         let sem = Arc::new(Semaphore::new(1));
         let state = AppState {
-            plugin_manager: Arc::new(Mutex::new(create_plugin_manager_builtin_only())),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(create_plugin_manager_builtin_only())),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 String::new(),
                 String::new(),
                 String::new(),
             ))),
-            settings: Arc::new(Mutex::new(AppSettings::default())),
+            settings: Arc::new(RwLock::new(AppSettings::default())),
             conversation: Arc::new(Mutex::new(ConversationContext::default())),
             ai_in_flight: sem.clone(),
             current_ai_task: Arc::new(Mutex::new(None)),

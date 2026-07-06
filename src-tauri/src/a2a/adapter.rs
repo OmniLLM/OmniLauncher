@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     ai::{
@@ -26,9 +26,9 @@ use super::{
 /// used by `server::ServerState` so we can share the same underlying instances.
 #[derive(Clone)]
 pub struct A2aAdapterState {
-    pub plugin_manager: Arc<Mutex<PluginManager>>,
-    pub ai_client: Arc<Mutex<AiClient>>,
-    pub settings: Arc<Mutex<AppSettings>>,
+    pub plugin_manager: Arc<RwLock<PluginManager>>,
+    pub ai_client: Arc<RwLock<AiClient>>,
+    pub settings: Arc<RwLock<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
     pub skill_manager: Arc<Mutex<SkillManager>>,
     pub task_registry: Arc<Mutex<TaskRegistry>>,
@@ -96,75 +96,71 @@ pub async fn handle_message_send(
     // Summarize the request for the task record.
     let summary = extract_text_summary(&request);
 
-    // Create the task.
+    // Create the task and mark it working.
     let task_id = {
         let mut reg = state.task_registry.lock().await;
-        reg.create_submitted(summary.clone(), None, context_id)
+        let id = reg.create_submitted(summary.clone(), None, context_id);
+        reg.mark_working(&id);
+        id
     };
 
-    // Mark working.
-    {
-        let mut reg = state.task_registry.lock().await;
-        reg.mark_working(&task_id);
-    }
-
-    // Determine execution path.
-    //
-    // A2A `skillId` is a client-supplied *hint* about what the user wants. Its
-    // meaning depends on the capability kind:
-    //
-    //   * `plugin:tool:*`, `plugin:query:*`, `launcher:query_all` → direct
-    //     execution. These are typed, structured calls (calculator, shell_exec,
-    //     a plugin's `query()` method) where the client already knows the
-    //     arguments and just wants the result.
-    //
-    //   * `skill:*` (Claude-Code-style skills: SKILL.md + scripts/) → the AI
-    //     must decide *how* to run the skill. Different skills expose their
-    //     entrypoints differently (some have `run.py`, others expect
-    //     `shell_exec`/`code_execute` to invoke scripts in the skill folder).
-    //     Bypassing the AI and hardcoding a `run.py` call fails for the
-    //     majority of skills. So we route these through the conversational
-    //     path with a preface telling the AI which skill was requested; the
-    //     router then loads the skill's SKILL.md and picks the right tool.
-    //
-    //   * No `tool` set at all → normal conversational request.
-    let result = match request.tool.as_deref() {
-        Some(tool_name) => {
-            let kind = {
-                let pm = state.plugin_manager.lock().await;
-                let sm = state.skill_manager.lock().await;
-                capabilities::find_capability(&pm, Some(&sm), tool_name).map(|cap| cap.kind)
-            };
+    // Resolve the execution path *before* spawning so we can fail fast on
+    // unknown tool ids without paying background-task overhead.
+    let tool_name = request.tool.clone();
+    let resolved_kind = match tool_name.as_deref() {
+        Some(name) => {
+            let pm = state.plugin_manager.read().await;
+            let sm = state.skill_manager.lock().await;
+            let kind = capabilities::find_capability(&pm, Some(&sm), name).map(|cap| cap.kind);
             match kind {
-                Some(capabilities::A2aCapabilityKind::Skill) => {
-                    execute_conversational(state, &request, Some(tool_name)).await
+                Some(k) => Some((name.to_string(), k)),
+                None => {
+                    // Fail the task synchronously — no point spawning for an
+                    // unknown tool.
+                    let mut reg = state.task_registry.lock().await;
+                    reg.mark_failed(&task_id, format!("Tool not found: {name}"));
+                    return reg
+                        .get(&task_id)
+                        .map(|r| r.to_a2a_task())
+                        .ok_or_else(|| A2aError::internal_error("task unexpectedly missing"));
                 }
-                Some(_) => execute_direct_tool(state, tool_name, &request).await,
-                None => Err(format!("Tool not found: {tool_name}")),
             }
         }
-        None => execute_conversational(state, &request, None).await,
+        None => None,
     };
 
-    // Finalize the task.
-    match result {
-        Ok((messages, artifacts)) => {
-            let mut reg = state.task_registry.lock().await;
-            // Check for late cancellation.
-            if reg.is_cancel_requested(&task_id) {
-                reg.cancel(&task_id);
-            } else {
-                reg.mark_completed(&task_id, messages, artifacts);
+    // Spawn background execution — the caller receives the task in `working`
+    // state immediately and polls `tasks/get` for the final result.
+    let bg_state = state.clone();
+    let bg_task_id = task_id.clone();
+    tokio::spawn(async move {
+        let result = match resolved_kind {
+            Some((ref name, capabilities::A2aCapabilityKind::Skill)) => {
+                execute_conversational(&bg_state, &request, Some(name)).await
+            }
+            Some((ref name, _)) => execute_direct_tool(&bg_state, name, &request).await,
+            None => execute_conversational(&bg_state, &request, None).await,
+        };
+
+        // Finalize the task.
+        match result {
+            Ok((messages, artifacts)) => {
+                let mut reg = bg_state.task_registry.lock().await;
+                if reg.is_cancel_requested(&bg_task_id) {
+                    reg.cancel(&bg_task_id);
+                } else {
+                    reg.mark_completed(&bg_task_id, messages, artifacts);
+                }
+            }
+            Err(err_msg) => {
+                let masked = log_masking::mask_str(&err_msg);
+                let mut reg = bg_state.task_registry.lock().await;
+                reg.mark_failed(&bg_task_id, masked);
             }
         }
-        Err(err_msg) => {
-            let masked = log_masking::mask_str(&err_msg);
-            let mut reg = state.task_registry.lock().await;
-            reg.mark_failed(&task_id, masked);
-        }
-    }
+    });
 
-    // Return the final task state.
+    // Return the task in its current (working) state.
     let reg = state.task_registry.lock().await;
     reg.get(&task_id)
         .map(|r| r.to_a2a_task())
@@ -177,7 +173,7 @@ async fn execute_direct_tool(
     tool_name: &str,
     request: &MessageSendRequest,
 ) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
-    let pm = state.plugin_manager.lock().await;
+    let pm = state.plugin_manager.read().await;
     let sm = state.skill_manager.lock().await;
     capabilities::execute_capability(&pm, Some(&sm), tool_name, request).await
 }
@@ -202,10 +198,12 @@ async fn execute_conversational(
     request: &MessageSendRequest,
     skill_hint: Option<&str>,
 ) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
-    let pm = state.plugin_manager.lock().await;
-    let ai = state.ai_client.lock().await;
-    let mut sm = state.skill_manager.lock().await;
-    let settings = state.settings.lock().await;
+    let pm = state.plugin_manager.read().await;
+    let ai = state.ai_client.read().await;
+    // Clone the skill manager so we don't hold its Mutex during the
+    // potentially long-running AI call.
+    let mut sm = state.skill_manager.lock().await.clone();
+    let settings = state.settings.read().await;
 
     // Request-scoped, isolated context (NOT the shared desktop conversation).
     let max_turns = {
@@ -428,17 +426,38 @@ mod tests {
         pm.register(plugin);
 
         A2aAdapterState {
-            plugin_manager: Arc::new(Mutex::new(pm)),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(pm)),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 String::new(),
                 String::new(),
                 String::new(),
             ))),
-            settings: Arc::new(Mutex::new(AppSettings::default())),
+            settings: Arc::new(RwLock::new(AppSettings::default())),
             conversation: Arc::new(Mutex::new(ConversationContext::new(10))),
             skill_manager: Arc::new(Mutex::new(SkillManager::new())),
             task_registry: Arc::new(Mutex::new(TaskRegistry::new(10))),
         }
+    }
+
+    /// Poll until the task reaches a terminal state (completed / failed /
+    /// canceled / rejected). Background execution means `handle_message_send`
+    /// returns the task in `working` state; tests that inspect the final result
+    /// must wait for the background task to finish.
+    ///
+    /// Timeout is generous (30 s) because the conversational path with an
+    /// unreachable AI endpoint runs the retry loop (up to 3 attempts with
+    /// 2 s + 4 s backoff). Direct-execution tests typically finish in <100 ms.
+    async fn await_terminal(state: &A2aAdapterState, task_id: &str) -> A2aTask {
+        for _ in 0..3000 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let reg = state.task_registry.lock().await;
+            if let Some(r) = reg.get(task_id) {
+                if r.state.is_terminal() {
+                    return r.to_a2a_task();
+                }
+            }
+        }
+        panic!("task {task_id} did not reach terminal state within 30 s");
     }
 
     #[test]
@@ -536,6 +555,8 @@ tags: demo, a2a
         };
 
         let task = handle_message_send(&state, request, None).await.unwrap();
+        // Background execution — wait for completion.
+        let task = await_terminal(&state, &task.id).await;
 
         assert_eq!(
             task.status.state,
@@ -657,6 +678,7 @@ tags: demo, a2a
         let task = handle_message_send(&state, request, Some("ctx-777".to_string()))
             .await
             .unwrap();
+        let task = await_terminal(&state, &task.id).await;
 
         assert_eq!(task.context_id.as_deref(), Some("ctx-777"));
         assert!(!task.artifacts.is_empty());
@@ -709,13 +731,13 @@ tags: demo, a2a
         skill_manager.load_from_dir(skill_root.path());
 
         A2aAdapterState {
-            plugin_manager: Arc::new(Mutex::new(PluginManager::new())),
-            ai_client: Arc::new(Mutex::new(AiClient::new(
+            plugin_manager: Arc::new(RwLock::new(PluginManager::new())),
+            ai_client: Arc::new(RwLock::new(AiClient::new(
                 String::new(),
                 String::new(),
                 String::new(),
             ))),
-            settings: Arc::new(Mutex::new(AppSettings::default())),
+            settings: Arc::new(RwLock::new(AppSettings::default())),
             conversation: Arc::new(Mutex::new(ConversationContext::new(10))),
             skill_manager: Arc::new(Mutex::new(skill_manager)),
             task_registry: Arc::new(Mutex::new(TaskRegistry::new(10))),
@@ -745,6 +767,7 @@ tags: demo, a2a
         };
 
         let task = handle_message_send(&state, request, None).await.unwrap();
+        let task = await_terminal(&state, &task.id).await;
 
         // The AI client is unreachable in tests, so `ai_route` returns a
         // stub response — but critically, the task must NOT carry the
@@ -779,6 +802,7 @@ tags: demo, a2a
         };
 
         let task = handle_message_send(&state, request, None).await.unwrap();
+        let task = await_terminal(&state, &task.id).await;
 
         assert_eq!(
             task.status.state,
