@@ -136,6 +136,59 @@ pub struct A2aTask {
 
 // ── Request / Response envelopes ────────────────────────────────────────────
 
+// ── JSON-RPC 2.0 envelope ───────────────────────────────────────────────────
+
+/// A JSON-RPC 2.0 request envelope.
+///
+/// `id` and `params` default to `Value::Null` when the field is absent, so
+/// notifications and parameter-less requests both parse cleanly.
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonRpcRequest {
+    pub jsonrpc: String,
+    #[serde(default)]
+    pub id: serde_json::Value,
+    pub method: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+/// A JSON-RPC 2.0 response envelope. Exactly one of `result` and `error` is
+/// set on a well-formed response.
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonRpcResponse<T: Serialize> {
+    pub jsonrpc: &'static str,
+    pub id: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JsonRpcErrorObj>,
+}
+
+/// The JSON-RPC error object inside a `JsonRpcResponse`.
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonRpcErrorObj {
+    pub code: i32,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+
+/// Params for `message/send`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SendMessageParams {
+    pub message: A2aMessage,
+    #[serde(default, rename = "contextId")]
+    pub context_id: Option<String>,
+    #[serde(default, rename = "skillId")]
+    pub skill_id: Option<String>,
+}
+
+/// Params for `tasks/get` and `tasks/cancel`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskIdParams {
+    pub id: String,
+}
+
 /// Body of `POST /message:send`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessageSendRequest {
@@ -420,5 +473,79 @@ mod tests {
             A2aPart::Data { data } => assert_eq!(data["key"], "value"),
             _ => panic!("expected Data"),
         }
+    }
+
+    #[test]
+    fn jsonrpc_request_deserializes_full_envelope() {
+        let json = r#"{
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "message/send",
+            "params": {"skillId":"skill:alibaba"}
+        }"#;
+        let req: JsonRpcRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.jsonrpc, "2.0");
+        assert_eq!(req.method, "message/send");
+        assert!(req.id.is_number());
+        assert_eq!(req.params["skillId"], "skill:alibaba");
+    }
+
+    #[test]
+    fn jsonrpc_request_defaults_missing_id_and_params_to_null() {
+        let json = r#"{"jsonrpc":"2.0","method":"tasks/get"}"#;
+        let req: JsonRpcRequest = serde_json::from_str(json).unwrap();
+        assert!(req.id.is_null());
+        assert!(req.params.is_null());
+    }
+
+    #[test]
+    fn jsonrpc_response_success_serializes_without_error_field() {
+        let resp = JsonRpcResponse::<serde_json::Value> {
+            jsonrpc: "2.0",
+            id: serde_json::json!(1),
+            result: Some(serde_json::json!({"ok": true})),
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"result\":{\"ok\":true}"));
+        assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn jsonrpc_response_error_serializes_without_result_field() {
+        let resp = JsonRpcResponse::<serde_json::Value> {
+            jsonrpc: "2.0",
+            id: serde_json::json!(1),
+            result: None,
+            error: Some(JsonRpcErrorObj {
+                code: -32601,
+                message: "Method not found".to_string(),
+                data: None,
+            }),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"error\""));
+        assert!(json.contains("-32601"));
+        assert!(!json.contains("\"result\""));
+    }
+
+    #[test]
+    fn send_message_params_accepts_snake_and_camel_names() {
+        let json = r#"{
+            "message": {"role":"user","parts":[{"type":"text","text":"hi"}]},
+            "contextId": "ctx-1",
+            "skillId":   "skill:alibaba"
+        }"#;
+        let params: SendMessageParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.context_id.as_deref(), Some("ctx-1"));
+        assert_eq!(params.skill_id.as_deref(), Some("skill:alibaba"));
+        assert_eq!(params.message.role, "user");
+    }
+
+    #[test]
+    fn task_id_params_deserializes_id_field() {
+        let json = r#"{"id":"task-xyz"}"#;
+        let params: TaskIdParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.id, "task-xyz");
     }
 }
