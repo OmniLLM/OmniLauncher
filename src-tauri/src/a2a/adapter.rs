@@ -83,14 +83,18 @@ pub fn build_agent_card_with_skills(
 
 // ── Message handling ────────────────────────────────────────────────────────
 
-/// Handle a `POST /message:send` request.
+/// Handle a `message/send` request.
 ///
 /// Detects whether the request is conversational (plain text, no `tool` field)
 /// or a direct tool invocation. Creates a submitted task, runs the appropriate
 /// execution path, and marks the task completed or failed.
+///
+/// `context_id` is stored on the task and echoed back so callers (typically the
+/// A2A hub) can correlate turns of a multi-turn conversation.
 pub async fn handle_message_send(
     state: &A2aAdapterState,
     request: MessageSendRequest,
+    context_id: Option<String>,
 ) -> Result<A2aTask, A2aError> {
     // Summarize the request for the task record.
     let summary = extract_text_summary(&request);
@@ -98,7 +102,7 @@ pub async fn handle_message_send(
     // Create the task.
     let task_id = {
         let mut reg = state.task_registry.lock().await;
-        reg.create_submitted(summary.clone(), None)
+        reg.create_submitted(summary.clone(), None, context_id)
     };
 
     // Mark working.
@@ -198,6 +202,7 @@ async fn execute_conversational(
         vec![]
     } else {
         vec![A2aArtifact {
+            artifact_id: super::tasks::generate_task_id(),
             name: Some("results".to_string()),
             description: Some("Structured query results".to_string()),
             parts: vec![A2aPart::Data {
@@ -482,7 +487,7 @@ tags: demo, a2a
             }],
         };
 
-        let task = handle_message_send(&state, request).await.unwrap();
+        let task = handle_message_send(&state, request, None).await.unwrap();
 
         assert_eq!(task.status.state, crate::a2a::types::A2aTaskState::Completed);
         let artifact = task.artifacts.first().expect("query results artifact");
@@ -583,6 +588,31 @@ tags: demo, a2a
         };
 
         assert_eq!(latest_user_text(&req), "newest question");
+    }
+
+    #[tokio::test]
+    async fn message_send_echoes_context_id_into_task() {
+        let state = test_adapter_state_with_plugin(Box::new(QueryOnlyPlugin));
+        let request = MessageSendRequest {
+            tool: Some("plugin:query:Query Only Test".to_string()),
+            messages: vec![A2aMessage {
+                role: "user".to_string(),
+                parts: vec![A2aPart::Data {
+                    data: serde_json::json!({ "query": "needle" }),
+                }],
+            }],
+        };
+
+        let task = handle_message_send(&state, request, Some("ctx-777".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(task.context_id.as_deref(), Some("ctx-777"));
+        assert!(!task.artifacts.is_empty());
+        assert!(
+            !task.artifacts[0].artifact_id.is_empty(),
+            "artifact_id must be populated for wire-compatible output"
+        );
     }
 
 }

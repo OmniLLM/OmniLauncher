@@ -261,6 +261,7 @@ fn text_response(output: String) -> (Vec<A2aMessage>, Vec<A2aArtifact>) {
 fn query_results_response(results: Vec<QueryResult>) -> (Vec<A2aMessage>, Vec<A2aArtifact>) {
     let count = results.len();
     let artifact = A2aArtifact {
+        artifact_id: super::tasks::generate_task_id(),
         name: Some("query_results".to_string()),
         description: Some(format!("{count} launcher results")),
         parts: vec![A2aPart::Data {

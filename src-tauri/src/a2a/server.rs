@@ -113,7 +113,7 @@ async fn handle_a2a_request(
         ("POST", "/message:send") => {
             let body = read_body(request);
             match parse_json::<MessageSendRequest>(&body, false) {
-                Ok(req) => match adapter::handle_message_send(&state.adapter, req).await {
+                Ok(req) => match adapter::handle_message_send(&state.adapter, req, None).await {
                     Ok(task) => json_response(&task),
                     Err(err) => error_response("500 Internal Server Error", &err),
                 },
