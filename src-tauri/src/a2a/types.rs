@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 
 // ── Agent Card ──────────────────────────────────────────────────────────────
 
-/// Top-level Agent Card returned by `GET /.well-known/agent.json`.
+/// Top-level Agent Card returned by `GET /.well-known/agent-card.json` (and
+/// its legacy alias `GET /.well-known/agent.json`, retained for older
+/// clients).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCard {

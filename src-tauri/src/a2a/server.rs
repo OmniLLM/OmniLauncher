@@ -99,8 +99,13 @@ async fn handle_a2a_request(
 
     // ── Route ───────────────────────────────────────────────────────────
     match (method, path) {
-        // Discovery — unchanged
-        ("GET", "/.well-known/agent.json") => {
+        // Discovery — serve the AgentCard at both the canonical A2A path
+        // (`/.well-known/agent-card.json`, per the A2A specification) and the
+        // legacy `/.well-known/agent.json`. Aggregators like omni-agent-hub
+        // probe the canonical path first and fall back to the legacy one;
+        // exposing both keeps us compatible with strict clients while not
+        // breaking older ones.
+        ("GET", "/.well-known/agent-card.json") | ("GET", "/.well-known/agent.json") => {
             let pm = state.adapter.plugin_manager.lock().await;
             let settings = state.adapter.settings.lock().await;
             let base_url = a2a_base_url(&settings);
@@ -266,6 +271,35 @@ tags: route, a2a
         );
         assert!(route_skill.tags.iter().any(|tag| tag == "route"));
         assert!(route_skill.input_schema.is_some());
+    }
+
+    #[tokio::test]
+    async fn agent_card_at_canonical_path_matches_legacy_path() {
+        // The A2A specification places the AgentCard at
+        // `/.well-known/agent-card.json`; the legacy alias
+        // `/.well-known/agent.json` is retained for older clients. Both must
+        // return the same body (byte-for-byte).
+        let state = test_server_state();
+
+        let legacy = handle_a2a_request(
+            &state,
+            "GET",
+            "/.well-known/agent.json",
+            "GET /.well-known/agent.json HTTP/1.1\r\nAuthorization: Bearer test-token\r\n\r\n",
+        )
+        .await;
+
+        let canonical = handle_a2a_request(
+            &state,
+            "GET",
+            "/.well-known/agent-card.json",
+            "GET /.well-known/agent-card.json HTTP/1.1\r\nAuthorization: Bearer test-token\r\n\r\n",
+        )
+        .await;
+
+        assert_eq!(canonical.status, "200 OK");
+        assert_eq!(legacy.status, "200 OK");
+        assert_eq!(canonical.body, legacy.body);
     }
 
     #[tokio::test]

@@ -168,10 +168,11 @@ fn skill_input_schema() -> Value {
 
 pub async fn execute_capability(
     pm: &PluginManager,
+    skills: Option<&SkillManager>,
     capability_id: &str,
     request: &MessageSendRequest,
 ) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
-    let capabilities = build_capabilities(pm, None);
+    let capabilities = build_capabilities(pm, skills);
     let capability = capabilities
         .iter()
         .find(|cap| cap.id == capability_id || cap.target == capability_id)
@@ -183,8 +184,37 @@ pub async fn execute_capability(
         }
         A2aCapabilityKind::QueryPlugin => execute_query_plugin(pm, capability, request).await,
         A2aCapabilityKind::LauncherQuery => execute_launcher_query(pm, request).await,
-        A2aCapabilityKind::Skill => execute_skill(pm, capability, request).await,
+        A2aCapabilityKind::Skill => {
+            // `skill:*` capabilities are Claude-Code-style skills (SKILL.md +
+            // scripts/). They are not directly executable — the caller must
+            // route them through the AI conversational path instead, which
+            // understands how to load the skill and pick the right execution
+            // mechanism (`shell_exec`, `code_execute`, or `execute_skill` for
+            // legacy `run.py` skills). We surface this as a hard error so any
+            // caller that reaches here has a bug; the adapter is expected to
+            // detect `Skill` kind via `find_capability` and short-circuit.
+            Err(format!(
+                "skill:* capabilities must be handled conversationally, not \
+                 dispatched directly: {}",
+                capability.id
+            ))
+        }
     }
+}
+
+/// Look up a capability by id or target without executing it. Used by the
+/// adapter to decide whether a `skillId` should be dispatched directly (plugin
+/// tools, query plugins, launcher) or routed through the AI (`skill:*`).
+///
+/// Returns the matched capability (cloned) or `None` if no capability matches.
+pub fn find_capability(
+    pm: &PluginManager,
+    skills: Option<&SkillManager>,
+    capability_id: &str,
+) -> Option<A2aCapability> {
+    build_capabilities(pm, skills)
+        .into_iter()
+        .find(|cap| cap.id == capability_id || cap.target == capability_id)
 }
 
 async fn execute_tool_schema_plugin(
@@ -226,37 +256,6 @@ async fn execute_launcher_query(
     let query_text = extract_query_text(request);
     let results = pm.query_all(&query_text).await;
     Ok(query_results_response(results))
-}
-
-async fn execute_skill(
-    pm: &PluginManager,
-    capability: &A2aCapability,
-    request: &MessageSendRequest,
-) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
-    let mut args = extract_tool_args(request);
-    if !args.is_object() {
-        args = json!({ "query": extract_query_text(request) });
-    }
-    if let Some(obj) = args.as_object_mut() {
-        obj.insert(
-            "skill".to_string(),
-            Value::String(capability.target.clone()),
-        );
-        obj.entry("op".to_string())
-            .or_insert_with(|| Value::String("query".to_string()));
-        if !obj.contains_key("query") {
-            let query = extract_query_text(request);
-            if !query.is_empty() {
-                obj.insert("query".to_string(), Value::String(query));
-            }
-        }
-    }
-
-    let output = pm.execute_tool("execute_skill", args).await;
-    if output == "Tool not found" {
-        return Err("Tool not found: execute_skill".to_string());
-    }
-    Ok(text_response(output))
 }
 
 fn text_response(output: String) -> (Vec<A2aMessage>, Vec<A2aArtifact>) {

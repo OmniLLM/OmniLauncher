@@ -109,10 +109,41 @@ pub async fn handle_message_send(
     }
 
     // Determine execution path.
-    let result = if let Some(ref tool_name) = request.tool {
-        execute_direct_tool(state, tool_name, &request).await
-    } else {
-        execute_conversational(state, &request).await
+    //
+    // A2A `skillId` is a client-supplied *hint* about what the user wants. Its
+    // meaning depends on the capability kind:
+    //
+    //   * `plugin:tool:*`, `plugin:query:*`, `launcher:query_all` → direct
+    //     execution. These are typed, structured calls (calculator, shell_exec,
+    //     a plugin's `query()` method) where the client already knows the
+    //     arguments and just wants the result.
+    //
+    //   * `skill:*` (Claude-Code-style skills: SKILL.md + scripts/) → the AI
+    //     must decide *how* to run the skill. Different skills expose their
+    //     entrypoints differently (some have `run.py`, others expect
+    //     `shell_exec`/`code_execute` to invoke scripts in the skill folder).
+    //     Bypassing the AI and hardcoding a `run.py` call fails for the
+    //     majority of skills. So we route these through the conversational
+    //     path with a preface telling the AI which skill was requested; the
+    //     router then loads the skill's SKILL.md and picks the right tool.
+    //
+    //   * No `tool` set at all → normal conversational request.
+    let result = match request.tool.as_deref() {
+        Some(tool_name) => {
+            let kind = {
+                let pm = state.plugin_manager.lock().await;
+                let sm = state.skill_manager.lock().await;
+                capabilities::find_capability(&pm, Some(&sm), tool_name).map(|cap| cap.kind)
+            };
+            match kind {
+                Some(capabilities::A2aCapabilityKind::Skill) => {
+                    execute_conversational(state, &request, Some(tool_name)).await
+                }
+                Some(_) => execute_direct_tool(state, tool_name, &request).await,
+                None => Err(format!("Tool not found: {tool_name}")),
+            }
+        }
+        None => execute_conversational(state, &request, None).await,
     };
 
     // Finalize the task.
@@ -147,7 +178,8 @@ async fn execute_direct_tool(
     request: &MessageSendRequest,
 ) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
     let pm = state.plugin_manager.lock().await;
-    capabilities::execute_capability(&pm, tool_name, request).await
+    let sm = state.skill_manager.lock().await;
+    capabilities::execute_capability(&pm, Some(&sm), tool_name, request).await
 }
 
 /// Execute a conversational AI request.
@@ -158,9 +190,17 @@ async fn execute_direct_tool(
 /// user turn — `Router::ai_route` reads the prompt from the context, it does not
 /// add the query itself — and (2) isolates external A2A callers from the desktop
 /// chat so unrelated history never leaks across.
+///
+/// `skill_hint`, when set, names a `skill:*` capability the client asked for.
+/// It is turned into a short preface prepended to the user's query so the AI
+/// router can pick up the intent via its existing skill-loading tools
+/// (`load_skill`, `find_relevant`). The preface is intentionally minimal —
+/// we tell the AI which skill to prefer but leave *how* to invoke it up to
+/// the router's normal reasoning path.
 async fn execute_conversational(
     state: &A2aAdapterState,
     request: &MessageSendRequest,
+    skill_hint: Option<&str>,
 ) -> Result<(Vec<A2aMessage>, Vec<A2aArtifact>), String> {
     let pm = state.plugin_manager.lock().await;
     let ai = state.ai_client.lock().await;
@@ -173,7 +213,15 @@ async fn execute_conversational(
         shared.max_turns
     };
     let conversation = build_request_context(request, max_turns);
-    let query = latest_user_text(request);
+    let base_query = latest_user_text(request);
+    let query = match skill_hint.and_then(strip_skill_prefix) {
+        Some(name) => format!(
+            "The caller has selected the `{name}` skill. Load it if you need \
+             its instructions, and use whichever tool the skill's SKILL.md \
+             prescribes to answer the following:\n\n{base_query}"
+        ),
+        None => base_query,
+    };
 
     let response = crate::ai::router::Router::ai_route(
         &query,
@@ -282,6 +330,13 @@ fn latest_user_text(request: &MessageSendRequest) -> String {
         }
     }
     String::new()
+}
+
+/// Strip the `skill:` prefix from a capability id, returning `Some(name)` if
+/// the id names a Claude-Code-style skill capability. Returns `None` for
+/// non-skill ids so the caller can leave the query untouched.
+fn strip_skill_prefix(capability_id: &str) -> Option<&str> {
+    capability_id.strip_prefix("skill:")
 }
 
 /// Concatenate all text parts of a single A2A message.
@@ -608,6 +663,161 @@ tags: demo, a2a
         assert!(
             !task.artifacts[0].artifact_id.is_empty(),
             "artifact_id must be populated for wire-compatible output"
+        );
+    }
+
+    // ── skill-routing tests ─────────────────────────────────────────────────
+    //
+    // Regression coverage for the pass-through fix: A2A `skillId` values that
+    // name `skill:*` capabilities must not be dispatched as direct tool calls;
+    // they must fall through to the AI conversational path (which understands
+    // how to load a SKILL.md and pick the right execution mechanism).
+
+    #[test]
+    fn strip_skill_prefix_only_matches_skill_kind() {
+        assert_eq!(strip_skill_prefix("skill:gcp"), Some("gcp"));
+        assert_eq!(strip_skill_prefix("skill:demo-skill"), Some("demo-skill"));
+        // plugin/launcher ids are legitimate direct-execution calls; their
+        // prefix must NOT be stripped or the adapter would route them wrong.
+        assert_eq!(strip_skill_prefix("plugin:tool:calculator"), None);
+        assert_eq!(strip_skill_prefix("plugin:query:Echo"), None);
+        assert_eq!(strip_skill_prefix("launcher:query_all"), None);
+        assert_eq!(strip_skill_prefix(""), None);
+    }
+
+    /// Build a state where `skill:demo-skill` is a discoverable capability.
+    /// The plugin manager is otherwise empty so any accidental direct-tool
+    /// dispatch (which would call `pm.execute_tool("execute_skill", ...)`)
+    /// would surface as a failure.
+    fn state_with_demo_skill_only() -> A2aAdapterState {
+        let skill_root = tempfile::tempdir().unwrap();
+        let skill_dir = skill_root.path().join("demo-skill");
+        std::fs::create_dir(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: demo-skill
+description: Demo skill used to exercise A2A routing
+tags: demo, a2a
+---
+
+# Demo Skill
+"#,
+        )
+        .unwrap();
+        let mut skill_manager = SkillManager::new();
+        skill_manager.load_from_dir(skill_root.path());
+
+        A2aAdapterState {
+            plugin_manager: Arc::new(Mutex::new(PluginManager::new())),
+            ai_client: Arc::new(Mutex::new(AiClient::new(
+                String::new(),
+                String::new(),
+                String::new(),
+            ))),
+            settings: Arc::new(Mutex::new(AppSettings::default())),
+            conversation: Arc::new(Mutex::new(ConversationContext::new(10))),
+            skill_manager: Arc::new(Mutex::new(skill_manager)),
+            task_registry: Arc::new(Mutex::new(TaskRegistry::new(10))),
+        }
+    }
+
+    #[tokio::test]
+    async fn skill_capability_does_not_take_the_direct_dispatch_path() {
+        // The former routing bug: any `skillId` was fed straight into
+        // `capabilities::execute_capability`, which for `skill:*` invoked the
+        // `execute_skill` plugin tool. When that tool isn't registered (or,
+        // in production, when the skill lacks a `run.py`), the task failed
+        // with either "Tool not found: execute_skill" or "Skill 'foo' does
+        // not have a run.py entrypoint at ...". This test asserts we no
+        // longer surface either of those markers for a `skill:*` request —
+        // proving the request took the conversational branch instead of the
+        // direct-dispatch branch.
+        let state = state_with_demo_skill_only();
+        let request = MessageSendRequest {
+            tool: Some("skill:demo-skill".to_string()),
+            messages: vec![A2aMessage {
+                role: "user".to_string(),
+                parts: vec![A2aPart::Text {
+                    text: "run the demo skill".to_string(),
+                }],
+            }],
+        };
+
+        let task = handle_message_send(&state, request, None).await.unwrap();
+
+        // The AI client is unreachable in tests, so `ai_route` returns a
+        // stub response — but critically, the task must NOT carry the
+        // direct-path failure markers.
+        let all_text = format!("{task:?}");
+        assert!(
+            !all_text.contains("Tool not found: execute_skill"),
+            "skill:* was incorrectly dispatched via the direct-execute path:\n{all_text}"
+        );
+        assert!(
+            !all_text.contains("does not have a run.py entrypoint"),
+            "skill:* was incorrectly dispatched via the run.py-only skill runner:\n{all_text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_query_capability_still_takes_the_direct_dispatch_path() {
+        // Positive counterpart: `plugin:query:*` capabilities are structured,
+        // direct-execution calls (the client already has the arguments and
+        // just wants the plugin's output). They must not be diverted to the
+        // AI. We assert the query-only plugin's structured result surfaces
+        // as an artifact — something only the direct path produces.
+        let state = test_adapter_state_with_plugin(Box::new(QueryOnlyPlugin));
+        let request = MessageSendRequest {
+            tool: Some("plugin:query:Query Only Test".to_string()),
+            messages: vec![A2aMessage {
+                role: "user".to_string(),
+                parts: vec![A2aPart::Data {
+                    data: serde_json::json!({ "query": "needle" }),
+                }],
+            }],
+        };
+
+        let task = handle_message_send(&state, request, None).await.unwrap();
+
+        assert_eq!(
+            task.status.state,
+            crate::a2a::types::A2aTaskState::Completed
+        );
+        let artifact = task
+            .artifacts
+            .first()
+            .expect("direct dispatch must yield the plugin's query artifact");
+        let A2aPart::Data { data } = &artifact.parts[0] else {
+            panic!("query artifact should be structured data, not text");
+        };
+        assert_eq!(data["results"][0]["title"], "Needle Result");
+    }
+
+    #[tokio::test]
+    async fn unknown_skill_id_yields_failed_task_not_a_panic() {
+        // `Tool not found: <id>` is the correct response when the caller
+        // names a `skillId` that no capability advertises. Regression guard
+        // against accidentally routing unknown ids to the conversational
+        // path (which would swallow them silently).
+        let state = test_adapter_state_with_plugin(Box::new(QueryOnlyPlugin));
+        let request = MessageSendRequest {
+            tool: Some("plugin:tool:does_not_exist".to_string()),
+            messages: vec![A2aMessage {
+                role: "user".to_string(),
+                parts: vec![A2aPart::Text {
+                    text: "irrelevant".to_string(),
+                }],
+            }],
+        };
+
+        let task = handle_message_send(&state, request, None).await.unwrap();
+
+        assert_eq!(task.status.state, crate::a2a::types::A2aTaskState::Failed);
+        let text = format!("{task:?}");
+        assert!(
+            text.contains("Tool not found"),
+            "expected failure message to name the missing tool:\n{text}"
         );
     }
 }
