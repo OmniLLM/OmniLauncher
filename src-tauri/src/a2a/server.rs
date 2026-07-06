@@ -3,14 +3,14 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use crate::http_util::{
-    self, encode_response, extract_auth, json_response, parse_json, read_body,
-    split_path_query, AuthScheme, CorsPolicy, HttpLimits,
+    self, encode_response, extract_auth, json_response, read_body, split_path_query, AuthScheme,
+    CorsPolicy, HttpLimits,
 };
 use crate::live_server::LiveResponse;
 
 use super::{
     adapter::{self, A2aAdapterState},
-    types::{A2aError, MessageSendRequest, TaskListResponse},
+    types::A2aError,
 };
 
 // ── A2A server state ────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ async fn handle_a2a_request(
 
     // ── Route ───────────────────────────────────────────────────────────
     match (method, path) {
-        // Discovery
+        // Discovery — unchanged
         ("GET", "/.well-known/agent.json") => {
             let pm = state.adapter.plugin_manager.lock().await;
             let settings = state.adapter.settings.lock().await;
@@ -109,84 +109,19 @@ async fn handle_a2a_request(
             json_response(&card)
         }
 
-        // Send message (synchronous)
-        ("POST", "/message:send") => {
+        // JSON-RPC 2.0 endpoint — the single write route.
+        ("POST", "/") => {
             let body = read_body(request);
-            match parse_json::<MessageSendRequest>(&body, false) {
-                Ok(req) => match adapter::handle_message_send(&state.adapter, req, None).await {
-                    Ok(task) => json_response(&task),
-                    Err(err) => error_response("500 Internal Server Error", &err),
-                },
-                Err(resp) => resp,
+            let response_body = super::jsonrpc::dispatch(&state.adapter, &body).await;
+            LiveResponse {
+                status: "200 OK",
+                content_type: "application/json; charset=utf-8",
+                body: response_body,
             }
         }
 
-        // Streaming — explicitly unsupported
-        ("POST", "/message:stream") => error_response(
-            "501 Not Implemented",
-            &A2aError::unsupported_operation("Streaming is not supported in this version"),
-        ),
-
-        // Task list
-        ("GET", "/tasks") => {
-            let tasks = adapter::handle_task_list(&state.adapter).await;
-            json_response(&TaskListResponse { tasks })
-        }
-
-        // Task-specific routes: /tasks/{id} and /tasks/{id}:cancel
-        _ if path.starts_with("/tasks/") => handle_task_route(state, method, path).await,
-
-        // 404
+        // 404 — everything else, including the removed legacy routes.
         _ => LiveResponse::text("404 Not Found", "Not Found".to_string()),
-    }
-}
-
-/// Handle routes under `/tasks/{id}` and `/tasks/{id}:cancel` and
-/// `/tasks/{id}:subscribe`.
-async fn handle_task_route(state: &A2aServerState, method: &str, path: &str) -> LiveResponse {
-    // Strip the "/tasks/" prefix to get "{id}" or "{id}:cancel" or "{id}:subscribe".
-    let remainder = &path["/tasks/".len()..];
-
-    if remainder.is_empty() {
-        return LiveResponse::text("400 Bad Request", "missing task id".to_string());
-    }
-
-    // Check for :cancel suffix
-    if let Some(task_id) = remainder.strip_suffix(":cancel") {
-        if method != "POST" {
-            return LiveResponse::text(
-                "405 Method Not Allowed",
-                "Use POST for cancel".to_string(),
-            );
-        }
-        return match adapter::handle_task_cancel(&state.adapter, task_id).await {
-            Ok(task) => json_response(&task),
-            Err(err) => error_response("404 Not Found", &err),
-        };
-    }
-
-    // Check for :subscribe suffix (unsupported)
-    if remainder.ends_with(":subscribe") {
-        return error_response(
-            "501 Not Implemented",
-            &A2aError::unsupported_operation(
-                "Task subscription (SSE) is not supported in this version",
-            ),
-        );
-    }
-
-    // Plain task lookup: GET /tasks/{id}
-    let task_id = remainder;
-    if method != "GET" {
-        return LiveResponse::text(
-            "405 Method Not Allowed",
-            "Use GET for task retrieval".to_string(),
-        );
-    }
-
-    match adapter::handle_task_get(&state.adapter, task_id).await {
-        Ok(task) => json_response(&task),
-        Err(err) => error_response("404 Not Found", &err),
     }
 }
 
@@ -194,7 +129,10 @@ async fn handle_task_route(state: &A2aServerState, method: &str, path: &str) -> 
 
 /// Build a JSON error response from an [`A2aError`]. Kept here because it
 /// carries A2A-specific wire format (error code, JSON shape) that the other
-/// servers don't use.
+/// servers don't use. Retained for the a2a::server tests that exercise the
+/// error-body encoding; not currently used by the live router now that all
+/// error paths go through the JSON-RPC dispatcher.
+#[allow(dead_code)]
 fn error_response(status: &'static str, err: &A2aError) -> LiveResponse {
     match serde_json::to_string(err) {
         Ok(json) => LiveResponse {
@@ -357,5 +295,46 @@ tags: route, a2a
         let resp = error_response("501 Not Implemented", &err);
         assert_eq!(resp.status, "501 Not Implemented");
         assert!(resp.body.contains("-32004"));
+    }
+
+    #[tokio::test]
+    async fn post_root_requires_bearer_token() {
+        let state = test_server_state();
+
+        let unauthorized = handle_a2a_request(
+            &state,
+            "POST",
+            "/",
+            "POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
+        )
+        .await;
+        assert_eq!(unauthorized.status, "401 Unauthorized");
+    }
+
+    #[tokio::test]
+    async fn post_root_message_send_returns_jsonrpc_task() {
+        let state = test_server_state();
+
+        // Hub-shaped envelope: skillId names a plugin capability from the
+        // test PluginManager.
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"role":"user","messageId":"m1","parts":[{"type":"text","text":"hi"}]},"contextId":"ctx-1","skillId":"plugin:tool:calculator"}}"#;
+        let content_length = body.len();
+        let request = format!(
+            "POST / HTTP/1.1\r\nAuthorization: Bearer test-token\r\nContent-Length: {content_length}\r\n\r\n{body}"
+        );
+        let resp = handle_a2a_request(&state, "POST", "/", &request).await;
+
+        assert_eq!(resp.status, "200 OK");
+        let parsed: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(parsed["jsonrpc"], "2.0");
+        assert_eq!(parsed["id"], 1);
+        assert!(
+            parsed["result"].is_object() || parsed["error"].is_object(),
+            "response must have exactly one of result/error"
+        );
+        // On success the task carries the context id back.
+        if parsed["result"].is_object() {
+            assert_eq!(parsed["result"]["contextId"], "ctx-1");
+        }
     }
 }
