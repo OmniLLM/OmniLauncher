@@ -13,6 +13,9 @@ pub struct TaskRecord {
     pub state: A2aTaskState,
     /// Original A2A request ID, if the client provided one.
     pub request_id: Option<String>,
+    /// The `contextId` associated with this task, if the client provided one.
+    /// Echoed to callers via the wire-format task.
+    pub context_id: Option<String>,
     /// Short human-readable summary of the original request.
     pub request_summary: String,
     /// Output messages from the agent.
@@ -41,6 +44,7 @@ impl TaskRecord {
 
         A2aTask {
             id: self.id.clone(),
+            context_id: self.context_id.clone(),
             status: A2aTaskStatus {
                 state: self.state,
                 message: status_message,
@@ -54,8 +58,8 @@ impl TaskRecord {
 
 // ── Task ID generation ──────────────────────────────────────────────────────
 
-/// Generate a random task ID (16-byte hex, 32 chars).
-fn generate_task_id() -> String {
+/// Generate a random 16-byte hex ID (32 chars). Used for task and artifact IDs.
+pub(crate) fn generate_task_id() -> String {
     let bytes: [u8; 16] = rand::random();
     bytes.iter().fold(String::with_capacity(32), |mut s, b| {
         use std::fmt::Write;
@@ -89,6 +93,7 @@ impl TaskRegistry {
         &mut self,
         request_summary: String,
         request_id: Option<String>,
+        context_id: Option<String>,
     ) -> String {
         let now = chrono::Utc::now();
         let id = generate_task_id();
@@ -98,6 +103,7 @@ impl TaskRegistry {
             updated_at: now,
             state: A2aTaskState::Submitted,
             request_id,
+            context_id,
             request_summary,
             output_messages: Vec::new(),
             artifacts: Vec::new(),
@@ -228,7 +234,7 @@ mod tests {
     #[test]
     fn create_and_get_task() {
         let mut reg = TaskRegistry::new(100);
-        let id = reg.create_submitted("test query".to_string(), None);
+        let id = reg.create_submitted("test query".to_string(), None, None);
         let task = reg.get(&id).expect("task should exist");
         assert_eq!(task.state, A2aTaskState::Submitted);
         assert_eq!(task.request_summary, "test query");
@@ -237,7 +243,7 @@ mod tests {
     #[test]
     fn lifecycle_submitted_working_completed() {
         let mut reg = TaskRegistry::new(100);
-        let id = reg.create_submitted("q".to_string(), None);
+        let id = reg.create_submitted("q".to_string(), None, None);
 
         reg.mark_working(&id);
         assert_eq!(reg.get(&id).unwrap().state, A2aTaskState::Working);
@@ -255,7 +261,7 @@ mod tests {
     #[test]
     fn lifecycle_submitted_working_failed() {
         let mut reg = TaskRegistry::new(100);
-        let id = reg.create_submitted("q".to_string(), None);
+        let id = reg.create_submitted("q".to_string(), None, None);
         reg.mark_working(&id);
         reg.mark_failed(&id, "timeout".to_string());
         let task = reg.get(&id).unwrap();
@@ -266,7 +272,7 @@ mod tests {
     #[test]
     fn cancel_before_completion() {
         let mut reg = TaskRegistry::new(100);
-        let id = reg.create_submitted("q".to_string(), None);
+        let id = reg.create_submitted("q".to_string(), None, None);
         reg.mark_working(&id);
         assert!(reg.cancel(&id));
         assert_eq!(reg.get(&id).unwrap().state, A2aTaskState::Canceled);
@@ -275,7 +281,7 @@ mod tests {
     #[test]
     fn cancel_completed_task_is_noop() {
         let mut reg = TaskRegistry::new(100);
-        let id = reg.create_submitted("q".to_string(), None);
+        let id = reg.create_submitted("q".to_string(), None, None);
         reg.mark_completed(&id, vec![], vec![]);
         assert!(!reg.cancel(&id));
         assert_eq!(reg.get(&id).unwrap().state, A2aTaskState::Completed);
@@ -284,7 +290,7 @@ mod tests {
     #[test]
     fn terminal_state_does_not_revert() {
         let mut reg = TaskRegistry::new(100);
-        let id = reg.create_submitted("q".to_string(), None);
+        let id = reg.create_submitted("q".to_string(), None, None);
         reg.mark_failed(&id, "err".to_string());
 
         // Attempts to move to working or completed should be ignored.
@@ -298,9 +304,9 @@ mod tests {
     #[test]
     fn list_returns_sorted_by_creation() {
         let mut reg = TaskRegistry::new(100);
-        let id1 = reg.create_submitted("first".to_string(), None);
-        let id2 = reg.create_submitted("second".to_string(), None);
-        let id3 = reg.create_submitted("third".to_string(), None);
+        let id1 = reg.create_submitted("first".to_string(), None, None);
+        let id2 = reg.create_submitted("second".to_string(), None, None);
+        let id3 = reg.create_submitted("third".to_string(), None, None);
 
         let list = reg.list();
         assert_eq!(list.len(), 3);
@@ -313,10 +319,10 @@ mod tests {
     fn eviction_removes_oldest_terminal() {
         let mut reg = TaskRegistry::new(2);
 
-        let id1 = reg.create_submitted("a".to_string(), None);
+        let id1 = reg.create_submitted("a".to_string(), None, None);
         reg.mark_completed(&id1, vec![], vec![]);
 
-        let id2 = reg.create_submitted("b".to_string(), None);
+        let id2 = reg.create_submitted("b".to_string(), None, None);
         reg.mark_completed(&id2, vec![], vec![]);
 
         // Both terminal tasks should still be retained at cap.
@@ -324,7 +330,7 @@ mod tests {
         assert!(reg.get(&id2).is_some());
 
         // Adding a third terminal task triggers eviction of id1.
-        let id3 = reg.create_submitted("c".to_string(), None);
+        let id3 = reg.create_submitted("c".to_string(), None, None);
         reg.mark_completed(&id3, vec![], vec![]);
 
         assert!(reg.get(&id1).is_none(), "oldest terminal should be evicted");
@@ -337,13 +343,13 @@ mod tests {
         let mut reg = TaskRegistry::new(1);
 
         // One working (active) task.
-        let active = reg.create_submitted("active".to_string(), None);
+        let active = reg.create_submitted("active".to_string(), None, None);
         reg.mark_working(&active);
 
         // Two terminal tasks — only 1 allowed.
-        let t1 = reg.create_submitted("done1".to_string(), None);
+        let t1 = reg.create_submitted("done1".to_string(), None, None);
         reg.mark_completed(&t1, vec![], vec![]);
-        let t2 = reg.create_submitted("done2".to_string(), None);
+        let t2 = reg.create_submitted("done2".to_string(), None, None);
         reg.mark_completed(&t2, vec![], vec![]);
 
         // Active task MUST be preserved, oldest terminal evicted.
@@ -355,7 +361,7 @@ mod tests {
     #[test]
     fn to_a2a_task_conversion() {
         let mut reg = TaskRegistry::new(100);
-        let id = reg.create_submitted("hello".to_string(), None);
+        let id = reg.create_submitted("hello".to_string(), None, None);
         reg.mark_working(&id);
         let msg = A2aMessage {
             role: "agent".to_string(),
@@ -369,5 +375,28 @@ mod tests {
         assert_eq!(a2a.id, id);
         assert_eq!(a2a.status.state, A2aTaskState::Completed);
         assert!(a2a.status.timestamp.is_some());
+    }
+
+    #[test]
+    fn create_submitted_with_context_id_stores_and_echoes_it() {
+        let mut reg = TaskRegistry::new(100);
+        let id = reg.create_submitted(
+            "q".to_string(),
+            None,
+            Some("ctx-abc".to_string()),
+        );
+        let record = reg.get(&id).expect("task should exist");
+        assert_eq!(record.context_id.as_deref(), Some("ctx-abc"));
+
+        let a2a = record.to_a2a_task();
+        assert_eq!(a2a.context_id.as_deref(), Some("ctx-abc"));
+    }
+
+    #[test]
+    fn create_submitted_with_no_context_id_omits_it_from_a2a_task() {
+        let mut reg = TaskRegistry::new(100);
+        let id = reg.create_submitted("q".to_string(), None, None);
+        let a2a = reg.get(&id).unwrap().to_a2a_task();
+        assert!(a2a.context_id.is_none());
     }
 }
