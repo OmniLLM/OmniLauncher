@@ -3,6 +3,11 @@ import { execFileSync } from "node:child_process";
 
 const repoRoot = process.cwd();
 
+// Spawning `make -n` recursively is slow on Windows: each nested $(MAKE) forks a
+// real child make process to trace the dry-run tree, so `restart` alone takes
+// ~4s. Give these make-spawning cases headroom over vitest's 5s default.
+const MAKE_TIMEOUT_MS = 30_000;
+
 describe("Make/ops single-binary handling", () => {
   it("treats lowercase role=backend as a backend-only restart", () => {
     const output = execFileSync(
@@ -14,7 +19,7 @@ describe("Make/ops single-binary handling", () => {
     expect(output).toContain("make stop ROLE=backend");
     expect(output).toContain("make build ROLE=backend");
     expect(output).not.toContain("build-frontend-command");
-  });
+  }, MAKE_TIMEOUT_MS);
 
   it("build no longer copies role binaries (single self-dispatching binary)", () => {
     const output = execFileSync("make", ["-n", "build", "ROLE=backend"], {
@@ -27,7 +32,7 @@ describe("Make/ops single-binary handling", () => {
     expect(output).not.toContain("prepare-binaries");
     expect(output).not.toContain("omnilauncher-frontend");
     expect(output).not.toContain("omnilauncher-backend");
-  });
+  }, MAKE_TIMEOUT_MS);
 
   it("install-cli symlinks the single binary as `ol`", () => {
     const output = execFileSync("make", ["-n", "install-cli"], {
@@ -37,5 +42,5 @@ describe("Make/ops single-binary handling", () => {
 
     expect(output).toContain(".local/bin/ol");
     expect(output).toContain("src-tauri/target/release/omnilauncher");
-  });
+  }, MAKE_TIMEOUT_MS);
 });

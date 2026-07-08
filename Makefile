@@ -3,6 +3,7 @@
         stop stop-frontend stop-backend stop-all \
         start start-frontend start-backend start-wsl-backend \
         restart restart-frontend restart-backend restart-wsl-backend \
+        start-wsl-backend-command restart-wsl-backend-command \
         clean clean-frontend clean-backend \
         remove-binary install-cli uninstall-cli \
         logs status \

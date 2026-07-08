@@ -144,9 +144,20 @@ fn dispatch_command(out: &Output, globals: &Globals, command: &str, args: &[Stri
             Dispatch::Handled(ops::gui(out, detached, globals.debug))
         }
         "start" => Dispatch::Handled(ops::start(out, globals.debug)),
-        "stop" => Dispatch::Handled(ops::stop(out)),
+        "stop" => {
+            // `stop` (backend, default), `stop --gui` (detached shell), or
+            // `stop --all` (both). Keeps the common no-flag case unchanged.
+            if args.iter().any(|a| a == "--all") {
+                Dispatch::Handled(ops::stop_all(out))
+            } else if args.iter().any(|a| a == "--gui") {
+                Dispatch::Handled(ops::stop_gui(out))
+            } else {
+                Dispatch::Handled(ops::stop(out))
+            }
+        }
         "restart" => Dispatch::Handled(ops::restart(out, globals.debug)),
         "status" => Dispatch::Handled(ops::status(out)),
+        "health" => Dispatch::Handled(ops::health(out)),
         "logs" => {
             let follow = args.iter().any(|a| a == "-f" || a == "--follow");
             let lines = arg_value(args, "-n")
@@ -195,6 +206,13 @@ fn dispatch_command(out: &Output, globals: &Globals, command: &str, args: &[Stri
             {
                 let _ = globals; // presentation already baked into `out`
                 Dispatch::Handled(query::run_slash(out, c.name, args))
+            } else if query::SHELL_DUPLICATE_COMMANDS.contains(&format!("/{other}").as_str()) {
+                // Shell-duplicating commands (grep/cat/ls/git/env/run) are not
+                // exposed on the CLI — the user already has a real shell.
+                out.failure(&format!(
+                    "'{other}' isn't an ol command — you're at a shell already; run `{other}` directly"
+                ));
+                Dispatch::Handled(2)
             } else {
                 out.failure(&format!(
                     "unknown command '{other}' — run `ol help` for the command list"
@@ -231,9 +249,10 @@ pub fn print_help(out: &Output) {
         ("serve", "run the backend API server (foreground)"),
         ("gui", "launch the desktop shell (--detached to background)"),
         ("start", "start the backend detached and wait for health"),
-        ("stop", "stop the detached backend"),
+        ("stop", "stop the backend (--gui shell, --all both)"),
         ("restart", "stop then start"),
         ("status", "health / process / port / binary view"),
+        ("health", "probe the backend /health endpoint (exit 0 if ok)"),
         ("logs", "print/tail the log file (-f follow, -n N)"),
         ("doctor", "diagnostics: config, token, AI, deps"),
         (
@@ -334,6 +353,29 @@ mod tests {
         match dispatch("ol", &s(&["version"])) {
             Dispatch::Handled(code) => assert_eq!(code, 0),
             _ => panic!("version should be handled with exit 0"),
+        }
+    }
+
+    #[test]
+    fn stop_variants_are_handled() {
+        // All three stop forms route to a handled outcome (exit code depends on
+        // whether something is running, which is environment-specific; we only
+        // assert routing here, not the code).
+        for variant in [&["stop"][..], &["stop", "--gui"][..], &["stop", "--all"][..]] {
+            match dispatch("ol", &s(variant)) {
+                Dispatch::Handled(_) => {}
+                _ => panic!("`{variant:?}` should be handled"),
+            }
+        }
+    }
+
+    #[test]
+    fn shell_duplicate_command_is_rejected_with_redirect() {
+        // `ol grep ...` is no longer a command — it should be a usage error (2),
+        // not silently run a reimplementation.
+        match dispatch("ol", &s(&["grep", "TODO"])) {
+            Dispatch::Handled(code) => assert_eq!(code, 2),
+            _ => panic!("shell-duplicating command should be a handled usage error"),
         }
     }
 

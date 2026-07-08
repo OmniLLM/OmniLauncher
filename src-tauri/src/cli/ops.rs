@@ -142,6 +142,88 @@ pub fn restart(out: &Output, debug: bool) -> i32 {
     start(out, debug)
 }
 
+/// `ol stop --gui` — stop a detached GUI shell (started via `ol gui --detached`)
+/// by its PID file, and clear the file. This ports the last capability that only
+/// lived in the shell wrappers (`scripts/ops.*` stop-frontend) into the binary.
+pub fn stop_gui(out: &Output) -> i32 {
+    let pid_file = process::gui_pid_file();
+    let Some(pid) = process::read_pid(&pid_file) else {
+        out.failure("gui not running (no detached shell tracked)");
+        return 1;
+    };
+    if !process::pid_alive(pid) {
+        process::clear_pid(&pid_file);
+        out.failure("gui not running");
+        return 1;
+    }
+
+    let stopped = process::stop_pid(pid, Duration::from_secs(3));
+    process::clear_pid(&pid_file);
+    if stopped {
+        out.success(&format!("gui stopped   pid {pid}"));
+        0
+    } else {
+        out.failure(&format!("failed to stop gui   pid {pid}"));
+        1
+    }
+}
+
+/// `ol stop --all` — stop both the detached GUI shell and the backend. Reports
+/// success if at least one was running and stopped; a fully-idle system is not
+/// an error (nothing to do).
+pub fn stop_all(out: &Output) -> i32 {
+    // Run both regardless of individual outcome so one failure doesn't skip the
+    // other. `stop`/`stop_gui` return 1 when their target wasn't running, which
+    // is fine here — "stop everything" on an idle system is a no-op, not a
+    // failure.
+    let gui_running = process::read_pid(&process::gui_pid_file())
+        .map(process::pid_alive)
+        .unwrap_or(false);
+    let backend_running = process::read_pid(&process::backend_pid_file())
+        .map(process::pid_alive)
+        .unwrap_or(false);
+
+    if !gui_running && !backend_running {
+        out.info("nothing running");
+        return 0;
+    }
+
+    let mut ok = true;
+    if gui_running {
+        ok &= stop_gui(out) == 0;
+    }
+    if backend_running {
+        ok &= stop(out) == 0;
+    }
+    if ok {
+        0
+    } else {
+        1
+    }
+}
+
+/// `ol health` — probe the backend `/health` endpoint at the configured port and
+/// exit 0 if healthy, 1 otherwise. Unlike `status` (which reports on the managed
+/// PID file), this checks actual HTTP health, so it also works for backends we
+/// didn't spawn (wsl / remote). Ports the scripts' `test-backend` into the binary.
+pub fn health(out: &Output) -> i32 {
+    let url = backend_url();
+    match process::probe_health(&url) {
+        process::Health::Ok => {
+            out.success(&format!("healthy   {url}"));
+            0
+        }
+        process::Health::Bad => {
+            out.failure(&format!("unhealthy — endpoint returned an error   {url}"));
+            1
+        }
+        process::Health::Unreachable => {
+            out.failure(&format!("unreachable   {url}"));
+            1
+        }
+    }
+}
+
 /// `ol status` — rich health/process/port/binary view.
 pub fn status(out: &Output) -> i32 {
     let version = env!("CARGO_PKG_VERSION");

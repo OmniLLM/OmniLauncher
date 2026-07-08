@@ -2,8 +2,13 @@
 #
 # Single self-dispatching binary: `cargo build --release` produces one
 # `omnilauncher` artifact that owns every runtime mode (GUI, serve, and the `ol`
-# CLI). There is no longer a frontend/backend role copy step — the historical
-# `prepare-binaries` (which duplicated the binary into role-named files) is gone.
+# CLI) AND every lifecycle op (start/stop/restart/status/health/logs). There is
+# no shell/PowerShell ops wrapper anymore — recipes invoke `$(BIN)` subcommands
+# directly, so behavior is identical on Linux, macOS, and Windows.
+#
+# Host/port/backend-url are passed to the binary via the environment variables
+# it already reads (OMNILAUNCHER_SERVER_HOST / _SERVER_PORT / _BACKEND_URL),
+# inlined on the same recipe line so they apply to that single invocation.
 
 build-frontend-command:
 	$(NPM) run build
@@ -14,13 +19,13 @@ build-backend-command:
 
 maybe-rebuild-frontend:
 ifeq ($(REBUILD),1)
-	$(OPS) remove-binary
+	rm -f $(BIN)
 	$(MAKE) build-frontend-command
 endif
 
 maybe-rebuild-backend:
 ifeq ($(REBUILD),1)
-	$(OPS) remove-binary
+	rm -f $(BIN)
 	$(MAKE) build-backend-command
 endif
 
@@ -39,14 +44,16 @@ else
 endif
 
 # -- Canonical stop ------------------------------------------------------------
+#
+# frontend → detached GUI shell; backend → managed serve; both → everything.
 
 stop:
 ifeq ($(ROLE),frontend)
-	$(OPS) stop-frontend
+	$(BIN) stop --gui
 else ifeq ($(ROLE),backend)
-	$(OPS) stop-backend
+	$(BIN) stop
 else ifeq ($(ROLE),both)
-	$(OPS) stop-all
+	$(BIN) stop --all
 else
 	$(error ROLE must be frontend, backend, or both)
 endif
@@ -56,31 +63,31 @@ endif
 start:
 ifeq ($(ROLE),frontend)
 	$(MAKE) maybe-rebuild-frontend
-	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)" $(DEBUG_FLAG)
+	OMNILAUNCHER_BACKEND_URL="$(BACKEND_URL)" $(BIN) gui --detached $(DEBUG_FLAG)
 else ifeq ($(ROLE),backend)
 ifeq ($(BACKEND_MODE),wsl)
-	$(OPS) start-wsl-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)" --BackendUrl "$(BACKEND_URL)"
+	$(MAKE) start-wsl-backend-command
 else ifeq ($(BACKEND_MODE),remote)
 	$(info BACKEND_MODE=remote: not starting backend; using $(BACKEND_URL))
 else ifeq ($(BACKEND_MODE),local)
 	$(MAKE) maybe-rebuild-backend
-	$(OPS) start-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)" $(DEBUG_FLAG)
+	OMNILAUNCHER_SERVER_HOST="$(SERVER_HOST)" OMNILAUNCHER_SERVER_PORT="$(SERVER_PORT)" $(BIN) start $(DEBUG_FLAG)
 else
 	$(error BACKEND_MODE must be local, wsl, or remote)
 endif
 else ifeq ($(ROLE),both)
 ifeq ($(BACKEND_MODE),wsl)
-	$(OPS) start-wsl-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)" --BackendUrl "$(BACKEND_URL)"
+	$(MAKE) start-wsl-backend-command
 else ifeq ($(BACKEND_MODE),remote)
 	$(info BACKEND_MODE=remote: not starting backend; using $(BACKEND_URL))
 else ifeq ($(BACKEND_MODE),local)
 	$(MAKE) maybe-rebuild-backend
-	$(OPS) start-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)" $(DEBUG_FLAG)
+	OMNILAUNCHER_SERVER_HOST="$(SERVER_HOST)" OMNILAUNCHER_SERVER_PORT="$(SERVER_PORT)" $(BIN) start $(DEBUG_FLAG)
 else
 	$(error BACKEND_MODE must be local, wsl, or remote)
 endif
 	$(MAKE) maybe-rebuild-frontend
-	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)" $(DEBUG_FLAG)
+	OMNILAUNCHER_BACKEND_URL="$(BACKEND_URL)" $(BIN) gui --detached $(DEBUG_FLAG)
 else
 	$(error ROLE must be frontend, backend, or both)
 endif
@@ -91,19 +98,19 @@ restart:
 	$(MAKE) stop ROLE=$(ROLE)
 ifeq ($(BACKEND_MODE),wsl)
 ifeq ($(ROLE),backend)
-	$(OPS) restart-wsl-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)"
+	$(MAKE) restart-wsl-backend-command
 else ifeq ($(ROLE),both)
-	$(OPS) restart-wsl-backend --ServerHost "$(SERVER_HOST)" --ServerPort "$(SERVER_PORT)"
-	$(OPS) remove-binary
+	$(MAKE) restart-wsl-backend-command
+	rm -f $(BIN)
 	$(MAKE) build-frontend-command
-	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)" $(DEBUG_FLAG)
+	OMNILAUNCHER_BACKEND_URL="$(BACKEND_URL)" $(BIN) gui --detached $(DEBUG_FLAG)
 else
-	$(OPS) remove-binary
+	rm -f $(BIN)
 	$(MAKE) build-frontend-command
-	$(OPS) start-frontend --BackendUrl "$(BACKEND_URL)" $(DEBUG_FLAG)
+	OMNILAUNCHER_BACKEND_URL="$(BACKEND_URL)" $(BIN) gui --detached $(DEBUG_FLAG)
 endif
 else
-	$(OPS) remove-binary
+	rm -f $(BIN)
 	$(MAKE) build ROLE=$(ROLE)
 	$(MAKE) start ROLE=$(ROLE) BACKEND_MODE=$(BACKEND_MODE) REBUILD=0 DEBUG=$(DEBUG) VERBOSE=$(VERBOSE)
 endif
@@ -112,11 +119,11 @@ endif
 
 clean:
 ifeq ($(ROLE),frontend)
-	$(OPS) clean-frontend
+	rm -rf dist
 else ifeq ($(ROLE),backend)
-	$(OPS) clean-backend
+	rm -rf src-tauri/target
 else ifeq ($(ROLE),both)
-	$(OPS) clean
+	rm -rf dist src-tauri/target
 else
 	$(error ROLE must be frontend, backend, or both)
 endif
@@ -132,9 +139,9 @@ else ifeq ($(KIND),unit)
 	$(MAKE) test KIND=frontend
 	$(MAKE) test KIND=rust
 else ifeq ($(KIND),backend)
-	$(OPS) test-backend --BackendUrl "$(BACKEND_URL)"
+	$(BIN) health
 else ifeq ($(KIND),health)
-	$(OPS) test-backend --BackendUrl "$(BACKEND_URL)"
+	$(BIN) health
 else ifeq ($(KIND),smoke)
 	$(SMOKE_CMD) -BaseUrl "$(BACKEND_URL)"
 else ifeq ($(KIND),e2e)
@@ -150,13 +157,13 @@ endif
 # -- Other common commands -----------------------------------------------------
 
 logs:
-	$(LOGS_CMD)
+	$(BIN) logs -f
 
 status:
-	$(OPS) status --BackendUrl "$(BACKEND_URL)" --ServerPort "$(SERVER_PORT)"
+	$(BIN) status
 
 remove-binary:
-	$(OPS) remove-binary
+	rm -f $(BIN)
 
 # Symlink the single binary onto PATH as `ol` so the CLI/REPL is reachable from
 # any directory. Idempotent; warns if ~/.local/bin isn't on PATH.
@@ -169,3 +176,33 @@ install-cli:
 uninstall-cli:
 	@rm -f "$(HOME)/.local/bin/ol"
 	@echo "removed $(HOME)/.local/bin/ol"
+
+# -- WSL split-machine backend (Windows-only) ---------------------------------
+#
+# Build + run the single binary inside WSL in `serve` mode, with the Windows
+# desktop shell connecting over BACKEND_URL. Windows-only because it drives
+# wsl.exe; on Linux/macOS just use `make start-backend`. Previously lived in
+# scripts/ops.ps1.
+
+WSL_REPO ?= /mnt/c/Users/jzhu/repos/OmniLauncher
+WSL_BIN  := $(WSL_REPO)/src-tauri/target/release/omnilauncher
+
+start-wsl-backend-command:
+ifeq ($(PLATFORM),windows)
+	@echo "Building backend inside WSL..."
+	wsl -e bash -c 'cd $(WSL_REPO)/src-tauri && cargo build --release'
+	@echo "Starting backend inside WSL on $(SERVER_HOST):$(SERVER_PORT)..."
+	wsl -e bash -c "OMNILAUNCHER_SERVER_HOST=$(SERVER_HOST) OMNILAUNCHER_SERVER_PORT=$(SERVER_PORT) nohup $(WSL_BIN) serve >/dev/null 2>&1 &"
+	@echo "WSL backend started. Frontend connects via BACKEND_URL=$(BACKEND_URL)"
+else
+	$(error BACKEND_MODE=wsl is only supported on Windows)
+endif
+
+restart-wsl-backend-command:
+ifeq ($(PLATFORM),windows)
+	$(BIN) stop
+	wsl -e bash -c 'rm -f $(WSL_BIN)'
+	$(MAKE) start-wsl-backend-command
+else
+	$(error BACKEND_MODE=wsl is only supported on Windows)
+endif

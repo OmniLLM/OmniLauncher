@@ -25,8 +25,8 @@ Platform specifics:
 
 | Item                 | Linux / macOS                                  | Windows                                                                                          |
 | -------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Shell behind `make`  | `bash` (built in) runs `scripts/ops.sh`        | Windows PowerShell 5.1 (built in) runs `scripts/ops.ps1`                                         |
-| Extra shell          | —                                              | **PowerShell 7+ (`pwsh`)** for `make logs` and the smoke / e2e test targets                      |
+| Shell behind `make`  | none — `make` calls the `omnilauncher` binary directly | none — `make` calls the `omnilauncher.exe` binary directly                              |
+| Extra shell          | —                                              | **PowerShell 7+ (`pwsh`)** for the smoke / e2e test targets only                                 |
 | Installing `make`    | preinstalled, or `apt install make` / `brew install make` | `choco install make` / `scoop install make`, or run under MSYS2 / Git Bash            |
 | Webview + toolchain  | WebKitGTK (from Tauri prereqs)                 | WebView2 (preinstalled on Windows 11) + MSVC Build Tools                                         |
 
@@ -46,7 +46,7 @@ cd src-tauri && cargo fetch && cd ..
 make start
 ```
 
-The `make` commands (`make start`, `make stop`, `make status`, …) are the **same on every OS** — they dispatch to `scripts/ops.sh` on Linux/macOS and `scripts/ops.ps1` on Windows automatically. See [Linux & Windows notes](#linux--windows-notes) for the few real differences.
+The `make` commands (`make start`, `make stop`, `make status`, …) are the **same on every OS** — each target invokes the self-contained `omnilauncher` binary's own subcommands (`start`, `stop`, `status`, `logs`, …), so there is no shell or PowerShell wrapper to go wrong. See [Linux & Windows notes](#linux--windows-notes) for the few real differences.
 
 > [!TIP]
 > Press **Ctrl+Shift+O** to open the launcher, **Ctrl+,** to open Settings, and **Esc** to close.
@@ -174,7 +174,7 @@ Run `make help` for the full target list, or `make help-advanced` for compatibil
 
 ### Linux & Windows notes
 
-The `make` targets are identical across platforms — the Makefile picks the right helper script per OS (`scripts/ops.sh` on Linux/macOS via `bash`, `scripts/ops.ps1` on Windows via PowerShell). The differences you actually hit:
+The `make` targets are identical across platforms — each one invokes the self-contained `omnilauncher` binary's own subcommands (process control, port probing, PID files, and health checks are all native Rust, no shell or PowerShell wrapper). The differences you actually hit:
 
 | Topic                | Linux / macOS                                | Windows                                                                      |
 | -------------------- | -------------------------------------------- | --------------------------------------------------------------------------- |

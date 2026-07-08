@@ -41,9 +41,11 @@ impl Helper for ReplHelper {}
 impl ReplHelper {
     fn new() -> Self {
         let mut candidates: Vec<String> = Vec::new();
-        // Bare + slash forms of every catalog command (skip UI-only).
+        // Bare + slash forms of every catalog command that the CLI actually
+        // exposes (skips UI-only navigation and shell-duplicating utilities like
+        // grep/cat/ls — the REPL user already has a real shell for those).
         for c in SLASH_COMMANDS {
-            if query::UI_ONLY_COMMANDS.contains(&c.name) {
+            if !query::is_cli_exposed(c.name) {
                 continue;
             }
             candidates.push(c.name.to_string()); // "/grep"
@@ -182,6 +184,13 @@ fn dispatch_line(out: &Output, input: &str) -> bool {
         let mut parts = rest.splitn(2, ' ');
         let name = parts.next().unwrap_or("");
         let args = split_args(parts.next().unwrap_or(""));
+        // Shell-duplicating commands (grep/cat/ls/git/env/run) are intentionally
+        // not exposed in the REPL — the user is already at a shell. Redirect
+        // rather than silently running a second-class reimplementation.
+        if is_shell_duplicate(name) {
+            note_shell_duplicate(out, name);
+            return true;
+        }
         query::run_slash(out, name, &args);
         return true;
     }
@@ -232,6 +241,26 @@ fn is_known_command(token: &str) -> bool {
         .any(|c| c.name == token || c.alias == Some(token))
 }
 
+/// Whether `name` (with or without a leading slash) is a shell-duplicating
+/// command that the REPL intentionally does not expose.
+fn is_shell_duplicate(name: &str) -> bool {
+    let slashed = if name.starts_with('/') {
+        name.to_string()
+    } else {
+        format!("/{name}")
+    };
+    query::SHELL_DUPLICATE_COMMANDS.contains(&slashed.as_str())
+}
+
+/// Tell the user a shell-duplicating command was dropped from the REPL and point
+/// them at the real shell equivalent they already have.
+fn note_shell_duplicate(out: &Output, name: &str) {
+    let bare = name.trim_start_matches('/');
+    out.failure(&format!(
+        "/{bare} isn't available in the REPL — you're already at a shell; run `{bare}` directly"
+    ));
+}
+
 /// Split a raw argument tail into whitespace-separated args. The router re-joins
 /// with spaces, so this only needs to be simple.
 fn split_args(rest: &str) -> Vec<String> {
@@ -277,20 +306,41 @@ mod tests {
 
     #[test]
     fn known_command_recognizes_names_and_aliases() {
-        assert!(is_known_command("grep"));
-        assert!(is_known_command("g")); // alias of /grep
+        assert!(is_known_command("calc"));
+        assert!(is_known_command("c")); // alias of /calc
+        assert!(is_known_command("find"));
+        assert!(is_known_command("f")); // alias of /find
         assert!(!is_known_command("definitely-not-a-command"));
         // UI-only commands are not known CLI commands.
         assert!(!is_known_command("plugins"));
+        // Shell-duplicating commands are no longer known CLI commands.
+        assert!(!is_known_command("grep"));
+        assert!(!is_known_command("g")); // alias of /grep
+        assert!(!is_known_command("cat"));
     }
 
     #[test]
-    fn helper_candidates_include_ops_and_commands() {
+    fn shell_duplicate_detection_handles_slash_and_bare() {
+        assert!(is_shell_duplicate("grep"));
+        assert!(is_shell_duplicate("/grep"));
+        assert!(is_shell_duplicate("cat"));
+        assert!(!is_shell_duplicate("calc"));
+        assert!(!is_shell_duplicate("/find"));
+    }
+
+    #[test]
+    fn helper_candidates_include_ops_and_launcher_commands() {
         let h = ReplHelper::new();
         assert!(h.candidates.iter().any(|c| c == ":status"));
-        assert!(h.candidates.iter().any(|c| c == "grep"));
-        assert!(h.candidates.iter().any(|c| c == "/grep"));
+        // Launcher-native commands are offered.
+        assert!(h.candidates.iter().any(|c| c == "calc"));
+        assert!(h.candidates.iter().any(|c| c == "/calc"));
+        assert!(h.candidates.iter().any(|c| c == "find"));
         // UI-only excluded.
         assert!(!h.candidates.iter().any(|c| c == "/plugins"));
+        // Shell-duplicating commands excluded from completion.
+        assert!(!h.candidates.iter().any(|c| c == "grep"));
+        assert!(!h.candidates.iter().any(|c| c == "/grep"));
+        assert!(!h.candidates.iter().any(|c| c == "cat"));
     }
 }

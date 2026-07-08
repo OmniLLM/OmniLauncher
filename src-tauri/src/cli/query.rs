@@ -14,6 +14,22 @@ use omnilauncher_lib::{load_settings, SkillManager};
 /// they have no terminal behavior.
 pub const UI_ONLY_COMMANDS: &[&str] = &["/plugins", "/skills", "/new", "/clear", "/help"];
 
+/// Slash commands that merely reimplement what a real terminal shell already
+/// provides. In the GUI launcher these are useful (there is no shell there), so
+/// the `Router::slash_command` arms stay intact. But on the `ol` CLI / REPL the
+/// user is *already* at a shell with `grep`, `cat`, `ls`, `git`, `env`, and the
+/// ability to run any command directly — a second-class reimplementation just
+/// adds noise and confusion. We therefore hide these from the CLI subcommand
+/// set, the REPL command list, and tab-completion, without touching the GUI.
+pub const SHELL_DUPLICATE_COMMANDS: &[&str] = &["/run", "/grep", "/cat", "/ls", "/git", "/env"];
+
+/// Whether a catalog command (identified by its `/name`) is surfaced on the CLI
+/// / REPL. Excludes both UI-only navigation commands and shell-duplicating
+/// utilities. The GUI is unaffected — it renders the full `SLASH_COMMANDS`.
+pub fn is_cli_exposed(name: &str) -> bool {
+    !UI_ONLY_COMMANDS.contains(&name) && !SHELL_DUPLICATE_COMMANDS.contains(&name)
+}
+
 /// A CLI-exposable slash command: the bare name (no slash) plus its metadata,
 /// derived from the shared `SLASH_COMMANDS` catalog. Generated so a new slash
 /// command automatically gains a CLI subcommand and help string.
@@ -27,13 +43,13 @@ pub struct CliCommand {
     pub usage: &'static str,
 }
 
-/// The set of slash commands that map to CLI subcommands (UI-only entries
-/// filtered out). Derived from `SLASH_COMMANDS` so names/shortcuts/help never
-/// drift from the GUI.
+/// The set of slash commands that map to CLI subcommands (UI-only and
+/// shell-duplicating entries filtered out). Derived from `SLASH_COMMANDS` so
+/// names/shortcuts/help never drift from the GUI.
 pub fn cli_commands() -> Vec<CliCommand> {
     SLASH_COMMANDS
         .iter()
-        .filter(|c| !UI_ONLY_COMMANDS.contains(&c.name))
+        .filter(|c| is_cli_exposed(c.name))
         .map(|c| CliCommand {
             name: c.name.trim_start_matches('/'),
             alias: c.shortcut.map(|s| s.trim_start_matches('/')),
@@ -194,9 +210,26 @@ mod tests {
     }
 
     #[test]
-    fn operational_commands_are_present() {
+    fn shell_duplicate_commands_are_excluded_from_cli() {
+        // Commands that just reimplement the shell (grep/cat/ls/git/env/run) are
+        // hidden from the CLI/REPL surface — the user already has a real shell.
         let cmds = cli_commands();
-        for expected in ["run", "grep", "calc", "ps", "ls", "skill"] {
+        for dup in SHELL_DUPLICATE_COMMANDS {
+            let bare = dup.trim_start_matches('/');
+            assert!(
+                !cmds.iter().any(|c| c.name == bare),
+                "shell-duplicating command {dup} must not be a CLI subcommand"
+            );
+        }
+    }
+
+    #[test]
+    fn launcher_style_commands_are_present() {
+        // Commands with genuine launcher value (not shell duplicates) stay on the
+        // CLI. `open`/`app`/`find` are launcher-native; `calc`/`ps`/`skill` have
+        // no plain-shell equivalent.
+        let cmds = cli_commands();
+        for expected in ["open", "app", "find", "calc", "ps", "skill"] {
             assert!(
                 cmds.iter().any(|c| c.name == expected),
                 "expected CLI subcommand `{expected}` derived from SLASH_COMMANDS"
@@ -207,26 +240,30 @@ mod tests {
     #[test]
     fn aliases_are_derived_without_slash() {
         let cmds = cli_commands();
-        let grep = cmds.iter().find(|c| c.name == "grep").unwrap();
-        assert_eq!(grep.alias, Some("g"));
+        // `/calc` (shortcut `/c`) survives the shell-duplicate filter, so its
+        // alias should be exposed as the bare `c`.
+        let calc = cmds.iter().find(|c| c.name == "calc").unwrap();
+        assert_eq!(calc.alias, Some("c"));
     }
 
     #[test]
     fn slash_string_roundtrip() {
-        assert_eq!(to_slash_string("grep", &[]), "/grep");
+        assert_eq!(to_slash_string("calc", &[]), "/calc");
         assert_eq!(
-            to_slash_string("grep", &["TODO".into(), "src/".into()]),
-            "/grep TODO src/"
+            to_slash_string("find", &["report".into(), "src/".into()]),
+            "/find report src/"
         );
     }
 
     #[test]
     fn every_cli_command_maps_to_a_real_router_arm() {
         // Drift guard: the set of CLI subcommands is exactly the catalog minus
-        // the UI-only entries. If someone adds a slash command, this keeps the
-        // CLI in lockstep (or forces an explicit UI-only classification).
+        // the UI-only entries and the shell-duplicating entries. If someone adds
+        // a slash command, this keeps the CLI in lockstep (or forces an explicit
+        // classification into one of the two exclusion lists).
         let derived = cli_commands().len();
-        let expected = SLASH_COMMANDS.len() - UI_ONLY_COMMANDS.len();
+        let expected =
+            SLASH_COMMANDS.len() - UI_ONLY_COMMANDS.len() - SHELL_DUPLICATE_COMMANDS.len();
         assert_eq!(derived, expected);
     }
 }
