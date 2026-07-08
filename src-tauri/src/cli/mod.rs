@@ -14,12 +14,9 @@
 
 pub mod ops;
 pub mod process;
-pub mod query;
 pub mod render;
-pub mod repl;
 
 use render::Output;
-use std::io::IsTerminal;
 
 /// Global flags recognized before/around any subcommand.
 #[derive(Debug, Default, Clone)]
@@ -120,9 +117,8 @@ pub fn dispatch(argv0: &str, rest: &[String]) -> Dispatch {
     // No subcommand: default action depends on argv[0].
     let Some(command) = tokens.first().cloned() else {
         if invoked_as_ol(argv0) {
-            if std::io::stdin().is_terminal() {
-                return Dispatch::Handled(repl::run(&out));
-            }
+            // Bare `ol` (TTY or not) prints the ops help and exits. There is no
+            // interactive REPL: `ol` only operates the omnilauncher binary.
             print_help(&out);
             return Dispatch::Handled(0);
         }
@@ -167,25 +163,6 @@ fn dispatch_command(out: &Output, globals: &Globals, command: &str, args: &[Stri
             Dispatch::Handled(ops::logs(out, lines, follow))
         }
         "doctor" => Dispatch::Handled(ops::doctor(out)),
-        "repl" => Dispatch::Handled(repl::run(out)),
-
-        // ── Query surface ────────────────────────────────────────────────
-        "ai" => {
-            let prompt = args.join(" ");
-            if prompt.trim().is_empty() {
-                out.failure("usage: ol ai <text>");
-                return Dispatch::Handled(2);
-            }
-            Dispatch::Handled(query::run_ai(out, &prompt))
-        }
-        "search" => {
-            let text = args.join(" ");
-            if text.trim().is_empty() {
-                out.failure("usage: ol search <text>");
-                return Dispatch::Handled(2);
-            }
-            Dispatch::Handled(query::run_search(out, &text))
-        }
 
         // ── Help / version ───────────────────────────────────────────────
         "help" | "--help" | "-h" => {
@@ -197,28 +174,12 @@ fn dispatch_command(out: &Output, globals: &Globals, command: &str, args: &[Stri
             Dispatch::Handled(0)
         }
 
-        // ── Generated query subcommands from SLASH_COMMANDS ──────────────
+        // ── Unknown ──────────────────────────────────────────────────────
         other => {
-            // Resolve a bare name or short alias to a catalog command.
-            if let Some(c) = query::cli_commands()
-                .into_iter()
-                .find(|c| c.name == other || c.alias == Some(other))
-            {
-                let _ = globals; // presentation already baked into `out`
-                Dispatch::Handled(query::run_slash(out, c.name, args))
-            } else if query::SHELL_DUPLICATE_COMMANDS.contains(&format!("/{other}").as_str()) {
-                // Shell-duplicating commands (grep/cat/ls/git/env/run) are not
-                // exposed on the CLI — the user already has a real shell.
-                out.failure(&format!(
-                    "'{other}' isn't an ol command — you're at a shell already; run `{other}` directly"
-                ));
-                Dispatch::Handled(2)
-            } else {
-                out.failure(&format!(
-                    "unknown command '{other}' — run `ol help` for the command list"
-                ));
-                Dispatch::Handled(2)
-            }
+            out.failure(&format!(
+                "unknown command '{other}' — run `ol help` for the command list"
+            ));
+            Dispatch::Handled(2)
         }
     }
 }
@@ -231,44 +192,55 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
         .cloned()
 }
 
-/// Print the top-level help / command list.
+/// One operational verb: the name as typed on the CLI plus its one-line help.
+/// Both `print_help` and the unknown-command path derive from this single list,
+/// so the advertised command set and its help text cannot drift apart.
+struct OpsCommand {
+    name: &'static str,
+    desc: &'static str,
+}
+
+/// The lifecycle/ops verbs `ol` exposes. `help`/`version` are handled separately
+/// (they are not lifecycle verbs). Adding a verb here + a `match` arm in
+/// `dispatch_command` is all that's needed to surface a new ops command.
+const OPS_COMMANDS: &[OpsCommand] = &[
+    OpsCommand { name: "serve",   desc: "run the backend API server (foreground)" },
+    OpsCommand { name: "gui",     desc: "launch the desktop shell (--detached to background)" },
+    OpsCommand { name: "start",   desc: "start the backend detached and wait for health" },
+    OpsCommand { name: "stop",    desc: "stop the backend (--gui shell, --all both)" },
+    OpsCommand { name: "restart", desc: "stop then start" },
+    OpsCommand { name: "status",  desc: "health / process / port / binary view" },
+    OpsCommand { name: "health",  desc: "probe the backend /health endpoint (exit 0 if ok)" },
+    OpsCommand { name: "logs",    desc: "print/tail the log file (-f follow, -n N)" },
+    OpsCommand { name: "doctor",  desc: "diagnostics: config, token, AI, deps" },
+];
+
+/// Print the top-level help / command list to stdout.
 pub fn print_help(out: &Output) {
-    println!("{}", out.cyan("ol — OmniLauncher CLI"));
-    println!();
-    println!("{}", out.dim("USAGE"));
-    println!("  ol [FLAGS] [COMMAND] [ARGS...]");
-    println!();
-    println!("{}", out.dim("GLOBAL FLAGS"));
-    println!("  --json        machine-readable JSON output");
-    println!("  --no-color    disable ANSI color (also NO_COLOR / non-TTY)");
-    println!("  -q, --quiet   errors only");
-    println!("  --debug       enable file logging (~/.omnilauncher/omnilauncher.log)");
-    println!();
-    println!("{}", out.dim("LIFECYCLE"));
-    for (name, desc) in [
-        ("serve", "run the backend API server (foreground)"),
-        ("gui", "launch the desktop shell (--detached to background)"),
-        ("start", "start the backend detached and wait for health"),
-        ("stop", "stop the backend (--gui shell, --all both)"),
-        ("restart", "stop then start"),
-        ("status", "health / process / port / binary view"),
-        ("health", "probe the backend /health endpoint (exit 0 if ok)"),
-        ("logs", "print/tail the log file (-f follow, -n N)"),
-        ("doctor", "diagnostics: config, token, AI, deps"),
-        (
-            "repl",
-            "interactive prompt (default when run as `ol` on a TTY)",
-        ),
-    ] {
-        println!("  {:<9} {}", name, out.dim(desc));
+    print!("{}", render_help_to_string(out));
+}
+
+/// Render the help text to a string (so it can be asserted in tests).
+fn render_help_to_string(out: &Output) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("{}\n", out.cyan("ol — OmniLauncher CLI")));
+    s.push('\n');
+    s.push_str(&format!("{}\n", out.dim("USAGE")));
+    s.push_str("  ol [FLAGS] [COMMAND] [ARGS...]\n");
+    s.push('\n');
+    s.push_str(&format!("{}\n", out.dim("GLOBAL FLAGS")));
+    s.push_str("  --json        machine-readable JSON output\n");
+    s.push_str("  --no-color    disable ANSI color (also NO_COLOR / non-TTY)\n");
+    s.push_str("  -q, --quiet   errors only\n");
+    s.push_str("  --debug       enable file logging (~/.omnilauncher/omnilauncher.log)\n");
+    s.push('\n');
+    s.push_str(&format!("{}\n", out.dim("COMMANDS")));
+    for c in OPS_COMMANDS {
+        s.push_str(&format!("  {:<9} {}\n", c.name, out.dim(c.desc)));
     }
-    println!();
-    println!("{}", out.dim("QUERY"));
-    println!("  {:<9} {}", "ai", out.dim("route text through the AI"));
-    println!("  {:<9} {}", "search", out.dim("bare launcher search"));
-    for c in query::cli_commands() {
-        println!("  {:<9} {}", c.name, out.dim(c.description));
-    }
+    s.push_str(&format!("  {:<9} {}\n", "help", out.dim("show this help")));
+    s.push_str(&format!("  {:<9} {}\n", "version", out.dim("print version")));
+    s
 }
 
 #[cfg(test)]
@@ -341,10 +313,40 @@ mod tests {
     }
 
     #[test]
-    fn ai_without_text_is_usage_error() {
-        match dispatch("ol", &s(&["ai"])) {
-            Dispatch::Handled(code) => assert_eq!(code, 2),
-            _ => panic!("`ai` with no text should be usage error 2"),
+    fn query_commands_are_unknown_now() {
+        // The launcher-query surface (calc/web/…), ai, search, and repl are no
+        // longer CLI commands. Each must be a handled usage error (exit 2), not
+        // routed anywhere.
+        for variant in [
+            &["calc", "2+2"][..],
+            &["ai", "hi"][..],
+            &["search", "x"][..],
+            &["repl"][..],
+            &["grep", "TODO"][..],
+        ] {
+            match dispatch("ol", &s(variant)) {
+                Dispatch::Handled(code) => assert_eq!(code, 2, "{variant:?} should be usage error 2"),
+                _ => panic!("`{variant:?}` should be a handled usage error"),
+            }
+        }
+    }
+
+    #[test]
+    fn bare_ol_prints_help_not_repl() {
+        // Bare `ol` no longer launches a REPL; it prints ops help and exits 0.
+        match dispatch("ol", &[]) {
+            Dispatch::Handled(code) => assert_eq!(code, 0),
+            _ => panic!("bare `ol` should print help and exit 0"),
+        }
+    }
+
+    #[test]
+    fn help_lists_every_ops_command() {
+        // Every OPS_COMMANDS verb name appears in the rendered help text.
+        let out = Output::resolve(false, true, false); // no-color for stable matching
+        let help = render_help_to_string(&out);
+        for c in OPS_COMMANDS {
+            assert!(help.contains(c.name), "help missing ops verb '{}'", c.name);
         }
     }
 
@@ -366,16 +368,6 @@ mod tests {
                 Dispatch::Handled(_) => {}
                 _ => panic!("`{variant:?}` should be handled"),
             }
-        }
-    }
-
-    #[test]
-    fn shell_duplicate_command_is_rejected_with_redirect() {
-        // `ol grep ...` is no longer a command — it should be a usage error (2),
-        // not silently run a reimplementation.
-        match dispatch("ol", &s(&["grep", "TODO"])) {
-            Dispatch::Handled(code) => assert_eq!(code, 2),
-            _ => panic!("shell-duplicating command should be a handled usage error"),
         }
     }
 
