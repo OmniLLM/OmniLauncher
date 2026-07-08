@@ -58,193 +58,73 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 BIN_DIR="$REPO_DIR/src-tauri/target/release"
+# Single self-dispatching binary. The historical role copies
+# (omnilauncher-frontend / omnilauncher-backend) are gone — the binary now owns
+# all lifecycle commands and decides its mode from the subcommand (serve / gui /
+# start / stop / ...). PID files live under ~/.omnilauncher/run/ (owned by the
+# binary), NOT the repo-local .run/ anymore.
 BASE_EXE="$BIN_DIR/omnilauncher"
-FRONTEND_EXE="$BIN_DIR/omnilauncher-frontend"
-BACKEND_EXE="$BIN_DIR/omnilauncher-backend"
-RUN_DIR="$REPO_DIR/.run"
-mkdir -p "$RUN_DIR" 2>/dev/null || true
-FRONTEND_PID_FILE="$RUN_DIR/omnilauncher-frontend.pid"
-BACKEND_PID_FILE="$RUN_DIR/omnilauncher-backend.pid"
+GUI_PID_FILE="$HOME/.omnilauncher/run/omnilauncher-gui.pid"
 
 # -- Helpers ------------------------------------------------------------------
-# Copy the freshly-built omnilauncher binary into role-named file(s) and
-# remove the generic source so we don't ship three identical files.
-#   prepare_binaries frontend  -> only omnilauncher-frontend remains
-#   prepare_binaries backend   -> only omnilauncher-backend remains
-#   prepare_binaries both      -> both role files exist; bare omnilauncher gone
-# Idempotent: if the bare omnilauncher is missing but the requested role
-# file already exists, succeed silently.
-prepare_binaries() {
-    local role="${1:-both}"
-    case "$role" in
-        frontend|backend|both) ;;
-        *)
-            err "prepare_binaries: unknown role '$role' (expected frontend|backend|both)"
-            return 2
-            ;;
-    esac
-
-    if [ ! -f "$BASE_EXE" ]; then
-        local have_fe=0 have_be=0
-        [ -f "$FRONTEND_EXE" ] && have_fe=1
-        [ -f "$BACKEND_EXE" ] && have_be=1
-        case "$role" in
-            frontend) [ "$have_fe" = "1" ] && return 0 ;;
-            backend)  [ "$have_be" = "1" ] && return 0 ;;
-            both)     [ "$have_fe" = "1" ] && [ "$have_be" = "1" ] && return 0 ;;
-        esac
+# Ensure the single release binary exists before delegating a lifecycle command
+# to it.
+ensure_binary() {
+    if [ ! -x "$BASE_EXE" ]; then
         err "Release binary not found at $BASE_EXE"
-        err "Run: make build-frontend or make build-backend"
+        err "Run: make build"
         exit 1
     fi
-
-    case "$role" in
-        frontend|both) cp -f "$BASE_EXE" "$FRONTEND_EXE" ;;
-    esac
-    case "$role" in
-        backend|both)  cp -f "$BASE_EXE" "$BACKEND_EXE" ;;
-    esac
-    rm -f "$BASE_EXE"
-
-    ok "Prepared role binaries (role=$role):"
-    [ -f "$FRONTEND_EXE" ] && echo "  frontend: $FRONTEND_EXE"
-    [ -f "$BACKEND_EXE" ]  && echo "  backend:  $BACKEND_EXE"
-    return 0
 }
 
-# Make sure the role-named binaries needed by the caller exist. Role-aware
-# so `start_backend` doesn't complain when the frontend hasn't been built
-# yet (and vice versa). Falls through to `prepare_binaries` to copy/rename
-# from the bare omnilauncher if it's still around.
-ensure_role_binaries() {
-    local role="${1:-both}"
-    case "$role" in
-        frontend) [ -f "$FRONTEND_EXE" ] && return 0 ;;
-        backend)  [ -f "$BACKEND_EXE" ] && return 0 ;;
-        both)     [ -f "$FRONTEND_EXE" ] && [ -f "$BACKEND_EXE" ] && return 0 ;;
-    esac
-    prepare_binaries "$role"
+# Backend lifecycle now delegates entirely to the self-contained binary, which
+# spawns a detached `serve`, tracks its PID under ~/.omnilauncher/run/, and waits
+# for /health. Host/port come from the environment the binary inherits.
+start_backend() {
+    ensure_binary
+    export OMNILAUNCHER_SERVER_HOST="$SERVER_HOST"
+    export OMNILAUNCHER_SERVER_PORT="$SERVER_PORT"
+    "$BASE_EXE" start $DEBUG_FLAG
 }
 
-remove_binaries() {
-    rm -f "$BASE_EXE" "$FRONTEND_EXE" "$BACKEND_EXE" 2>/dev/null || true
+stop_backend() {
+    ensure_binary
+    "$BASE_EXE" stop || true
 }
 
-# Stop processes by name (basename of binary). Falls back to pid file.
-stop_by_name() {
-    local name="$1"
-    local pid_file="$2"
-    local stopped=0
+# GUI (desktop shell) lifecycle. `gui --detached` backgrounds the shell and
+# writes ~/.omnilauncher/run/omnilauncher-gui.pid; we stop it via that file.
+start_frontend() {
+    ensure_binary
+    export OMNILAUNCHER_BACKEND_URL="$BACKEND_URL"
+    "$BASE_EXE" gui --detached $DEBUG_FLAG
+}
 
-    if command -v pkill >/dev/null 2>&1; then
-        if pkill -x -f "$name" 2>/dev/null; then
-            stopped=1
-        fi
-    fi
-
-    # pid-file fallback
-    if [ -f "$pid_file" ]; then
+stop_frontend() {
+    if [ -f "$GUI_PID_FILE" ]; then
         local pid
-        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        pid="$(cat "$GUI_PID_FILE" 2>/dev/null || true)"
         if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
             sleep 0.2
             kill -9 "$pid" 2>/dev/null || true
-            stopped=1
+            ok "Stopped desktop shell (pid=$pid)"
         fi
-        rm -f "$pid_file" 2>/dev/null || true
-    fi
-
-    if [ "$stopped" = "1" ]; then
-        ok "Stopped $name"
-    fi
-}
-
-stop_frontend() {
-    stop_by_name "omnilauncher-frontend" "$FRONTEND_PID_FILE"
-    # Older single-binary variant
-    if command -v pkill >/dev/null 2>&1; then
-        pkill -x "omnilauncher" 2>/dev/null || true
-    fi
-}
-
-stop_backend() {
-    stop_by_name "omnilauncher-backend" "$BACKEND_PID_FILE"
-
-    # Free the port if anything else is camped on it.
-    local pid_on_port=""
-    if command -v lsof >/dev/null 2>&1; then
-        pid_on_port="$(lsof -ti tcp:"$SERVER_PORT" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
-    fi
-    if [ -z "$pid_on_port" ] && command -v ss >/dev/null 2>&1; then
-        pid_on_port="$(ss -tlnpH 2>/dev/null | awk -v p=":$SERVER_PORT" '$4 ~ p {print $0}' \
-            | grep -oE 'pid=[0-9]+' | head -n 1 | cut -d= -f2 || true)"
-    fi
-    if [ -n "${pid_on_port:-}" ]; then
-        kill "$pid_on_port" 2>/dev/null || true
-        sleep 0.2
-        kill -9 "$pid_on_port" 2>/dev/null || true
-    fi
-}
-
-# Start a binary detached, write its pid to a file.
-start_detached() {
-    local exe="$1"; shift
-    local pid_file="$1"; shift
-    # Remaining args ($@) are passed to the binary.
-
-    if [ ! -x "$exe" ]; then
-        err "Not executable: $exe"
-        exit 1
-    fi
-
-    # nohup + setsid so it survives this shell.
-    if command -v setsid >/dev/null 2>&1; then
-        setsid nohup "$exe" "$@" >/dev/null 2>&1 < /dev/null &
-    else
-        nohup "$exe" "$@" >/dev/null 2>&1 < /dev/null &
-    fi
-    local pid=$!
-    echo "$pid" > "$pid_file"
-    ok "Started $(basename "$exe") (pid=$pid)"
-}
-
-start_frontend() {
-    ensure_role_binaries frontend
-    export OMNILAUNCHER_BACKEND_URL="$BACKEND_URL"
-    cd "$REPO_DIR"
-    if [ -n "$DEBUG_FLAG" ]; then
-        start_detached "$FRONTEND_EXE" "$FRONTEND_PID_FILE" "$DEBUG_FLAG"
-    else
-        start_detached "$FRONTEND_EXE" "$FRONTEND_PID_FILE"
-    fi
-}
-
-start_backend() {
-    ensure_role_binaries backend
-    export OMNILAUNCHER_SERVER_HOST="$SERVER_HOST"
-    export OMNILAUNCHER_SERVER_PORT="$SERVER_PORT"
-    cd "$REPO_DIR"
-    if [ -n "$DEBUG_FLAG" ]; then
-        start_detached "$BACKEND_EXE" "$BACKEND_PID_FILE" --server "$DEBUG_FLAG"
-    else
-        start_detached "$BACKEND_EXE" "$BACKEND_PID_FILE" --server
+        rm -f "$GUI_PID_FILE" 2>/dev/null || true
     fi
 }
 
 start_prod_debug_backend() {
-    ensure_role_binaries backend
+    ensure_binary
     export OMNILAUNCHER_SERVER_HOST="$SERVER_HOST"
     export OMNILAUNCHER_SERVER_PORT="$SERVER_PORT"
-    cd "$REPO_DIR"
-    start_detached "$BACKEND_EXE" "$BACKEND_PID_FILE" --server --debug
+    "$BASE_EXE" start --debug
 }
 
 start_prod_debug_frontend() {
-    ensure_role_binaries frontend
+    ensure_binary
     export OMNILAUNCHER_BACKEND_URL="$BACKEND_URL"
-    cd "$REPO_DIR"
-    start_detached "$FRONTEND_EXE" "$FRONTEND_PID_FILE" --debug
+    "$BASE_EXE" gui --detached --debug
 }
 
 start_wsl_backend_unsupported() {
@@ -270,149 +150,19 @@ test_backend() {
     fi
 }
 
-find_process_pids() {
-    local name="$1"
-
-    # Linux task names are limited to 15 bytes, so `pgrep -x` cannot find long
-    # role names like omnilauncher-backend. Match the executable basename from
-    # the full argv instead.
-    ps -eo pid=,args= 2>/dev/null | awk -v name="$name" '
-        {
-            pid = $1
-            $1 = ""
-            sub(/^[[:space:]]+/, "")
-            split($0, argv, /[[:space:]]+/)
-            exe = argv[1]
-            sub(/^.*\//, "", exe)
-            if (exe == name) print pid
-        }
-    '
-}
-
-find_server_pids() {
-    {
-        find_process_pids omnilauncher-backend
-        ps -eo pid=,args= 2>/dev/null | awk '
-            /[[:space:]]--server([[:space:]]|$)/ {
-                pid = $1
-                $1 = ""
-                sub(/^[[:space:]]+/, "")
-                split($0, argv, /[[:space:]]+/)
-                exe = argv[1]
-                sub(/^.*\//, "", exe)
-                if (exe == "omnilauncher") print pid
-            }
-        '
-    } | awk '!seen[$0]++'
-}
-
-find_listener_pid() {
-    local port="$1"
-    local pid=""
-
-    if command -v lsof >/dev/null 2>&1; then
-        pid="$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
-    fi
-    if [ -z "$pid" ] && command -v ss >/dev/null 2>&1; then
-        pid="$(ss -tlnpH 2>/dev/null | awk -v p=":$port" '
-            $4 ~ p && match($0, /pid=[0-9]+/) {
-                print substr($0, RSTART + 4, RLENGTH - 4)
-                exit
-            }
-        ')"
-    fi
-
-    printf "%s\n" "$pid"
-}
-
+# `make status` / `make logs` delegate to the binary's own rich implementations.
+# `status` is informational here, so we don't propagate its exit code (the
+# binary exits non-zero when no managed backend is running, which shouldn't fail
+# `make status`).
 show_status() {
-    echo
-    info "=== OmniLauncher Status ==="
-    echo
+    ensure_binary
+    "$BASE_EXE" status || true
+}
 
-    # --- Binaries ---
-    printf "%b\n" "${YELLOW}--- Binaries ---${NC}"
-    if [ -f "$FRONTEND_EXE" ]; then
-        local sz
-        sz="$(du -m "$FRONTEND_EXE" 2>/dev/null | awk '{print $1}')"
-        ok "  frontend exe: OK  (${sz:-?} MB)"
-    else
-        err "  frontend exe: MISSING"
-    fi
-    if [ -f "$BACKEND_EXE" ]; then
-        local sz
-        sz="$(du -m "$BACKEND_EXE" 2>/dev/null | awk '{print $1}')"
-        ok "  backend  exe: OK  (${sz:-?} MB)"
-    else
-        err "  backend  exe: MISSING"
-    fi
-
-    # --- Processes ---
-    printf "%b\n" "${YELLOW}--- Processes ---${NC}"
-    local fe_pids be_pids
-    fe_pids="$(find_process_pids omnilauncher-frontend)"
-    if [ -n "$fe_pids" ]; then
-        for pid in $fe_pids; do
-            local mem_kb mem_mb
-            mem_kb="$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
-            if [ -n "${mem_kb:-}" ]; then
-                mem_mb="$(awk "BEGIN{printf \"%.1f\", $mem_kb/1024}")"
-            else
-                mem_mb="?"
-            fi
-            ok "  frontend: RUNNING  PID=$pid  MEM=${mem_mb}MB"
-        done
-    else
-        err "  frontend: STOPPED"
-    fi
-
-    be_pids="$(find_server_pids)"
-    if [ -z "$be_pids" ]; then
-        be_pids="$(find_listener_pid "$SERVER_PORT")"
-    fi
-    if [ -n "$be_pids" ]; then
-        for pid in $be_pids; do
-            local mem_kb mem_mb
-            mem_kb="$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
-            if [ -n "${mem_kb:-}" ]; then
-                mem_mb="$(awk "BEGIN{printf \"%.1f\", $mem_kb/1024}")"
-            else
-                mem_mb="?"
-            fi
-            ok "  backend:  RUNNING  PID=$pid  MEM=${mem_mb}MB"
-        done
-    else
-        err "  backend:  STOPPED"
-    fi
-
-    # --- Port ---
-    printf "%b\n" "${YELLOW}--- Network ---${NC}"
-    local listener=""
-    if command -v ss >/dev/null 2>&1; then
-        listener="$(ss -tlnH 2>/dev/null | awk -v p=":$SERVER_PORT" '$4 ~ p {print; exit}')"
-    elif command -v lsof >/dev/null 2>&1; then
-        listener="$(lsof -iTCP:"$SERVER_PORT" -sTCP:LISTEN 2>/dev/null | sed -n '2p')"
-    fi
-    if [ -n "$listener" ]; then
-        ok "  port $SERVER_PORT: LISTENING"
-    else
-        err "  port $SERVER_PORT: NOT LISTENING"
-    fi
-
-    # --- Health ---
-    printf "%b\n" "${YELLOW}--- Health ---${NC}"
-    if command -v curl >/dev/null 2>&1; then
-        local body
-        if body="$(curl -fsS --max-time 3 "$BACKEND_URL/health" 2>/dev/null)"; then
-            ok "  $BACKEND_URL/health: OK"
-            echo "    $body"
-        else
-            err "  $BACKEND_URL/health: UNREACHABLE"
-        fi
-    else
-        warn "  curl not found, skipping health probe"
-    fi
-    echo
+# Remove the built binary (used by REBUILD=1 flows before a fresh build).
+remove_binaries() {
+    rm -f "$BASE_EXE" 2>/dev/null || true
+    ok "Removed $BASE_EXE"
 }
 
 clean_frontend() {
@@ -443,7 +193,6 @@ case "$ACTION" in
     start-wsl-backend|restart-wsl-backend) start_wsl_backend_unsupported ;;
     test-backend)         test_backend ;;
     status)               show_status ;;
-    prepare-binaries)     prepare_binaries "${1:-both}" ;;
     remove-binary)        remove_binaries ;;
     clean-frontend)       clean_frontend ;;
     clean-backend)        clean_backend ;;
@@ -452,7 +201,7 @@ case "$ACTION" in
         err "ops.sh: unknown action '$ACTION'"
         echo "valid actions: stop-frontend stop-backend stop-all start-frontend start-backend"
         echo "               prod-debug-backend prod-debug-frontend prod-debug"
-        echo "               test-backend status prepare-binaries remove-binary"
+        echo "               test-backend status remove-binary"
         echo "               clean-frontend clean-backend clean"
         exit 2
         ;;

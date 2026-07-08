@@ -4,7 +4,7 @@
         start start-frontend start-backend start-wsl-backend \
         restart restart-frontend restart-backend restart-wsl-backend \
         clean clean-frontend clean-backend \
-        remove-binary prepare-binaries \
+        remove-binary install-cli uninstall-cli \
         logs status \
         prod-debug prod-debug-backend prod-debug-frontend \
         test test-frontend test-rust test-backend test-health test-smoke test-e2e test-unit test-all \

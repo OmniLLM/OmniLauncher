@@ -1,8 +1,13 @@
 # OmniLauncher `ol` CLI — Design
 
 **Date:** 2026-07-08
-**Status:** Approved (pending final spec review)
+**Status:** Implemented (2026-07-08)
 **Scope:** Turn OmniLauncher into a self-contained binary with a first-class terminal CLI (`ol`), owning all lifecycle/ops commands and exposing the existing plugin/slash-command surface from the terminal, with polished, consistent output.
+
+> **Implementation notes (deviations from the design as written):**
+> - **CLI framework:** the query subcommands are generated at runtime from `SLASH_COMMANDS`, and global flags must be accepted position-independently (e.g. `ol grep TODO --json`) while hyphen-bearing query args pass through verbatim. A small hand-rolled argv dispatcher (`cli::dispatch`) serves these needs better than `clap`'s static derive tree, so `clap` was **not** added; `rustyline` is used for the REPL as designed.
+> - **Build system:** `scripts/ops.sh` / `ops.ps1` were kept as **thin shims** that forward `make start/stop/status/…` to the single binary's own subcommands, rather than being deleted. This preserves the existing `make` interface (including WSL/remote backend modes) with minimal churn while making the binary the source of truth for lifecycle. The role-copy (`prepare-binaries`) step is removed; the bare `omnilauncher` is the artifact.
+> - **Logging:** foreground CLI commands default to `Warn`-level terminal logging so one-shot output stays clean; `serve`/`gui`/`--debug` keep full logging.
 
 ---
 

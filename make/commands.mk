@@ -1,13 +1,16 @@
 # -- Internal command fragments ------------------------------------------------
+#
+# Single self-dispatching binary: `cargo build --release` produces one
+# `omnilauncher` artifact that owns every runtime mode (GUI, serve, and the `ol`
+# CLI). There is no longer a frontend/backend role copy step — the historical
+# `prepare-binaries` (which duplicated the binary into role-named files) is gone.
 
 build-frontend-command:
 	$(NPM) run build
 	$(NPX) tauri build --no-bundle
-	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) frontend
 
 build-backend-command:
 	cd src-tauri && $(CARGO) build --release
-	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) backend
 
 maybe-rebuild-frontend:
 ifeq ($(REBUILD),1)
@@ -155,5 +158,14 @@ status:
 remove-binary:
 	$(OPS) remove-binary
 
-prepare-binaries:
-	$(OPS) prepare-binaries $(OPS_ROLE_FLAG) $(ROLE)
+# Symlink the single binary onto PATH as `ol` so the CLI/REPL is reachable from
+# any directory. Idempotent; warns if ~/.local/bin isn't on PATH.
+install-cli:
+	@mkdir -p "$(HOME)/.local/bin"
+	@ln -sf "$(CURDIR)/src-tauri/target/release/omnilauncher" "$(HOME)/.local/bin/ol"
+	@echo "linked $(HOME)/.local/bin/ol -> src-tauri/target/release/omnilauncher"
+	@case ":$$PATH:" in *":$(HOME)/.local/bin:"*) ;; *) echo "warning: $(HOME)/.local/bin is not on your PATH — add it to use \`ol\`";; esac
+
+uninstall-cli:
+	@rm -f "$(HOME)/.local/bin/ol"
+	@echo "removed $(HOME)/.local/bin/ol"

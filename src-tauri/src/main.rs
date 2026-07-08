@@ -25,6 +25,10 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
+/// Terminal CLI (`ol`): clap-free multi-call dispatch, lifecycle/ops commands,
+/// in-process query surface, and the interactive REPL. See `cli/mod.rs`.
+mod cli;
+
 fn window_pos_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let mut p = std::path::PathBuf::from(home);
@@ -1925,8 +1929,13 @@ $img.Save('{}');"#,
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let debug_enabled = args.iter().any(|arg| arg == "--debug");
-    let server_mode = args.iter().any(|arg| arg == "--server");
+    let argv0 = args.first().cloned().unwrap_or_default();
+    let rest: Vec<String> = args.iter().skip(1).cloned().collect();
+
+    // Logging is initialized up front (before any dispatch) so every path —
+    // GUI, serve, and the new CLI commands — logs consistently. `--debug`
+    // anywhere in argv enables append-to-file logging, exactly as before.
+    let debug_enabled = cli::wants_debug(&args);
     init_debug_logging(debug_enabled);
 
     if debug_enabled {
@@ -1935,161 +1944,188 @@ fn main() {
             "CLI args: {}",
             omnilauncher_lib::log_masking::mask_argv(&args)
         );
-    } else if TermLogger::init(
-        LevelFilter::Info,
-        ConfigBuilder::new().build(),
-        TerminalMode::Stderr,
-        ColorChoice::Never,
-    )
-    .is_ok()
-    {
-        log::info!("Running without debug file logging");
+    } else {
+        // Foreground CLI commands (calc, ps, status, …) should not spew INFO
+        // chatter onto the terminal — only long-running modes (serve/gui) and
+        // `--debug` runs want verbose logs. Use Warn for in-process CLI
+        // commands, Info otherwise, so output stays clean and polished.
+        let term_level = if cli::is_foreground_cli(&argv0, &rest) {
+            LevelFilter::Warn
+        } else {
+            LevelFilter::Info
+        };
+        if TermLogger::init(
+            term_level,
+            ConfigBuilder::new().build(),
+            TerminalMode::Stderr,
+            ColorChoice::Never,
+        )
+        .is_ok()
+        {
+            log::info!("Running without debug file logging");
+        }
     }
 
-    let role = if server_mode { "server" } else { "tauri-shell" };
-    log_startup_banner(role, debug_enabled);
+    // Route through the CLI dispatcher. Back-compat is preserved inside
+    // `cli::dispatch`: `--server` anywhere → Serve, `omnilauncher` with no
+    // command → Gui, `ol` with no command → REPL (TTY) or help.
+    match cli::dispatch(&argv0, &rest) {
+        cli::Dispatch::Gui => {
+            log_startup_banner("tauri-shell", debug_enabled);
+            run();
+        }
+        cli::Dispatch::Serve => {
+            log_startup_banner("server", debug_enabled);
+            serve_backend(&args);
+        }
+        cli::Dispatch::Handled(code) => {
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+    }
+}
 
-    if server_mode {
-        let settings = load_settings_with_overrides(&args);
-        let ai_client = AiClient::with_retry(
-            settings.ai_base_url.clone(),
-            settings.resolve_ai_api_key(),
-            settings.ai_model.clone(),
-            settings.ai_timeout_secs,
-            settings.ai_max_retry_attempts,
-            settings.ai_retry_base_delay_ms,
+/// Run the backend API server in the foreground. This is the body of the
+/// historical `--server` mode, extracted verbatim so both the legacy
+/// `--server` flag and the new `ol serve` subcommand share one implementation
+/// (auth-token resolution, optional A2A server, host/port env handling). Takes
+/// the full argv so `load_settings_with_overrides` still sees CLI overrides.
+pub fn serve_backend(args: &[String]) {
+    let settings = load_settings_with_overrides(args);
+    let ai_client = AiClient::with_retry(
+        settings.ai_base_url.clone(),
+        settings.resolve_ai_api_key(),
+        settings.ai_model.clone(),
+        settings.ai_timeout_secs,
+        settings.ai_max_retry_attempts,
+        settings.ai_retry_base_delay_ms,
+    );
+    let mut skill_manager = SkillManager::new();
+    skill_manager.load_all();
+
+    // Resolve the per-launch auth token. Precedence:
+    //   1. `OMNILAUNCHER_AUTH_TOKEN` env (user-pinned, takes priority — lets
+    //      cross-machine deployments agree on a stable, user-configured
+    //      token without depending on the local-only token file).
+    //   2. Existing `~/.config/omnilauncher/server-token` on disk — REUSED
+    //      across restarts so same-machine frontends keep authenticating
+    //      after a backend restart. Previously we regenerated on every
+    //      launch, which silently broke clients still sending the old token:
+    //      the WSL backend would mint a fresh random token on each
+    //      restart, the Windows shell still sent the OLD token from its
+    //      own settings.json, the backend returned 401, and the frontend's
+    //      `get_settings` catch path silently substituted hardcoded
+    //      defaults — Preferences appeared to "not load settings.json".
+    //   3. Generate a fresh random token (first-run / file missing-or-empty
+    //      / unreadable).
+    // In all cases we (re-)write the token to disk so the same-machine
+    // shell continues to work with zero configuration and the file always
+    // matches the live in-memory token.
+    let (auth_token, token_source) = match std::env::var("OMNILAUNCHER_AUTH_TOKEN") {
+        Ok(t) if !t.trim().is_empty() => (t.trim().to_string(), "OMNILAUNCHER_AUTH_TOKEN env"),
+        _ => match std::fs::read_to_string(server_token_path()) {
+            Ok(s) if !s.trim().is_empty() => (
+                s.trim().to_string(),
+                "existing server-token file (reused across restarts)",
+            ),
+            _ => (
+                server::generate_auth_token(),
+                "freshly generated random token",
+            ),
+        },
+    };
+    log::info!("server auth token sourced from {token_source}");
+    if let Err(e) = std::fs::write(server_token_path(), auth_token.as_bytes()) {
+        log::warn!("failed to persist server auth token: {e}");
+    } else {
+        log::info!(
+            "server auth token written to {}",
+            server_token_path().display()
         );
-        let mut skill_manager = SkillManager::new();
-        skill_manager.load_all();
+    }
 
-        // Resolve the per-launch auth token. Precedence:
-        //   1. `OMNILAUNCHER_AUTH_TOKEN` env (user-pinned, takes priority — lets
-        //      cross-machine deployments agree on a stable, user-configured
-        //      token without depending on the local-only token file).
-        //   2. Existing `~/.config/omnilauncher/server-token` on disk — REUSED
-        //      across restarts so same-machine frontends keep authenticating
-        //      after a backend restart. Previously we regenerated on every
-        //      launch, which silently broke clients still sending the old token:
-        //      the WSL backend would mint a fresh random token on each
-        //      restart, the Windows shell still sent the OLD token from its
-        //      own settings.json, the backend returned 401, and the frontend's
-        //      `get_settings` catch path silently substituted hardcoded
-        //      defaults — Preferences appeared to "not load settings.json".
-        //   3. Generate a fresh random token (first-run / file missing-or-empty
-        //      / unreadable).
-        // In all cases we (re-)write the token to disk so the same-machine
-        // shell continues to work with zero configuration and the file always
-        // matches the live in-memory token.
-        let (auth_token, token_source) = match std::env::var("OMNILAUNCHER_AUTH_TOKEN") {
-            Ok(t) if !t.trim().is_empty() => (t.trim().to_string(), "OMNILAUNCHER_AUTH_TOKEN env"),
-            _ => match std::fs::read_to_string(server_token_path()) {
-                Ok(s) if !s.trim().is_empty() => (
-                    s.trim().to_string(),
-                    "existing server-token file (reused across restarts)",
-                ),
-                _ => (
-                    server::generate_auth_token(),
-                    "freshly generated random token",
-                ),
-            },
-        };
-        log::info!("server auth token sourced from {token_source}");
-        if let Err(e) = std::fs::write(server_token_path(), auth_token.as_bytes()) {
-            log::warn!("failed to persist server auth token: {e}");
-        } else {
-            log::info!(
-                "server auth token written to {}",
-                server_token_path().display()
-            );
+    let mut conversation = ConversationContext::default();
+    let sid = omnilauncher_lib::db::conversation::current_session_id();
+    conversation.session_id = sid;
+    conversation.max_turns = settings.ai_max_tool_iterations;
+    conversation.messages = omnilauncher_lib::db::conversation::load_recent_for_session(sid, 20);
+
+    let state = server::ServerState {
+        plugin_manager: Arc::new(RwLock::new(create_plugin_manager_builtin_only())),
+        ai_client: Arc::new(RwLock::new(ai_client)),
+        settings: Arc::new(RwLock::new(settings.clone())),
+        conversation: Arc::new(Mutex::new(conversation)),
+        ai_in_flight: Arc::new(Semaphore::new(1)),
+        current_ai_task: Arc::new(Mutex::new(None)),
+        skill_manager: Arc::new(Mutex::new(skill_manager)),
+        event_bus: server::EventBus::default(),
+        latest_selection: Arc::new(Mutex::new(None)),
+        auth_token: Arc::new(auth_token),
+    };
+
+    let host = std::env::var("OMNILAUNCHER_SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let port = std::env::var("OMNILAUNCHER_SERVER_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(1422);
+
+    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    rt.block_on(async move {
+        // ── Conditionally start the A2A server alongside the main API server ──
+        if settings.a2a_enabled {
+            let mut a2a_settings = settings.clone();
+
+            // By this point env/CLI overrides have already been applied to
+            // `settings.a2a_token`. Only generate a new token when no
+            // source provided one (first enable).
+            let a2a_token = match a2a_settings
+                .a2a_token
+                .as_ref()
+                .filter(|t| !t.trim().is_empty())
+            {
+                Some(token) => {
+                    log::info!("a2a: using existing token");
+                    token.clone()
+                }
+                None => {
+                    let new_token = server::generate_auth_token();
+                    log::info!("a2a: generated new auth token (first enable)");
+                    a2a_settings.a2a_token = Some(new_token.clone());
+                    save_settings(&a2a_settings);
+                    new_token
+                }
+            };
+
+            let a2a_host = if a2a_settings.a2a_bind_lan {
+                "0.0.0.0".to_string()
+            } else {
+                "127.0.0.1".to_string()
+            };
+            let a2a_port = a2a_settings.a2a_port;
+
+            let a2a_state = omnilauncher_lib::a2a::server::A2aServerState {
+                adapter: omnilauncher_lib::a2a::adapter::A2aAdapterState {
+                    plugin_manager: state.plugin_manager.clone(),
+                    ai_client: state.ai_client.clone(),
+                    settings: state.settings.clone(),
+                    conversation: state.conversation.clone(),
+                    skill_manager: state.skill_manager.clone(),
+                    task_registry: Arc::new(Mutex::new(
+                        omnilauncher_lib::a2a::tasks::TaskRegistry::new(100),
+                    )),
+                },
+                auth_token: Arc::new(a2a_token),
+            };
+
+            tokio::spawn(async move {
+                omnilauncher_lib::a2a::server::spawn_a2a_server(a2a_state, a2a_host, a2a_port)
+                    .await;
+            });
         }
 
-        let mut conversation = ConversationContext::default();
-        let sid = omnilauncher_lib::db::conversation::current_session_id();
-        conversation.session_id = sid;
-        conversation.max_turns = settings.ai_max_tool_iterations;
-        conversation.messages =
-            omnilauncher_lib::db::conversation::load_recent_for_session(sid, 20);
-
-        let state = server::ServerState {
-            plugin_manager: Arc::new(RwLock::new(create_plugin_manager_builtin_only())),
-            ai_client: Arc::new(RwLock::new(ai_client)),
-            settings: Arc::new(RwLock::new(settings.clone())),
-            conversation: Arc::new(Mutex::new(conversation)),
-            ai_in_flight: Arc::new(Semaphore::new(1)),
-            current_ai_task: Arc::new(Mutex::new(None)),
-            skill_manager: Arc::new(Mutex::new(skill_manager)),
-            event_bus: server::EventBus::default(),
-            latest_selection: Arc::new(Mutex::new(None)),
-            auth_token: Arc::new(auth_token),
-        };
-
-        let host =
-            std::env::var("OMNILAUNCHER_SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-        let port = std::env::var("OMNILAUNCHER_SERVER_PORT")
-            .ok()
-            .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(1422);
-
-        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        rt.block_on(async move {
-            // ── Conditionally start the A2A server alongside the main API server ──
-            if settings.a2a_enabled {
-                let mut a2a_settings = settings.clone();
-
-                // By this point env/CLI overrides have already been applied to
-                // `settings.a2a_token`. Only generate a new token when no
-                // source provided one (first enable).
-                let a2a_token = match a2a_settings
-                    .a2a_token
-                    .as_ref()
-                    .filter(|t| !t.trim().is_empty())
-                {
-                    Some(token) => {
-                        log::info!("a2a: using existing token");
-                        token.clone()
-                    }
-                    None => {
-                        let new_token = server::generate_auth_token();
-                        log::info!("a2a: generated new auth token (first enable)");
-                        a2a_settings.a2a_token = Some(new_token.clone());
-                        save_settings(&a2a_settings);
-                        new_token
-                    }
-                };
-
-                let a2a_host = if a2a_settings.a2a_bind_lan {
-                    "0.0.0.0".to_string()
-                } else {
-                    "127.0.0.1".to_string()
-                };
-                let a2a_port = a2a_settings.a2a_port;
-
-                let a2a_state = omnilauncher_lib::a2a::server::A2aServerState {
-                    adapter: omnilauncher_lib::a2a::adapter::A2aAdapterState {
-                        plugin_manager: state.plugin_manager.clone(),
-                        ai_client: state.ai_client.clone(),
-                        settings: state.settings.clone(),
-                        conversation: state.conversation.clone(),
-                        skill_manager: state.skill_manager.clone(),
-                        task_registry: Arc::new(Mutex::new(
-                            omnilauncher_lib::a2a::tasks::TaskRegistry::new(100),
-                        )),
-                    },
-                    auth_token: Arc::new(a2a_token),
-                };
-
-                tokio::spawn(async move {
-                    omnilauncher_lib::a2a::server::spawn_a2a_server(a2a_state, a2a_host, a2a_port)
-                        .await;
-                });
-            }
-
-            server::spawn_api_server(state, host, port).await;
-        });
-        return;
-    }
-
-    run();
+        server::spawn_api_server(state, host, port).await;
+    });
 }
 
 #[cfg(test)]
