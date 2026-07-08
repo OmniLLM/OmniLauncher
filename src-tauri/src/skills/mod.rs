@@ -391,9 +391,10 @@ fn parse_github_tree_dir(url: &str) -> Option<(crate::gh_helper::GithubRepoRef, 
     if action != "tree" || owner.is_empty() || repo.is_empty() || branch.is_empty() {
         return None;
     }
-    if !crate::gh_helper::is_known_github_host(host) {
-        return None;
-    }
+    // Accept any GitHub-shaped HTTP(S) host here. Reachability/auth is checked
+    // later by git/gh/curl; restricting parsing to currently-known gh hosts makes
+    // enterprise URLs impossible to validate in offline tests and prevents users
+    // from pasting a new GHE host before gh has cached it.
     let dir_in_repo = parts[7..].join("/");
     let dir_in_repo = dir_in_repo.trim_end_matches('/').to_string();
     if dir_in_repo.ends_with("SKILL.md") {
@@ -423,10 +424,19 @@ fn parse_github_repo_root(url: &str) -> Option<crate::gh_helper::GithubRepoRef> 
     if parts.len() != 5 {
         return None;
     }
-    if parts[3].is_empty() || parts[4].is_empty() {
+    let host = parts[2];
+    let owner = parts[3];
+    let repo = parts[4].trim_end_matches(".git");
+    if host.is_empty() || owner.is_empty() || repo.is_empty() {
         return None;
     }
-    crate::gh_helper::parse_github_repo(trimmed)
+    // Accept any GitHub-shaped HTTP(S) host here. Network/auth validation happens
+    // when git/gh/curl actually tries to fetch the repo.
+    Some(crate::gh_helper::GithubRepoRef {
+        host: host.to_string(),
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
 }
 
 /// Resolve the repository's default branch (`main`, `master`, etc.) using

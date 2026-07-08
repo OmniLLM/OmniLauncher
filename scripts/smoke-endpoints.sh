@@ -173,34 +173,38 @@ printf "%b\n" "${YELLOW}--- Error Handling ---${NC}"
 check GET "/api/nonexistent" "" 404
 
 # ── `ol` CLI (in-process, no backend needed) ──────────────────────────────────
-# Exercises the terminal CLI's offline command surface: a scalar slash command,
-# JSON output shape, and a filesystem grep. Skipped if the binary isn't built.
+# Exercises the terminal CLI's current ops-only command surface. Query commands
+# such as calc/ps/grep are intentionally no longer exposed by `ol`; keep this
+# smoke test aligned with src-tauri/src/cli/mod.rs.
 OL_BIN="$(dirname -- "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)")/src-tauri/target/release/omnilauncher"
 printf "%b\n" "${YELLOW}--- ol CLI ---${NC}"
 if [ -x "$OL_BIN" ]; then
-    # calc: content must contain the computed value.
-    if "$OL_BIN" --no-color calc "2+2" 2>/dev/null | grep -q "4"; then
-        printf "${GREEN}OK   ol calc \"2+2\" -> contains 4${NC}\n"; passed=$((passed+1))
+    # help: command list includes an ops verb and excludes removed query verbs.
+    help_out="$($OL_BIN --no-color help 2>/dev/null || true)"
+    if printf '%s' "$help_out" | grep -q "COMMANDS" \
+        && printf '%s' "$help_out" | grep -q "status" \
+        && ! printf '%s' "$help_out" | grep -q "calc"; then
+        printf "${GREEN}OK   ol help -> ops-only command list${NC}\n"; passed=$((passed+1))
     else
-        printf "${RED}FAIL ol calc \"2+2\" -> no result${NC}\n"; failed=$((failed+1))
+        printf "${RED}FAIL ol help -> unexpected command list${NC}\n"; failed=$((failed+1))
     fi
 
-    # --json ps: stdout must be valid JSON.
-    if "$OL_BIN" --json ps 2>/dev/null | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
-        printf "${GREEN}OK   ol --json ps -> valid JSON${NC}\n"; passed=$((passed+1))
+    # --json status: stdout must be valid JSON with backend/health fields.
+    if "$OL_BIN" --json status 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'backend' in d and 'health' in d" 2>/dev/null; then
+        printf "${GREEN}OK   ol --json status -> valid JSON${NC}\n"; passed=$((passed+1))
     else
-        printf "${RED}FAIL ol --json ps -> invalid JSON${NC}\n"; failed=$((failed+1))
+        printf "${RED}FAIL ol --json status -> invalid JSON${NC}\n"; failed=$((failed+1))
     fi
 
-    # grep: find a known string in a temp tree.
-    OL_TMP="$(mktemp -d)"
-    printf 'hello NEEDLE world\n' > "$OL_TMP/probe.txt"
-    if "$OL_BIN" --no-color grep NEEDLE "$OL_TMP" 2>/dev/null | grep -q "NEEDLE"; then
-        printf "${GREEN}OK   ol grep NEEDLE -> match found${NC}\n"; passed=$((passed+1))
+    # Removed query commands must fail as usage errors, not silently reappear.
+    if "$OL_BIN" --no-color calc "2+2" >/tmp/oml-ol-removed.$$ 2>&1; then
+        printf "${RED}FAIL ol calc -> removed command unexpectedly succeeded${NC}\n"; failed=$((failed+1))
+    elif grep -q "unknown command 'calc'" /tmp/oml-ol-removed.$$; then
+        printf "${GREEN}OK   ol calc -> usage error for removed command${NC}\n"; passed=$((passed+1))
     else
-        printf "${RED}FAIL ol grep NEEDLE -> no match${NC}\n"; failed=$((failed+1))
+        printf "${RED}FAIL ol calc -> unexpected failure output${NC}\n"; failed=$((failed+1))
     fi
-    rm -rf "$OL_TMP" 2>/dev/null || true
+    rm -f /tmp/oml-ol-removed.$$ 2>/dev/null || true
 
     # version: exits 0 and prints a version line.
     if "$OL_BIN" version 2>/dev/null | grep -q "OmniLauncher"; then
