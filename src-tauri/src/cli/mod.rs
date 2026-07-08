@@ -1,16 +1,17 @@
-//! `ol` CLI entry: clap command definitions, global flags, argv[0] multi-call
-//! dispatch, and back-compat with the historical `--server` / `--debug` flags.
+//! `ol` CLI entry: global flags, argv[0] multi-call dispatch, and back-compat
+//! with the historical `--server` / `--debug` flags.
 //!
 //! Dispatch model (busybox-style multi-call):
 //!   - invoked as `omnilauncher` with no command → GUI (unchanged desktop launch)
-//!   - invoked as `ol` with no command → REPL when stdin is a TTY, else help
+//!   - invoked as `ol` with no command → print the ops help, then exit
 //!   - both names accept every subcommand and global flag
 //!
-//! The query subcommands (`grep`, `calc`, `ps`, …) are generated from
-//! `launcher_config::SLASH_COMMANDS` so they never drift from the GUI. Because
-//! that set is data-driven, we parse with a small hand-rolled argv scan rather
-//! than a fully static clap derive tree — clap is still used for `--help` text
-//! and the fixed ops subcommands.
+//! `ol` is an ops-only controller for the omnilauncher binary: it exposes the
+//! lifecycle verbs (serve, gui, start, stop, restart, status, health, logs,
+//! doctor) listed in `OPS_COMMANDS`, plus `help`/`version`. It deliberately does
+//! NOT expose the GUI launcher's query palette (calc, web, ps, …) — in a
+//! terminal the user already has a shell. We parse with a small hand-rolled argv
+//! scan rather than a clap derive tree.
 
 pub mod ops;
 pub mod process;
@@ -74,8 +75,8 @@ pub fn wants_debug(args: &[String]) -> bool {
 /// Whether this invocation is a short-lived, foreground CLI command (e.g.
 /// `calc`, `ps`, `status`) as opposed to a long-running mode (`serve`, `gui`,
 /// legacy `--server`) or the bare-GUI default. Used by `main` to keep INFO log
-/// chatter off the terminal for one-shot commands. The REPL (`ol` with no
-/// command on a TTY, or `repl`) also counts as foreground.
+/// chatter off the terminal for one-shot commands. Bare `ol` (no subcommand,
+/// which now prints help) also counts as foreground.
 pub fn is_foreground_cli(argv0: &str, rest: &[String]) -> bool {
     if wants_legacy_server(rest) {
         return false; // serve is long-running
@@ -86,7 +87,7 @@ pub fn is_foreground_cli(argv0: &str, rest: &[String]) -> bool {
         Some("serve") | Some("gui") => false,
         // Any other explicit subcommand is a foreground CLI command.
         Some(_) => true,
-        // No subcommand: `ol` → REPL (foreground); `omnilauncher` → GUI.
+        // No subcommand: `ol` → help (foreground); `omnilauncher` → GUI.
         None => invoked_as_ol(argv0),
     }
 }
@@ -374,14 +375,14 @@ mod tests {
     #[test]
     fn foreground_cli_classification() {
         // One-shot commands are foreground (quiet logging).
-        assert!(is_foreground_cli("ol", &s(&["calc", "2+2"])));
+        assert!(is_foreground_cli("ol", &s(&["status"])));
         assert!(is_foreground_cli("omnilauncher", &s(&["status"])));
-        assert!(is_foreground_cli("ol", &s(&["--json", "ps"])));
+        assert!(is_foreground_cli("ol", &s(&["--json", "status"])));
         // Long-running / windowed modes are not.
         assert!(!is_foreground_cli("ol", &s(&["serve"])));
         assert!(!is_foreground_cli("ol", &s(&["gui"])));
         assert!(!is_foreground_cli("omnilauncher", &s(&["--server"])));
-        // Bare invocation: `ol` → REPL (foreground); `omnilauncher` → GUI.
+        // Bare invocation: `ol` → help (foreground); `omnilauncher` → GUI.
         assert!(is_foreground_cli("ol", &[]));
         assert!(!is_foreground_cli("omnilauncher", &[]));
     }
