@@ -25,8 +25,9 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
-/// Terminal CLI (`ol`): clap-free multi-call dispatch, lifecycle/ops commands,
-/// in-process query surface, and the interactive REPL. See `cli/mod.rs`.
+/// Terminal CLI (`ol`): clap-free multi-call dispatch of lifecycle/ops commands
+/// (serve, start, stop, status, logs, …) plus help/version. Ops-only — no query
+/// surface or REPL. See `cli/mod.rs`.
 mod cli;
 
 fn window_pos_path() -> std::path::PathBuf {
@@ -1968,7 +1969,7 @@ fn main() {
 
     // Route through the CLI dispatcher. Back-compat is preserved inside
     // `cli::dispatch`: `--server` anywhere → Serve, `omnilauncher` with no
-    // command → Gui, `ol` with no command → REPL (TTY) or help.
+    // command → Gui, `ol` with no command → print the ops help.
     match cli::dispatch(&argv0, &rest) {
         cli::Dispatch::Gui => {
             log_startup_banner("tauri-shell", debug_enabled);
