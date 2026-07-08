@@ -28,7 +28,7 @@ pub struct Globals {
     pub debug: bool,
 }
 
-/// The basename `ol` triggers REPL-by-default; anything else (i.e.
+/// The basename `ol` triggers help-by-default; anything else (i.e.
 /// `omnilauncher`) triggers GUI-by-default.
 fn invoked_as_ol(argv0: &str) -> bool {
     std::path::Path::new(argv0)
