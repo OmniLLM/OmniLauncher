@@ -73,7 +73,7 @@ pub fn wants_debug(args: &[String]) -> bool {
 }
 
 /// Whether this invocation is a short-lived, foreground CLI command (e.g.
-/// `calc`, `ps`, `status`) as opposed to a long-running mode (`serve`, `gui`,
+/// `status`, `health`, `doctor`) as opposed to a long-running mode (`serve`, `gui`,
 /// legacy `--server`) or the bare-GUI default. Used by `main` to keep INFO log
 /// chatter off the terminal for one-shot commands. Bare `ol` (no subcommand,
 /// which now prints help) also counts as foreground.
@@ -194,8 +194,10 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
 }
 
 /// One operational verb: the name as typed on the CLI plus its one-line help.
-/// Both `print_help` and the unknown-command path derive from this single list,
-/// so the advertised command set and its help text cannot drift apart.
+/// `OPS_COMMANDS` is the single source of truth for the advertised ops verbs and
+/// their help text — `print_help` renders straight from it, so the command list
+/// and its descriptions cannot drift. (Dispatch keeps explicit per-verb `match`
+/// arms by design, since each verb parses its own flags.)
 struct OpsCommand {
     name: &'static str,
     desc: &'static str,
@@ -343,11 +345,25 @@ mod tests {
 
     #[test]
     fn help_lists_every_ops_command() {
-        // Every OPS_COMMANDS verb name appears in the rendered help text.
+        // Help must show every ops verb AND its description, plus help/version,
+        // and must NOT show any removed launcher-query verb or the old QUERY
+        // section. Asserting the description too (not just the name) catches desc
+        // drift, without coupling the test to exact column padding.
         let out = Output::resolve(false, true, false); // no-color for stable matching
         let help = render_help_to_string(&out);
         for c in OPS_COMMANDS {
             assert!(help.contains(c.name), "help missing ops verb '{}'", c.name);
+            assert!(help.contains(c.desc), "help missing description for '{}'", c.name);
+        }
+        assert!(help.contains("help"), "help missing 'help' entry");
+        assert!(help.contains("version"), "help missing 'version' entry");
+        // Removed surface must not reappear.
+        assert!(!help.contains("QUERY"), "help still has a QUERY section");
+        for removed in ["calc", "search", "repl"] {
+            assert!(
+                !help.contains(removed),
+                "help unexpectedly lists removed command '{removed}'"
+            );
         }
     }
 
