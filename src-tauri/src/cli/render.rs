@@ -7,7 +7,6 @@
 //! or `NO_COLOR` is set (the NO_COLOR standard), and forced off with
 //! `--no-color`.
 
-use omnilauncher_lib::QueryResult;
 use std::io::IsTerminal;
 
 /// Presentation options resolved once from the global CLI flags + environment.
@@ -131,77 +130,6 @@ pub enum Status {
     Error,
 }
 
-/// Render an `AiResponse`-shaped result to stdout: a table when the response
-/// carries launcher `results`, otherwise the free-text `content`. Kept generic
-/// over the pieces so callers don't need to import `AiResponse` here.
-pub fn render_results(out: &Output, content: &str, results: &[QueryResult]) {
-    if out.json {
-        // Serialized by the caller for the AiResponse case; this path handles
-        // the plain (content, results) shape used by search/query.
-        let payload = serde_json::json!({
-            "content": content,
-            "results": results,
-        });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
-        );
-        return;
-    }
-
-    if !results.is_empty() {
-        render_result_table(out, results);
-        return;
-    }
-    // Scalar/text content. Trim a single trailing newline for tidy output.
-    let trimmed = content.trim_end_matches('\n');
-    if !trimmed.is_empty() {
-        println!("{trimmed}");
-    }
-}
-
-/// Render launcher `QueryResult` rows as an aligned two-column table
-/// (title, subtitle) with a dim trailing count line.
-pub fn render_result_table(out: &Output, results: &[QueryResult]) {
-    let rows: Vec<(String, String)> = results
-        .iter()
-        .map(|r| (r.title.clone(), r.subtitle.clone().unwrap_or_default()))
-        .collect();
-
-    let title_w = rows
-        .iter()
-        .map(|(t, _)| display_width(t))
-        .max()
-        .unwrap_or(0);
-
-    for (title, subtitle) in &rows {
-        if subtitle.is_empty() {
-            println!("  {title}");
-        } else {
-            let pad = " ".repeat(title_w.saturating_sub(display_width(title)));
-            println!("  {title}{pad}   {}", out.dim(subtitle));
-        }
-    }
-
-    let n = results.len();
-    let noun = if n == 1 { "result" } else { "results" };
-    println!("  {}", out.dim(&format!("{n} {noun}")));
-}
-
-/// Approximate display width: counts `char`s, treating the handful of wide
-/// glyphs we emit as width-2. Good enough for CLI table alignment without
-/// pulling in a unicode-width crate.
-fn display_width(s: &str) -> usize {
-    s.chars().map(|c| if is_wide(c) { 2 } else { 1 }).sum()
-}
-
-fn is_wide(c: char) -> bool {
-    matches!(c as u32,
-        0x1100..=0x115F | 0x2E80..=0xA4CF | 0xAC00..=0xD7A3 |
-        0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 |
-        0xFFE0..=0xFFE6 | 0x1F300..=0x1FAFF)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,10 +171,4 @@ mod tests {
         assert!(!o.color);
     }
 
-    #[test]
-    fn display_width_counts_wide_glyphs_as_two() {
-        assert_eq!(display_width("ab"), 2);
-        assert_eq!(display_width("中"), 2); // CJK ideograph is double-width
-        assert_eq!(display_width("🚀"), 2); // emoji in the wide range
-    }
 }

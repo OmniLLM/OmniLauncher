@@ -11,7 +11,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// Directory holding PID files and the REPL history: `~/.omnilauncher/run/`.
+/// Directory holding the PID files: `~/.omnilauncher/run/`.
 pub fn run_dir() -> PathBuf {
     let dir = omnilauncher_lib::path_config::data_dir().join("run");
     let _ = std::fs::create_dir_all(&dir);
@@ -26,11 +26,6 @@ pub fn backend_pid_file() -> PathBuf {
 /// PID file for a detached GUI started by `ol gui --detached`.
 pub fn gui_pid_file() -> PathBuf {
     run_dir().join("omnilauncher-gui.pid")
-}
-
-/// Persistent REPL history file: `~/.omnilauncher/repl_history`.
-pub fn repl_history_file() -> PathBuf {
-    omnilauncher_lib::path_config::data_dir().join("repl_history")
 }
 
 /// Write a PID to `path`.
