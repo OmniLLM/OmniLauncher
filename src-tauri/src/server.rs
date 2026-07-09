@@ -297,8 +297,23 @@ async fn serve_api_listener(listener: TcpListener, state: ServerState) {
     }
 }
 
+/// Bind the API server's TCP listener without starting the accept loop. Split
+/// out from `spawn_api_server` so callers (e.g. the detached `ol serve` path)
+/// can observe bind success — and only then record a PID file — instead of
+/// optimistically tracking a process that may immediately lose an
+/// address-in-use race. Returns the bound listener or the bind error.
+pub async fn bind_api_listener(host: &str, port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind((host, port)).await
+}
+
+/// Serve on an already-bound listener until shutdown. Pair with
+/// `bind_api_listener` when you need the bind and serve phases separated.
+pub async fn serve_bound(listener: TcpListener, state: ServerState) {
+    serve_api_listener(listener, state).await;
+}
+
 pub async fn spawn_api_server(state: ServerState, host: String, port: u16) {
-    let listener = match TcpListener::bind((host.as_str(), port)).await {
+    let listener = match bind_api_listener(host.as_str(), port).await {
         Ok(listener) => listener,
         Err(error) => {
             log::error!("failed to bind server on {}:{}: {}", host, port, error);

@@ -26,6 +26,86 @@ fn backend_url() -> String {
     format!("http://127.0.0.1:{}", server_port())
 }
 
+/// Reconciled truth about the backend, derived from BOTH the PID file (what
+/// `ol` started) AND reality (who listens on the port + `/health`). The PID
+/// file alone is not authoritative: a backend launched via `ol serve` directly,
+/// or one inherited from a previous session, serves the port without `ol`
+/// having tracked it. Every lifecycle command routes through `backend_state`
+/// so `status`, `start`, `restart`, and `doctor` can never disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackendState {
+    /// Not listening and no live tracked PID — genuinely down.
+    Stopped,
+    /// Serving on the port, and it is the process in our PID file.
+    /// `pid` is the tracked PID; `healthy` is the `/health` result.
+    Tracked { pid: u32, healthy: bool },
+    /// Serving on the port, but NOT the process we track (PID file missing,
+    /// stale, or pointing elsewhere). `pid` is the real owner if we could
+    /// resolve it from the port (Linux), else `None`. This is the case that
+    /// previously rendered as a contradictory "stopped + listening + ok".
+    Untracked { pid: Option<u32>, healthy: bool },
+}
+
+impl BackendState {
+    /// Whether the backend is serving at all (tracked or not). This — not "is
+    /// there a live PID file" — is the real "is it up?" signal.
+    pub fn is_running(&self) -> bool {
+        !matches!(self, BackendState::Stopped)
+    }
+
+    /// The effective PID of the running backend, tracked or resolved from the
+    /// port; `None` when stopped or when the owner couldn't be resolved.
+    pub fn pid(&self) -> Option<u32> {
+        match self {
+            BackendState::Stopped => None,
+            BackendState::Tracked { pid, .. } => Some(*pid),
+            BackendState::Untracked { pid, .. } => *pid,
+        }
+    }
+}
+
+/// Resolve the reconciled `BackendState` from the PID file and live probes.
+///
+/// Precedence:
+///   1. If our tracked PID is alive AND the port is listening → `Tracked`.
+///   2. Else if the port is listening (someone else is serving) → `Untracked`,
+///      resolving the real owner PID from the port when possible, and clearing
+///      the stale PID file so we don't keep reporting a corpse.
+///   3. Else → `Stopped` (clearing any dead PID file).
+pub fn backend_state() -> BackendState {
+    let port = server_port();
+    let url = backend_url();
+    let tracked = process::read_pid(&process::backend_pid_file()).filter(|&p| process::pid_alive(p));
+    let listening = process::port_listening("127.0.0.1", port);
+
+    match (tracked, listening) {
+        (Some(pid), true) => {
+            let healthy = process::probe_health(&url) == process::Health::Ok;
+            BackendState::Tracked { pid, healthy }
+        }
+        (_, true) => {
+            // Someone is serving but it isn't our tracked process. Drop any
+            // stale PID file so subsequent commands don't trust a dead PID.
+            if tracked.is_none() {
+                process::clear_pid(&process::backend_pid_file());
+            }
+            let healthy = process::probe_health(&url) == process::Health::Ok;
+            let owner = process::port_pid(port);
+            BackendState::Untracked { pid: owner, healthy }
+        }
+        (Some(_pid), false) => {
+            // Tracked PID is alive but the port is closed — it is not serving
+            // (crashed listener, wrong port, still starting elsewhere). Treat as
+            // stopped for lifecycle purposes; leave the PID file for `stop`.
+            BackendState::Stopped
+        }
+        (None, false) => {
+            process::clear_pid(&process::backend_pid_file());
+            BackendState::Stopped
+        }
+    }
+}
+
 /// `ol gui` — launch the desktop shell in the foreground (the old default
 /// no-arg action). With `--detached`, spawn it in the background and record a
 /// PID file instead. `debug` forwards `--debug` to a detached child.
@@ -62,17 +142,30 @@ pub fn gui(out: &Output, detached: bool, debug: bool) -> i32 {
 /// `/health` endpoint to come up (~5s) before reporting. `debug` forwards
 /// `--debug` to the detached backend so file logging is enabled.
 pub fn start(out: &Output, debug: bool) -> i32 {
-    // Already running?
-    if let Some(pid) = process::read_pid(&process::backend_pid_file()) {
-        if process::pid_alive(pid) {
+    // Already serving? Reconcile against reality, not just the PID file — a
+    // backend started via `ol serve` (or inherited) holds the port without a
+    // tracked PID. Spawning a second one would only lose the EADDRINUSE race
+    // and leave a corpse, so report the running one honestly instead.
+    match backend_state() {
+        BackendState::Tracked { pid, .. } => {
             out.info(&format!(
                 "{} backend already running   pid {pid}",
                 out.glyph(Status::Up)
             ));
             return 0;
         }
-        // Stale PID file — clear it and continue.
-        process::clear_pid(&process::backend_pid_file());
+        BackendState::Untracked { pid, .. } => {
+            let who = pid
+                .map(|p| format!("pid {p}"))
+                .unwrap_or_else(|| "unknown pid".to_string());
+            out.info(&format!(
+                "{} backend already running   {who}   {} (not started by ol; use `ol restart` to take over)",
+                out.glyph(Status::Up),
+                out.dim("untracked")
+            ));
+            return 0;
+        }
+        BackendState::Stopped => {}
     }
 
     let exe = match process::current_exe_path() {
@@ -97,49 +190,111 @@ pub fn start(out: &Output, debug: bool) -> i32 {
     let _ = process::write_pid(&process::backend_pid_file(), pid);
 
     let url = backend_url();
-    if process::wait_for_health(&url, Duration::from_secs(5)) {
+    // Health can go green off a *different* backend, so a green probe alone is
+    // not proof OUR child came up. Require both: health responds AND the pid we
+    // spawned is still alive. If the child died (e.g. lost an EADDRINUSE race)
+    // we must not claim success or leave its dead pid on file.
+    if process::wait_for_health(&url, Duration::from_secs(5)) && process::pid_alive(pid) {
         out.success(&format!("backend started   pid {pid}   {url}"));
         0
-    } else {
-        // Spawned but health never went green. Leave it running (it may still be
-        // coming up) but tell the user so they can check `ol logs`.
+    } else if process::pid_alive(pid) {
+        // Spawned, still alive, but health never went green — leave it running
+        // (may still be coming up) but tell the user to check logs.
         out.failure(&format!(
             "backend spawned (pid {pid}) but /health did not respond within 5s — check `ol logs`"
         ));
         1
-    }
-}
-
-/// `ol stop` — stop the detached backend (graceful then forceful) and clear its
-/// PID file.
-pub fn stop(out: &Output) -> i32 {
-    let pid_file = process::backend_pid_file();
-    let Some(pid) = process::read_pid(&pid_file) else {
-        out.failure("backend not running");
-        return 1;
-    };
-    if !process::pid_alive(pid) {
-        process::clear_pid(&pid_file);
-        out.failure("backend not running");
-        return 1;
-    }
-
-    let stopped = process::stop_pid(pid, Duration::from_secs(3));
-    process::clear_pid(&pid_file);
-    if stopped {
-        out.success(&format!("backend stopped   pid {pid}"));
-        0
     } else {
-        out.failure(&format!("failed to stop backend   pid {pid}"));
+        // Child exited before serving. Clear the dead pid so `status`/`stop`
+        // don't trust it, and surface the real reason.
+        process::clear_pid(&process::backend_pid_file());
+        out.failure(
+            "backend failed to start — the process exited (port already in use? check `ol logs`)",
+        );
         1
     }
 }
 
-/// `ol restart` — `stop` (best-effort) then `start`.
+/// `ol stop` — stop the backend and clear its PID file. Reconciles against
+/// reality: if the backend we track isn't the one serving the port (untracked
+/// backend from `ol serve` or a prior session), reclaim the port by stopping
+/// its real owner too, so `stop` actually frees the port the user sees.
+pub fn stop(out: &Output) -> i32 {
+    let pid_file = process::backend_pid_file();
+    match backend_state() {
+        BackendState::Tracked { pid, .. } => {
+            let stopped = process::stop_pid(pid, Duration::from_secs(3));
+            process::clear_pid(&pid_file);
+            if stopped {
+                out.success(&format!("backend stopped   pid {pid}"));
+                0
+            } else {
+                out.failure(&format!("failed to stop backend   pid {pid}"));
+                1
+            }
+        }
+        BackendState::Untracked { pid: Some(pid), .. } => {
+            // Serving but not tracked — reclaim the port by stopping the real
+            // owner we resolved from the port table.
+            let stopped = process::stop_pid(pid, Duration::from_secs(3));
+            process::clear_pid(&pid_file);
+            if stopped {
+                out.success(&format!("backend stopped   pid {pid}   {}", out.dim("(untracked)")));
+                0
+            } else {
+                out.failure(&format!("failed to stop backend   pid {pid}"));
+                1
+            }
+        }
+        BackendState::Untracked { pid: None, .. } => {
+            // Something serves the port but we can't identify the owner (e.g.
+            // non-Linux where port_pid returns None). Don't guess-kill.
+            process::clear_pid(&pid_file);
+            out.failure(&format!(
+                "backend is serving on port {} but its process could not be identified to stop it",
+                server_port()
+            ));
+            1
+        }
+        BackendState::Stopped => {
+            process::clear_pid(&pid_file);
+            out.failure("backend not running");
+            1
+        }
+    }
+}
+
+/// `ol restart` — reclaim the port (stop whatever serves it, tracked or not)
+/// then start a fresh, tracked backend. Because `stop` now reconciles against
+/// reality, a restart run against an untracked backend takes it over cleanly
+/// instead of spawning a doomed duplicate.
 pub fn restart(out: &Output, debug: bool) -> i32 {
-    // Best-effort stop: a "not running" stop is fine before a start.
+    // Best-effort stop: a "not running" stop is fine before a start. When a
+    // backend was serving, wait for the port to actually free so the fresh
+    // `serve` child doesn't lose an EADDRINUSE race against the one we just
+    // signalled.
+    let was_running = backend_state().is_running();
     let _ = stop(out);
+    if was_running {
+        wait_for_port_free("127.0.0.1", server_port(), Duration::from_secs(3));
+    }
     start(out, debug)
+}
+
+/// Poll until `host:port` stops accepting connections or `timeout` elapses.
+/// Returns true if the port is free. Used by `restart` to avoid racing the
+/// just-stopped listener's socket teardown.
+fn wait_for_port_free(host: &str, port: u16, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if !process::port_listening(host, port) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// `ol stop --gui` — stop a detached GUI shell (started via `ol gui --detached`)
@@ -179,9 +334,7 @@ pub fn stop_all(out: &Output) -> i32 {
     let gui_running = process::read_pid(&process::gui_pid_file())
         .map(process::pid_alive)
         .unwrap_or(false);
-    let backend_running = process::read_pid(&process::backend_pid_file())
-        .map(process::pid_alive)
-        .unwrap_or(false);
+    let backend_running = backend_state().is_running();
 
     if !gui_running && !backend_running {
         out.info("nothing running");
@@ -230,12 +383,13 @@ pub fn status(out: &Output) -> i32 {
     let port = server_port();
     let url = backend_url();
 
-    // Backend process
-    let pid = process::read_pid(&process::backend_pid_file()).filter(|&p| process::pid_alive(p));
-    let backend_up = pid.is_some();
-    let mem = pid.and_then(process::pid_memory_bytes);
+    // Reconciled backend truth (PID file + port + health), so the backend line
+    // can never contradict the port/health lines below.
+    let state = backend_state();
+    let backend_up = state.is_running();
+    let mem = state.pid().and_then(process::pid_memory_bytes);
 
-    // Port + health
+    // Port + health (probed independently for the dedicated lines).
     let port_up = process::port_listening("127.0.0.1", port);
     let health = process::probe_health(&url);
     let health_up = health == process::Health::Ok;
@@ -244,9 +398,15 @@ pub fn status(out: &Output) -> i32 {
     let gui_pid = process::read_pid(&process::gui_pid_file()).filter(|&p| process::pid_alive(p));
 
     if out.json {
+        let tracked = matches!(state, BackendState::Tracked { .. });
         let payload = serde_json::json!({
             "version": version,
-            "backend": { "running": backend_up, "pid": pid, "memory_bytes": mem },
+            "backend": {
+                "running": backend_up,
+                "tracked": tracked,
+                "pid": state.pid(),
+                "memory_bytes": mem,
+            },
             "port": { "number": port, "listening": port_up },
             "health": { "ok": health_up },
             "gui": { "running": gui_pid.is_some(), "pid": gui_pid },
@@ -264,14 +424,27 @@ pub fn status(out: &Output) -> i32 {
         out.dim(&format!("v{version}"))
     );
 
-    let backend_line = match (backend_up, pid, mem) {
-        (true, Some(p), Some(m)) => format!(
-            "{} running   pid {p}   {}",
-            out.glyph(Status::Up),
-            human_bytes(m)
-        ),
-        (true, Some(p), None) => format!("{} running   pid {p}", out.glyph(Status::Up)),
-        _ => format!("{} stopped", out.glyph(Status::Down)),
+    let backend_line = match &state {
+        BackendState::Tracked { pid, .. } => match mem {
+            Some(m) => format!(
+                "{} running   pid {pid}   {}",
+                out.glyph(Status::Up),
+                human_bytes(m)
+            ),
+            None => format!("{} running   pid {pid}", out.glyph(Status::Up)),
+        },
+        BackendState::Untracked { pid, .. } => {
+            let who = pid
+                .map(|p| format!("pid {p}"))
+                .unwrap_or_else(|| "pid unknown".to_string());
+            let mem_str = mem.map(|m| format!("   {}", human_bytes(m))).unwrap_or_default();
+            format!(
+                "{} running   {who}{mem_str}   {}",
+                out.glyph(Status::Up),
+                out.dim("untracked")
+            )
+        }
+        BackendState::Stopped => format!("{} stopped", out.glyph(Status::Down)),
     };
     println!("  backend   {backend_line}");
 
@@ -474,19 +647,22 @@ pub fn doctor(out: &Output) -> i32 {
         );
     }
 
-    // 5. backend running?
-    let running = process::read_pid(&process::backend_pid_file())
-        .map(process::pid_alive)
-        .unwrap_or(false);
-    if running {
-        line(out, DoctorState::Ok, "backend", "running");
-    } else {
-        line(
+    // 5. backend running? Reconciled against reality so `doctor` agrees with
+    // `status` — an untracked-but-serving backend counts as running.
+    match backend_state() {
+        BackendState::Tracked { .. } => line(out, DoctorState::Ok, "backend", "running"),
+        BackendState::Untracked { .. } => line(
+            out,
+            DoctorState::Ok,
+            "backend",
+            "running (untracked — not started by ol)",
+        ),
+        BackendState::Stopped => line(
             out,
             DoctorState::Warn,
             "backend",
             "not running (`ol start`)",
-        );
+        ),
     }
 
     match worst {
@@ -571,5 +747,72 @@ mod tests {
         let _ = ai_endpoint_reachable("https://api.openai.com/v1");
         let _ = ai_endpoint_reachable("http://localhost:11434");
         let _ = ai_endpoint_reachable("no-scheme:1234");
+    }
+
+    #[test]
+    fn backend_state_accessors_reflect_variant() {
+        // Stopped: not running, no pid.
+        let s = BackendState::Stopped;
+        assert!(!s.is_running());
+        assert_eq!(s.pid(), None);
+
+        // Tracked: running, pid is the tracked pid.
+        let t = BackendState::Tracked { pid: 4242, healthy: true };
+        assert!(t.is_running());
+        assert_eq!(t.pid(), Some(4242));
+
+        // Untracked with a resolved owner: running, pid is the owner.
+        let u = BackendState::Untracked { pid: Some(99), healthy: false };
+        assert!(u.is_running());
+        assert_eq!(u.pid(), Some(99));
+
+        // Untracked with an unresolved owner (e.g. non-Linux): still running,
+        // but pid is unknown — callers must NOT treat None here as "stopped".
+        let u_unknown = BackendState::Untracked { pid: None, healthy: true };
+        assert!(u_unknown.is_running());
+        assert_eq!(u_unknown.pid(), None);
+    }
+
+    #[test]
+    fn backend_state_is_stopped_when_nothing_listens() {
+        // Hermetic reconciliation check: with the PID file redirected to a fresh
+        // temp dir (so no real user state is touched) and the port pointed at a
+        // dead port, `backend_state` must resolve to `Stopped`. This is the exact
+        // inverse of the reported bug ("stopped" shown while something served).
+        //
+        // Both env vars are process-global, so serialize via a binary-crate-local
+        // lock. (The lib's CONFIG_DIR_ENV_LOCK is `#[cfg(test)]` and thus not
+        // visible to the binary crate's test build.)
+        use std::sync::Mutex;
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let prev_dir = std::env::var_os("OMNILAUNCHER_CONFIG_DIR");
+        let prev_port = std::env::var_os("OMNILAUNCHER_SERVER_PORT");
+        let tmp = std::env::temp_dir().join(format!("ol-statetest-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // SAFETY: guarded by ENV_LOCK; restored below before returning.
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &tmp);
+        std::env::set_var("OMNILAUNCHER_SERVER_PORT", "1"); // privileged, never served
+
+        let state = backend_state();
+
+        // Restore env before asserting so a panic can't leak overrides.
+        match prev_dir {
+            Some(v) => std::env::set_var("OMNILAUNCHER_CONFIG_DIR", v),
+            None => std::env::remove_var("OMNILAUNCHER_CONFIG_DIR"),
+        }
+        match prev_port {
+            Some(v) => std::env::set_var("OMNILAUNCHER_SERVER_PORT", v),
+            None => std::env::remove_var("OMNILAUNCHER_SERVER_PORT"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert_eq!(
+            state,
+            BackendState::Stopped,
+            "a port with no listener must reconcile to Stopped"
+        );
     }
 }

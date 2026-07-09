@@ -98,6 +98,91 @@ pub fn stop_pid(pid: u32, grace: Duration) -> bool {
     !pid_alive(pid)
 }
 
+/// Best-effort lookup of the PID that owns (listens on) `port`, cross-checked
+/// against reality rather than the PID file. Used to reconcile a serving-but-
+/// untracked backend in `status`, and to reclaim the port on `restart`.
+///
+/// Linux-only for now: parses `/proc/net/tcp{,6}` for LISTEN sockets bound to
+/// `port`, collects their inode numbers, then scans `/proc/<pid>/fd/*` for a
+/// `socket:[inode]` symlink pointing at one of them. Returns the first owning
+/// PID found. On non-Linux (or if `/proc` is unavailable) returns `None`, so
+/// callers must treat `None` as "unknown", never as "not running".
+pub fn port_pid(port: u16) -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut inodes = std::collections::HashSet::new();
+        for path in ["/proc/net/tcp", "/proc/net/tcp6"] {
+            collect_listen_inodes(path, port, &mut inodes);
+        }
+        if inodes.is_empty() {
+            return None;
+        }
+        // Scan every process's fd table for a socket inode we care about.
+        let proc_dir = match std::fs::read_dir("/proc") {
+            Ok(d) => d,
+            Err(_) => return None,
+        };
+        for entry in proc_dir.flatten() {
+            let name = entry.file_name();
+            let Some(pid) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
+                continue; // non-numeric /proc entry (e.g. "net", "self")
+            };
+            let fd_dir = match std::fs::read_dir(entry.path().join("fd")) {
+                Ok(d) => d,
+                Err(_) => continue, // process gone or not ours to read
+            };
+            for fd in fd_dir.flatten() {
+                if let Ok(target) = std::fs::read_link(fd.path()) {
+                    if let Some(inode) = target
+                        .to_str()
+                        .and_then(|s| s.strip_prefix("socket:["))
+                        .and_then(|s| s.strip_suffix(']'))
+                    {
+                        if inodes.contains(inode) {
+                            return Some(pid);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = port;
+        None
+    }
+}
+
+/// Parse a `/proc/net/tcp{,6}` table, adding the socket inode of every row that
+/// is in LISTEN state (`st == 0A`) and bound to `port` to `inodes`. Silently
+/// ignores a missing file so IPv6-less or non-Linux systems are a no-op.
+#[cfg(target_os = "linux")]
+fn collect_listen_inodes(
+    path: &str,
+    port: u16,
+    inodes: &mut std::collections::HashSet<String>,
+) {
+    const TCP_LISTEN: &str = "0A";
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for line in content.lines().skip(1) {
+        // Columns: sl local_address rem_address st ... inode
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 10 || cols[3] != TCP_LISTEN {
+            continue;
+        }
+        // local_address is "HEXADDR:HEXPORT"; we only match on the port.
+        let Some(hex_port) = cols[1].rsplit(':').next() else {
+            continue;
+        };
+        if u16::from_str_radix(hex_port, 16).ok() == Some(port) {
+            inodes.insert(cols[9].to_string());
+        }
+    }
+}
+
 /// Whether `host:port` currently accepts a TCP connection (i.e. something is
 /// listening). Uses a short connect timeout so a dead port fails fast.
 pub fn port_listening(host: &str, port: u16) -> bool {
@@ -268,5 +353,28 @@ mod tests {
     #[test]
     fn https_health_probe_is_unreachable_no_tls() {
         assert_eq!(probe_health("https://127.0.0.1:1422"), Health::Unreachable);
+    }
+
+    #[test]
+    fn absent_port_has_no_owner() {
+        // Nothing we control listens on port 1; owner lookup must be None, and
+        // must never mis-resolve to some unrelated process.
+        assert_eq!(port_pid(1), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn port_pid_resolves_own_listener() {
+        use std::net::TcpListener;
+        // Bind an ephemeral port in THIS process, then confirm port_pid maps it
+        // back to our own PID via the /proc/net/tcp + /proc/*/fd scan. This is a
+        // hermetic end-to-end check of the parse (no external backend needed).
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind ephemeral");
+        let port = listener.local_addr().unwrap().port();
+        assert_eq!(
+            port_pid(port),
+            Some(std::process::id()),
+            "port_pid should resolve the current process as the owner of its own listener"
+        );
     }
 }

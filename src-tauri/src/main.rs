@@ -2125,7 +2125,27 @@ pub fn serve_backend(args: &[String]) {
             });
         }
 
-        server::spawn_api_server(state, host, port).await;
+        // Bind first so we only record a PID file for a backend that actually
+        // owns the port. A serve process that loses the address-in-use race
+        // must NOT leave a PID file claiming to be the backend — that is the
+        // drift that made `ol status` show a stale/corpse PID. Registering
+        // self here also means a directly-run `ol serve` (not just `ol start`)
+        // is tracked, so `ol stop`/`status` see it. Only the serve path calls
+        // this — the GUI never binds the API server — so we never mistag the
+        // desktop shell as "the backend".
+        let pid_file = cli::process::backend_pid_file();
+        match server::bind_api_listener(host.as_str(), port).await {
+            Ok(listener) => {
+                let _ = cli::process::write_pid(&pid_file, std::process::id());
+                server::serve_bound(listener, state).await;
+                // Serve loop only returns on shutdown; clear our registration
+                // so a later `status` doesn't trust a dead PID.
+                cli::process::clear_pid(&pid_file);
+            }
+            Err(error) => {
+                log::error!("failed to bind server on {}:{}: {}", host, port, error);
+            }
+        }
     });
 }
 
