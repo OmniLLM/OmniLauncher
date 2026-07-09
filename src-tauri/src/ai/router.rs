@@ -773,6 +773,17 @@ impl Router {
                                 loop_messages.push(nudge);
                                 continue;
                             }
+                            "stop" if mid_task_text_only => {
+                                // GPT-5.5 and other strict chat-completions
+                                // providers use finish_reason="stop" for the
+                                // natural final answer after tool results. That
+                                // structural stop signal wins over the generic
+                                // mid-task text-only nudge; otherwise the router
+                                // keeps appending continuation prompts after the
+                                // task is already complete.
+                                final_content = content;
+                                break;
+                            }
                             _ if mid_task_text_only
                                 && continuation_nudges < MAX_CONTINUATION_NUDGES =>
                             {
@@ -2121,15 +2132,20 @@ mod tests {
         ctx.messages.push(Message::user(&big));
         // assistant announces 3 parallel tool calls, then their 3 results
         ctx.messages.push(assistant_calls(&["A", "B", "C"]));
-        ctx.messages.push(Message::tool_result("A", "shell_exec", "out A"));
-        ctx.messages.push(Message::tool_result("B", "shell_exec", "out B"));
-        ctx.messages.push(Message::tool_result("C", "shell_exec", "out C"));
+        ctx.messages
+            .push(Message::tool_result("A", "shell_exec", "out A"));
+        ctx.messages
+            .push(Message::tool_result("B", "shell_exec", "out B"));
+        ctx.messages
+            .push(Message::tool_result("C", "shell_exec", "out C"));
         // next turn: single tool call + result
         ctx.messages.push(assistant_calls(&["D"]));
-        ctx.messages.push(Message::tool_result("D", "shell_exec", "out D"));
+        ctx.messages
+            .push(Message::tool_result("D", "shell_exec", "out D"));
         // next turn: single tool call + result
         ctx.messages.push(assistant_calls(&["E"]));
-        ctx.messages.push(Message::tool_result("E", "shell_exec", "out E"));
+        ctx.messages
+            .push(Message::tool_result("E", "shell_exec", "out E"));
 
         ctx.compress_if_needed();
 
@@ -2143,10 +2159,13 @@ mod tests {
         let mut ctx = ConversationContext::new(2); // max_messages = 4
         ctx.messages.push(Message::user("hello"));
         ctx.messages.push(assistant_calls(&["A", "B"]));
-        ctx.messages.push(Message::tool_result("A", "shell_exec", "out A"));
-        ctx.messages.push(Message::tool_result("B", "shell_exec", "out B"));
+        ctx.messages
+            .push(Message::tool_result("A", "shell_exec", "out A"));
+        ctx.messages
+            .push(Message::tool_result("B", "shell_exec", "out B"));
         ctx.messages.push(assistant_calls(&["C"]));
-        ctx.messages.push(Message::tool_result("C", "shell_exec", "out C"));
+        ctx.messages
+            .push(Message::tool_result("C", "shell_exec", "out C"));
 
         ctx.trim_to_max();
 

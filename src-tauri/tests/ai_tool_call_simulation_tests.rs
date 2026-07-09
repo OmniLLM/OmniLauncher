@@ -21,6 +21,9 @@
 //! that pattern minimizes the dep surface.
 
 use omnilauncher_lib::ai::client::{AiClient, FunctionCall, Message, ToolCall};
+use omnilauncher_lib::ai::router::{ConversationContext, Router};
+use omnilauncher_lib::plugins::Plugin;
+use omnilauncher_lib::{PluginManager, QueryResult, SkillManager};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -472,6 +475,77 @@ async fn multi_turn_round_trip_tool_use_then_final_answer() {
     assert_eq!(t2_msgs[2]["content"], "Paris, the capital of France.");
 }
 
+struct TestToolPlugin;
+
+#[async_trait::async_trait]
+impl Plugin for TestToolPlugin {
+    fn name(&self) -> &str {
+        "Test Calculator"
+    }
+
+    fn description(&self) -> &str {
+        "Test calculator tool"
+    }
+
+    fn keyword(&self) -> Option<&str> {
+        None
+    }
+
+    async fn query(&self, _q: &omnilauncher_lib::plugins::Query) -> Vec<QueryResult> {
+        vec![]
+    }
+
+    fn tool_schema(&self) -> Option<Value> {
+        Some(one_tool("calculator", "calculate a simple expression"))
+    }
+
+    async fn execute_tool(&self, _args: Value) -> String {
+        "4".to_string()
+    }
+}
+
+#[tokio::test]
+async fn router_accepts_stop_text_after_tool_result_as_final_answer() {
+    // Regression for GPT-5.5-style strict finalization: after the model has
+    // called a tool and then returns content with finish_reason="stop", the
+    // router must accept that text as final. It must NOT append a continuation
+    // nudge and make another LLM request.
+    let mock = MockLlm::start(vec![
+        ScriptedResponse::ok(tool_call_response(vec![(
+            "call_1",
+            "calculator",
+            json!({ "q": "2+2" }),
+        )])),
+        ScriptedResponse::ok(text_response("The answer is 4.")),
+        ScriptedResponse::ok(text_response("unexpected extra request")),
+    ])
+    .await;
+    let client = AiClient::new(mock.base_url.clone(), "".to_string(), "gpt-5.5".to_string());
+    let mut plugin_manager = PluginManager::new();
+    plugin_manager.register(Box::new(TestToolPlugin));
+    let mut context = ConversationContext::default();
+    context.add_user("Use calculator to compute 2+2, then answer.");
+    let mut skill_manager = SkillManager::new();
+
+    let response = Router::ai_route(
+        "Use calculator to compute 2+2, then answer.",
+        &plugin_manager,
+        &client,
+        &context,
+        &mut skill_manager,
+        None,
+        8,
+        true,
+    )
+    .await;
+
+    assert_eq!(response.content, "The answer is 4.");
+    assert_eq!(
+        mock.requests().len(),
+        2,
+        "final stop text after a tool result must not trigger an extra LLM request"
+    );
+}
 #[tokio::test]
 async fn permanent_401_error_returns_api_error_without_retry() {
     // Three responses queued — but on 401 the client should not retry, so
