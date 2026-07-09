@@ -6,13 +6,14 @@
 //!   - invoked as `ol` with no command → print the ops help, then exit
 //!   - both names accept every subcommand and global flag
 //!
-//! `ol` is an ops-only controller for the omnilauncher binary: it exposes the
-//! lifecycle verbs (serve, gui, start, stop, restart, status, health, logs,
-//! doctor) listed in `OPS_COMMANDS`, plus `help`/`version`. It deliberately does
-//! NOT expose the GUI launcher's query palette (calc, web, ps, …) — in a
-//! terminal the user already has a shell. We parse with a small hand-rolled argv
-//! scan rather than a clap derive tree.
+//! `ol` is a controller for the omnilauncher binary: it exposes lifecycle verbs
+//! (serve, gui, start, stop, restart, status, health, logs, doctor) and
+//! resource-management verbs (settings, skills, plugins), plus `help`/`version`.
+//! It deliberately does NOT expose the GUI launcher's query palette (calc, web,
+//! ps, …) — in a terminal the user already has a shell. We parse with a small
+//! hand-rolled argv scan rather than a clap derive tree.
 
+pub mod manage;
 pub mod ops;
 pub mod process;
 pub mod render;
@@ -119,7 +120,7 @@ pub fn dispatch(argv0: &str, rest: &[String]) -> Dispatch {
     let Some(command) = tokens.first().cloned() else {
         if invoked_as_ol(argv0) {
             // Bare `ol` (TTY or not) prints the ops help and exits. There is no
-            // interactive REPL: `ol` only operates the omnilauncher binary.
+            // interactive REPL: `ol` is a command surface, not a shell.
             print_help(&out);
             return Dispatch::Handled(0);
         }
@@ -165,6 +166,11 @@ fn dispatch_command(out: &Output, globals: &Globals, command: &str, args: &[Stri
         }
         "doctor" => Dispatch::Handled(ops::doctor(out)),
 
+        // ── Frontend-managed resources ───────────────────────────────────
+        "settings" => Dispatch::Handled(manage::settings(out, args)),
+        "skills" => Dispatch::Handled(manage::skills(out, args)),
+        "plugins" => Dispatch::Handled(manage::plugins(out, args)),
+
         // ── Help / version ───────────────────────────────────────────────
         "help" | "--help" | "-h" => {
             print_help(out);
@@ -193,8 +199,8 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
         .cloned()
 }
 
-/// One operational verb: the name as typed on the CLI plus its one-line help.
-/// `OPS_COMMANDS` is the single source of truth for the advertised ops verbs and
+/// One CLI verb: the name as typed on the CLI plus its one-line help.
+/// `OPS_COMMANDS` is the single source of truth for the advertised CLI verbs and
 /// their help text — `print_help` renders straight from it, so the command list
 /// and its descriptions cannot drift. (Dispatch keeps explicit per-verb `match`
 /// arms by design, since each verb parses its own flags.)
@@ -203,19 +209,58 @@ struct OpsCommand {
     desc: &'static str,
 }
 
-/// The lifecycle/ops verbs `ol` exposes. `help`/`version` are handled separately
-/// (they are not lifecycle verbs). Adding a verb here + a `match` arm in
+/// The top-level verbs `ol` exposes. `help`/`version` are handled separately.
+/// Adding a verb here + a `match` arm in
 /// `dispatch_command` is all that's needed to surface a new ops command.
 const OPS_COMMANDS: &[OpsCommand] = &[
-    OpsCommand { name: "serve",   desc: "run the backend API server (foreground)" },
-    OpsCommand { name: "gui",     desc: "launch the desktop shell (--detached to background)" },
-    OpsCommand { name: "start",   desc: "start the backend detached and wait for health" },
-    OpsCommand { name: "stop",    desc: "stop the backend (--gui shell, --all both)" },
-    OpsCommand { name: "restart", desc: "stop then start" },
-    OpsCommand { name: "status",  desc: "health / process / port / binary view" },
-    OpsCommand { name: "health",  desc: "probe the backend /health endpoint (exit 0 if ok)" },
-    OpsCommand { name: "logs",    desc: "print/tail the log file (-f follow, -n N)" },
-    OpsCommand { name: "doctor",  desc: "diagnostics: config, token, AI, deps" },
+    OpsCommand {
+        name: "serve",
+        desc: "run the backend API server (foreground)",
+    },
+    OpsCommand {
+        name: "gui",
+        desc: "launch the desktop shell (--detached to background)",
+    },
+    OpsCommand {
+        name: "start",
+        desc: "start the backend detached and wait for health",
+    },
+    OpsCommand {
+        name: "stop",
+        desc: "stop the backend (--gui shell, --all both)",
+    },
+    OpsCommand {
+        name: "restart",
+        desc: "stop then start",
+    },
+    OpsCommand {
+        name: "status",
+        desc: "health / process / port / binary view",
+    },
+    OpsCommand {
+        name: "health",
+        desc: "probe the backend /health endpoint (exit 0 if ok)",
+    },
+    OpsCommand {
+        name: "logs",
+        desc: "print/tail the log file (-f follow, -n N)",
+    },
+    OpsCommand {
+        name: "doctor",
+        desc: "diagnostics: config, token, AI, deps",
+    },
+    OpsCommand {
+        name: "settings",
+        desc: "show/update settings.json fields",
+    },
+    OpsCommand {
+        name: "skills",
+        desc: "list/install/update/remove skills",
+    },
+    OpsCommand {
+        name: "plugins",
+        desc: "list/install/update/remove external plugins",
+    },
 ];
 
 /// Print the top-level help / command list to stdout.
@@ -242,7 +287,11 @@ fn render_help_to_string(out: &Output) -> String {
         s.push_str(&format!("  {:<9} {}\n", c.name, out.dim(c.desc)));
     }
     s.push_str(&format!("  {:<9} {}\n", "help", out.dim("show this help")));
-    s.push_str(&format!("  {:<9} {}\n", "version", out.dim("print version")));
+    s.push_str(&format!(
+        "  {:<9} {}\n",
+        "version",
+        out.dim("print version")
+    ));
     s
 }
 
@@ -328,7 +377,9 @@ mod tests {
             &["grep", "TODO"][..],
         ] {
             match dispatch("ol", &s(variant)) {
-                Dispatch::Handled(code) => assert_eq!(code, 2, "{variant:?} should be usage error 2"),
+                Dispatch::Handled(code) => {
+                    assert_eq!(code, 2, "{variant:?} should be usage error 2")
+                }
                 _ => panic!("`{variant:?}` should be a handled usage error"),
             }
         }
@@ -353,7 +404,11 @@ mod tests {
         let help = render_help_to_string(&out);
         for c in OPS_COMMANDS {
             assert!(help.contains(c.name), "help missing ops verb '{}'", c.name);
-            assert!(help.contains(c.desc), "help missing description for '{}'", c.name);
+            assert!(
+                help.contains(c.desc),
+                "help missing description for '{}'",
+                c.name
+            );
         }
         assert!(help.contains("help"), "help missing 'help' entry");
         assert!(help.contains("version"), "help missing 'version' entry");
@@ -380,7 +435,11 @@ mod tests {
         // All three stop forms route to a handled outcome (exit code depends on
         // whether something is running, which is environment-specific; we only
         // assert routing here, not the code).
-        for variant in [&["stop"][..], &["stop", "--gui"][..], &["stop", "--all"][..]] {
+        for variant in [
+            &["stop"][..],
+            &["stop", "--gui"][..],
+            &["stop", "--all"][..],
+        ] {
             match dispatch("ol", &s(variant)) {
                 Dispatch::Handled(_) => {}
                 _ => panic!("`{variant:?}` should be handled"),

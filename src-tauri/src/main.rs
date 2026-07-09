@@ -26,8 +26,9 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
 /// Terminal CLI (`ol`): clap-free multi-call dispatch of lifecycle/ops commands
-/// (serve, start, stop, status, logs, …) plus help/version. Ops-only — no query
-/// surface or REPL. See `cli/mod.rs`.
+/// (serve, start, stop, status, logs, …) plus frontend-managed resources
+/// (settings, skills, plugins), help, and version. No query surface or REPL.
+/// See `cli/mod.rs`.
 mod cli;
 
 fn window_pos_path() -> std::path::PathBuf {

@@ -18,53 +18,40 @@ OmniLauncher is built from source today (Tauri v2 + Rust backend + a small Node/
 
 - **Rust** (stable, via [rustup](https://rustup.rs)) — provides `cargo`
 - **Node.js 18+** — provides `npm`
-- **GNU Make** — drives the build/run targets
+- **GNU Make** — build/install helper only
 - **Tauri v2 system dependencies** — follow the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS
 
-Platform specifics:
+### Build and install
 
-| Item                 | Linux / macOS                                  | Windows                                                                                          |
-| -------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Shell behind `make`  | none — `make` calls the `omnilauncher` binary directly | none — `make` calls the `omnilauncher.exe` binary directly                              |
-| Extra shell          | —                                              | **PowerShell 7+ (`pwsh`)** for the smoke / e2e test targets only                                 |
-| Installing `make`    | preinstalled, or `apt install make` / `brew install make` | `choco install make` / `scoop install make`, or run under MSYS2 / Git Bash            |
-| Webview + toolchain  | WebKitGTK (from Tauri prereqs)                 | WebView2 (preinstalled on Windows 11) + MSVC Build Tools                                         |
-
-### Installation
-
-Clone the repo, install deps, and start the app. The clone/install steps are identical on every OS:
+Clone the repo, install deps, build the single binary, and put it on your `PATH`:
 
 ```bash
 git clone https://github.com/OmniLLM/OmniLauncher.git
 cd OmniLauncher
-
-# Install JS deps and prefetch Rust crates
 npm install
 cd src-tauri && cargo fetch && cd ..
 
-# Day-to-day dev: start frontend + backend together
-make start
+# Build frontend assets + release binary
+make build
+
+# Symlink ~/.local/bin/ol and ~/.local/bin/omnilauncher to the release binary
+make install
 ```
 
-The `make` commands (`make start`, `make stop`, `make status`, …) are the **same on every OS** — each target invokes the self-contained `omnilauncher` binary's own subcommands (`start`, `stop`, `status`, `logs`, …), so there is no shell or PowerShell wrapper to go wrong. See [Linux & Windows notes](#linux--windows-notes) for the few real differences.
-
-> [!TIP]
-> Press **Ctrl+Shift+O** to open the launcher, **Ctrl+,** to open Settings, and **Esc** to close.
+`make` is intentionally small: it only builds, installs, uninstalls, cleans, and removes the release binary. Runtime management lives in the binary CLI.
 
 ### Backend Token
 
-If your backend runs on a separate machine, set its token **before** configuring the UI.
+If your backend runs on a separate machine, set its token before starting the backend:
 
 ```bash
-# On the backend machine — Linux / macOS
 export OMNILAUNCHER_AUTH_TOKEN=<paste-your-token-here>
-make start-backend
+ol start
 ```
 
 ```powershell
-# On the backend machine — Windows PowerShell
 $env:OMNILAUNCHER_AUTH_TOKEN = "<paste-your-token-here>"
-make start-backend
+ol start
 ```
 
 | Behavior                           | Setting                                         |
@@ -77,16 +64,9 @@ make start-backend
 > [!NOTE]
 > Paths shown with `~/` resolve to your home directory on every OS. On Windows that means `C:\Users\<you>\.config\omnilauncher\...` and `C:\Users\<you>\.omnilauncher\...` — OmniLauncher uses these dot-directories on Windows too, **not** `%APPDATA%`.
 
-When the frontend starts and no saved connection token exists, it prompts for the backend token and stores it in `~/.config/omnilauncher/backend-token`. The token is not stored in `settings.json` and does not appear on the Settings page.
-
-In the UI press **Ctrl+,**, open **General**, set **Backend URL**, then open **AI** and set **Provider URL**, **API Key**, and **Model**. Click **Save Settings**.
-
-> [!IMPORTANT]
-> The backend token authenticates OmniLauncher itself. **API Key** authenticates your LLM provider. They are separate — configure the backend token prompt first when using a split-machine backend.
-
 ### Modes
 
-OmniLauncher switches mode based on the prefix you type.
+OmniLauncher switches mode based on the prefix you type in the GUI:
 
 - **Launcher** — bare text. Apps, files, URLs, built-in actions.
 - **AI** — type `?` or `ai `. Explanations, summaries, code help, tool-assisted tasks.
@@ -107,45 +87,43 @@ Common slash commands:
 
 ### Terminal CLI (`ol`)
 
-OmniLauncher ships as a single self-dispatching binary that also works as a first-class terminal CLI. Put it on your `PATH` as `ol`:
+`ol` operates the OmniLauncher binary and admin resources directly. It does **not** duplicate the GUI query palette or shell tools.
 
 ```bash
-# Linux / macOS — symlinks ~/.local/bin/ol -> the release binary
-make install-cli
-```
+ol help                       # command list
+ol serve                      # backend API server in the foreground
+ol gui                        # desktop shell in the foreground
+ol start | stop | restart     # manage detached backend
+ol status                     # health / process / port view
+ol logs -f                    # tail the log file
+ol doctor                     # diagnostics
 
-```powershell
-# Windows — `make install-cli` is Unix-only. Add the release dir to PATH,
-# or copy/alias the exe. One-off for the current session:
-Set-Alias ol "$PWD\src-tauri\target\release\omnilauncher.exe"
+ol settings show              # print settings JSON
+ol settings get ai_model
+ol settings set ai_model gpt-4.1
 
-# Persistent: add the release directory to your user PATH, then call it as `omnilauncher`
-[Environment]::SetEnvironmentVariable(
-  "Path",
-  "$env:Path;$PWD\src-tauri\target\release",
-  "User")
-```
+ol skills list
+ol skills view <name>
+ol skills install <url-or-SKILL.md-path>
+ol skills update <name>
+ol skills remove <name>
+ol skills usage
+ol skills pin <name>
+ol skills curator run
 
-`ol` runs local operations **in-process** — no backend required, works offline — and exposes the same slash-command surface you use in the GUI, plus lifecycle/ops commands.
-
-```bash
-ol                          # interactive REPL (when run on a TTY)
-ol calc "2+2*10"            # one-shot slash command
-ol grep TODO src/           # any /command works as `ol <command>`
-ol ai "explain lifetimes"   # route through the AI
-ol status                   # health / process / port view
-ol start | stop | restart   # manage a detached backend
-ol logs -f                  # tail the log file
-ol doctor                   # diagnostics: config, token, AI, deps
-ol --help                   # full command list
+ol plugins list
+ol plugins collections
+ol plugins install <url-or-path>
+ol plugins update <repo-dir-name>
+ol plugins remove <repo-dir-name>
+ol plugins runtimes
+ol plugins install-runtime python
 ```
 
 Global flags apply anywhere: `--json` (machine-readable output), `--no-color` (also honors `NO_COLOR` and non-TTY pipes), `-q`/`--quiet`, and `--debug` (file logging to `~/.omnilauncher/omnilauncher.log`).
 
-In the **REPL**, bare words are queries, `/cmd` runs a slash command, `? question` (or `ai …`) asks the AI, and `:status` / `:start` / `:stop` run ops (the `:` prefix disambiguates them from query terms like "status"). History persists to `~/.omnilauncher/repl_history`; press **Tab** to complete command names, **Ctrl-D** to exit.
-
 > [!NOTE]
-> The same binary still launches the desktop GUI when run with no arguments, and still accepts the legacy `--server` / `--debug` flags. Split-machine deploys use `ol serve` on the backend host and `ol gui` on the desktop host.
+> Running `omnilauncher` with no arguments still launches the desktop GUI. The legacy `--server` / `--debug` flags still work. Split-machine deploys use `ol serve` on the backend host and `ol gui` on the desktop host.
 
 ### AGENTS.md Context
 
@@ -158,67 +136,33 @@ Drop an `AGENTS.md` file at `~/.config/omnilauncher/AGENTS.md` to use it as the 
 
 Missing files are silently skipped. See [`src-tauri/src/ai/agent_context.rs`](src-tauri/src/ai/agent_context.rs) for the loader.
 
-### Common Commands
+### Make targets
 
 ```bash
-make start         # start frontend + backend
-make stop          # stop everything
-make restart       # restart everything
-make status        # show backend status
-make logs          # tail logs (Windows: needs pwsh)
-make install-cli   # symlink the `ol` CLI onto your PATH (Linux/macOS only)
-make test          # run the full test suite
+make build       # npm run build + cargo build --release
+make install     # build and symlink ol + omnilauncher into ~/.local/bin
+make uninstall   # remove those symlinks
+make clean       # remove dist/ and src-tauri/target/
 ```
-
-Run `make help` for the full target list, or `make help-advanced` for compatibility aliases and variables.
-
-### Linux & Windows notes
-
-The `make` targets are identical across platforms — each one invokes the self-contained `omnilauncher` binary's own subcommands (process control, port probing, PID files, and health checks are all native Rust, no shell or PowerShell wrapper). The differences you actually hit:
-
-| Topic                | Linux / macOS                                | Windows                                                                      |
-| -------------------- | -------------------------------------------- | --------------------------------------------------------------------------- |
-| Setting env vars     | `export OMNILAUNCHER_AUTH_TOKEN=…`           | `$env:OMNILAUNCHER_AUTH_TOKEN = "…"` (PowerShell)                            |
-| Release binary       | `src-tauri/target/release/omnilauncher`      | `src-tauri\target\release\omnilauncher.exe`                                  |
-| `make install-cli`   | symlinks `~/.local/bin/ol` → the binary      | not supported — alias the `.exe` or add its dir to `PATH` (see [Terminal CLI](#terminal-cli-ol)) |
-| `make logs` / smoke / e2e | run under `bash`, need `curl`           | need **PowerShell 7+ (`pwsh`)** on `PATH`                                    |
-| Home paths (`~/…`)   | `/home/<you>/…` or `/Users/<you>/…`          | `C:\Users\<you>\…` (dot-directories, not `%APPDATA%`)                        |
-| Split-machine backend | run `make start-backend` on the host        | `make start BACKEND_MODE=wsl` runs the backend inside WSL (Windows-only)     |
-
-All the everyday lifecycle commands work the same way on both:
-
-```bash
-make start                 # start frontend + backend (both OSes)
-make stop                  # stop everything
-make restart               # rebuild + restart
-make status                # backend health / process / port
-make start ROLE=backend    # backend only
-make start ROLE=frontend   # desktop shell only
-```
-
-> [!NOTE]
-> On Windows, run `make` from a shell where `make` is installed (MSYS2, Git Bash, or a native `make` from Chocolatey/Scoop). The helper it invokes uses the built-in Windows PowerShell, so you don't need `pwsh` for `start` / `stop` / `status` — only for `logs` and the smoke/e2e test targets.
 
 ### Config Files
 
 | Path                                   | Purpose                            |
 | -------------------------------------- | ---------------------------------- |
-| `~/.config/omnilauncher/settings.json` | Main settings (UI-editable)        |
+| `~/.config/omnilauncher/settings.json` | Main settings (UI/CLI editable)    |
 | `~/.config/omnilauncher/server-token`  | Backend token fallback             |
-| `~/.config/omnilauncher/AGENTS.md`  | Primary global AI system prompt     |
+| `~/.config/omnilauncher/AGENTS.md`     | Primary global AI system prompt    |
 | `~/.omnilauncher/`                     | Runtime data (DB, plugins, skills) |
 | `~/.omnilauncher/run/`                 | CLI PID files (backend, gui)       |
-| `~/.omnilauncher/repl_history`         | `ol` REPL command history          |
 
 ### Troubleshooting
 
 - **Settings won't save** — backend token mismatch between UI and backend. Re-set both.
-- **AI requests fail** — check **AI** tab values (Provider URL, API Key, Model).
+- **AI requests fail** — check **AI** tab values (Provider URL, API Key, Model), or use `ol settings get ai_base_url` / `ol settings get ai_model`.
 - **UI reaches backend but saves still fail** — backend wasn't started with the same `OMNILAUNCHER_AUTH_TOKEN`.
-- **`make start` fails** — try `make stop` first, then `make start` again.
+- **Backend won't start** — try `ol stop`, then `ol start` again; check `ol logs`.
 - **Windows: `make: command not found`** — install `make` (Chocolatey/Scoop) or run from MSYS2 / Git Bash.
-- **Windows: `make logs` / smoke / e2e fail** — install **PowerShell 7+ (`pwsh`)** and ensure it's on `PATH`.
-- **Windows: env var didn't take effect** — use PowerShell syntax `$env:NAME = "value"` (not `export`), and set it in the *same* shell that runs `make`.
+- **Windows: env var didn't take effect** — use PowerShell syntax `$env:NAME = "value"`, and set it in the *same* shell that runs `ol`.
 
 ### Documentation
 
@@ -226,7 +170,7 @@ More detail in [`docs/`](./docs) and in [`SOURCE_FILES_MANIFEST.md`](./SOURCE_FI
 
 ### Contributing
 
-PRs welcome. Please run `make test` (or at least `cargo test --lib` + `npm test`) before submitting, and keep new behavior covered by tests.
+PRs welcome. Please run the relevant checks (`cargo test`, `npm test`, `npm run build`) before submitting, and keep new behavior covered by tests.
 
 ### Security
 
