@@ -53,6 +53,12 @@ const realSettings: AppSettings = {
   a2a_bind_lan: false,
   a2a_port: 1423,
   a2a_token: null,
+  a2a_public_url: "",
+  a2a_hub_url: "",
+  a2a_hub_admin_key: "",
+  a2a_hub_upstream_name: "omnilauncher",
+  a2a_hub_prefix: "@omnilauncher",
+  a2a_hub_auto_register: false,
 };
 
 beforeEach(() => {

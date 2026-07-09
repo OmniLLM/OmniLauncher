@@ -2105,6 +2105,18 @@ pub fn serve_backend(args: &[String]) {
             };
             let a2a_port = a2a_settings.a2a_port;
 
+            if a2a_settings.a2a_hub_auto_register {
+                match omnilauncher_lib::a2a::hub_registration::register_with_hub(
+                    &a2a_settings,
+                    &a2a_token,
+                )
+                .await
+                {
+                    Ok(()) => log::info!("a2a: omni-agent-hub upstream registration complete"),
+                    Err(err) => log::warn!("a2a: omni-agent-hub upstream registration failed: {err}"),
+                }
+            }
+
             let a2a_state = omnilauncher_lib::a2a::server::A2aServerState {
                 adapter: omnilauncher_lib::a2a::adapter::A2aAdapterState {
                     plugin_manager: state.plugin_manager.clone(),

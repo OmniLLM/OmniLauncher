@@ -862,7 +862,7 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       </button>
                     </div>
                   </div>
-                  <div style={rowStyle(true)}>
+                  <div style={rowStyle(false)}>
                     <span style={rowLabelStyle}>Server URL</span>
                     <input
                       className="omni-input"
@@ -871,6 +871,79 @@ export default function SettingsWindow({ onClose }: Props = {}) {
                       value={`http://${settings.a2a_bind_lan ? "0.0.0.0" : "127.0.0.1"}:${settings.a2a_port}`}
                       style={{ fontFamily: "monospace", fontSize: 12 }}
                     />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Public A2A URL</span>
+                    <input
+                      className="omni-input"
+                      type="text"
+                      placeholder="http://127.0.0.1:1423 (default for local hub)"
+                      value={settings.a2a_public_url}
+                      onChange={(e) =>
+                        setSettings((s) => s && { ...s, a2a_public_url: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Hub URL</span>
+                    <input
+                      className="omni-input"
+                      type="text"
+                      placeholder="http://127.0.0.1:8222"
+                      value={settings.a2a_hub_url}
+                      onChange={(e) =>
+                        setSettings((s) => s && { ...s, a2a_hub_url: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Hub Admin Key</span>
+                    <input
+                      className="omni-input"
+                      type="password"
+                      placeholder="Prefer OMNILAUNCHER_A2A_HUB_ADMIN_KEY"
+                      value={settings.a2a_hub_admin_key}
+                      onChange={(e) =>
+                        setSettings((s) => s && { ...s, a2a_hub_admin_key: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Hub Upstream Name</span>
+                    <input
+                      className="omni-input"
+                      type="text"
+                      value={settings.a2a_hub_upstream_name}
+                      onChange={(e) =>
+                        setSettings((s) => s && { ...s, a2a_hub_upstream_name: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div style={rowStyle()}>
+                    <span style={rowLabelStyle}>Hub Prefix</span>
+                    <input
+                      className="omni-input"
+                      type="text"
+                      value={settings.a2a_hub_prefix}
+                      onChange={(e) =>
+                        setSettings((s) => s && { ...s, a2a_hub_prefix: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div style={rowStyle(true)}>
+                    <span style={rowLabelStyle}>Auto-register in Hub</span>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        type="checkbox"
+                        checked={settings.a2a_hub_auto_register}
+                        onChange={(e) =>
+                          setSettings((s) =>
+                            s && { ...s, a2a_hub_auto_register: e.target.checked },
+                          )
+                        }
+                      />
+                      <span>Upsert this backend as an omni-agent-hub upstream on server startup</span>
+                    </label>
                   </div>
                 </div>
               </div>

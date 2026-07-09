@@ -63,6 +63,18 @@ export interface AppSettings {
   /** Bearer token for A2A authentication. Auto-generated when enabled if
    * absent. */
   a2a_token: string | null;
+  /** Public A2A URL advertised to omni-agent-hub. Empty = loopback a2a_port. */
+  a2a_public_url: string;
+  /** omni-agent-hub admin API URL, e.g. http://127.0.0.1:8222. */
+  a2a_hub_url: string;
+  /** Hub admin key; prefer env var over saving this in settings. */
+  a2a_hub_admin_key: string;
+  /** Upstream name registered in omni-agent-hub. */
+  a2a_hub_upstream_name: string;
+  /** Optional hub routing prefix, e.g. @omnilauncher. */
+  a2a_hub_prefix: string;
+  /** Auto-upsert this backend into omni-agent-hub on startup. */
+  a2a_hub_auto_register: boolean;
 }
 
 export interface PluginInfo {
