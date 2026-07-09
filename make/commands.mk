@@ -29,6 +29,28 @@ ifeq ($(REBUILD),1)
 	$(MAKE) build-backend-command
 endif
 
+# Start one role. `start` (and the non-wsl `restart`) compose these two so the
+# backend-mode cascade and the GUI-launch line each live in exactly one place.
+# BACKEND_MODE / DEBUG / SERVER_* reach these sub-makes the same way REBUILD
+# reaches maybe-rebuild-*: config.mk + platform.mk are included in every make,
+# and any command-line override propagates through MAKEFLAGS.
+
+start-frontend-command:
+	$(MAKE) maybe-rebuild-frontend
+	OMNILAUNCHER_BACKEND_URL="$(BACKEND_URL)" $(BIN) gui --detached $(DEBUG_FLAG)
+
+start-backend-command:
+ifeq ($(BACKEND_MODE),wsl)
+	$(MAKE) start-wsl-backend-command
+else ifeq ($(BACKEND_MODE),remote)
+	$(info BACKEND_MODE=remote: not starting backend; using $(BACKEND_URL))
+else ifeq ($(BACKEND_MODE),local)
+	$(MAKE) maybe-rebuild-backend
+	OMNILAUNCHER_SERVER_HOST="$(SERVER_HOST)" OMNILAUNCHER_SERVER_PORT="$(SERVER_PORT)" $(BIN) start $(DEBUG_FLAG)
+else
+	$(error BACKEND_MODE must be local, wsl, or remote)
+endif
+
 # -- Canonical build -----------------------------------------------------------
 
 build:
@@ -62,32 +84,12 @@ endif
 
 start:
 ifeq ($(ROLE),frontend)
-	$(MAKE) maybe-rebuild-frontend
-	OMNILAUNCHER_BACKEND_URL="$(BACKEND_URL)" $(BIN) gui --detached $(DEBUG_FLAG)
+	$(MAKE) start-frontend-command
 else ifeq ($(ROLE),backend)
-ifeq ($(BACKEND_MODE),wsl)
-	$(MAKE) start-wsl-backend-command
-else ifeq ($(BACKEND_MODE),remote)
-	$(info BACKEND_MODE=remote: not starting backend; using $(BACKEND_URL))
-else ifeq ($(BACKEND_MODE),local)
-	$(MAKE) maybe-rebuild-backend
-	OMNILAUNCHER_SERVER_HOST="$(SERVER_HOST)" OMNILAUNCHER_SERVER_PORT="$(SERVER_PORT)" $(BIN) start $(DEBUG_FLAG)
-else
-	$(error BACKEND_MODE must be local, wsl, or remote)
-endif
+	$(MAKE) start-backend-command
 else ifeq ($(ROLE),both)
-ifeq ($(BACKEND_MODE),wsl)
-	$(MAKE) start-wsl-backend-command
-else ifeq ($(BACKEND_MODE),remote)
-	$(info BACKEND_MODE=remote: not starting backend; using $(BACKEND_URL))
-else ifeq ($(BACKEND_MODE),local)
-	$(MAKE) maybe-rebuild-backend
-	OMNILAUNCHER_SERVER_HOST="$(SERVER_HOST)" OMNILAUNCHER_SERVER_PORT="$(SERVER_PORT)" $(BIN) start $(DEBUG_FLAG)
-else
-	$(error BACKEND_MODE must be local, wsl, or remote)
-endif
-	$(MAKE) maybe-rebuild-frontend
-	OMNILAUNCHER_BACKEND_URL="$(BACKEND_URL)" $(BIN) gui --detached $(DEBUG_FLAG)
+	$(MAKE) start-backend-command
+	$(MAKE) start-frontend-command
 else
 	$(error ROLE must be frontend, backend, or both)
 endif
@@ -101,13 +103,9 @@ ifeq ($(ROLE),backend)
 	$(MAKE) restart-wsl-backend-command
 else ifeq ($(ROLE),both)
 	$(MAKE) restart-wsl-backend-command
-	rm -f $(BIN)
-	$(MAKE) build-frontend-command
-	OMNILAUNCHER_BACKEND_URL="$(BACKEND_URL)" $(BIN) gui --detached $(DEBUG_FLAG)
+	$(MAKE) start-frontend-command REBUILD=1
 else
-	rm -f $(BIN)
-	$(MAKE) build-frontend-command
-	OMNILAUNCHER_BACKEND_URL="$(BACKEND_URL)" $(BIN) gui --detached $(DEBUG_FLAG)
+	$(MAKE) start-frontend-command REBUILD=1
 endif
 else
 	rm -f $(BIN)
