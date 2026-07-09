@@ -1,5 +1,11 @@
 # OmniLauncher Backend / Agent Split
 
+> Harness conformance: OmniLauncher's backend is audited against the
+> [Harness Engineering Guide](https://harness-guide.com/). See
+> [`harness-conformance.md`](./harness-conformance.md) for the subsystem-by-subsystem
+> checklist (agentic loop, tool system, memory & context, guardrails).
+
+
 OmniLauncher is moving toward being the **backend agent** in the Omni ecosystem:
 
 - HTTP API for the desktop shell on `:1422`
