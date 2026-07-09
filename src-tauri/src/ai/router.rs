@@ -1,4 +1,4 @@
-use crate::ai::client::{AiClient, Message};
+use crate::ai::client::{AiClient, Message, ToolCall};
 use crate::ai::errors::{classify_ai_error, ErrorClass};
 use crate::plugins::{PluginManager, QueryResult};
 use crate::skills::SkillManager;
@@ -59,6 +59,7 @@ impl ConversationContext {
         let max_messages = self.max_turns * 2;
         if self.messages.len() > max_messages {
             let excess = self.messages.len() - max_messages;
+            let excess = pairing_safe_drop_count(&self.messages, excess);
             self.messages.drain(0..excess);
         }
     }
@@ -66,7 +67,11 @@ impl ConversationContext {
     pub fn get_messages_with_system(&self, system_prompt: &str) -> Vec<Message> {
         let mut msgs = vec![Message::system(system_prompt)];
         msgs.extend(self.messages.clone());
-        msgs
+        // Final guard: never emit a transcript with an orphaned tool_call or
+        // tool_result, regardless of how `self.messages` was assembled or
+        // trimmed. Strict upstreams (OpenAI Responses API) reject orphans with
+        // HTTP 400, which cascades to a 502 and a hung task.
+        sanitize_tool_pairing(msgs)
     }
 }
 
@@ -116,6 +121,10 @@ impl ConversationContext {
             let keep = 6;
             if self.messages.len() > keep {
                 let dropped = self.messages.len() - keep;
+                let dropped = pairing_safe_drop_count(&self.messages, dropped);
+                if dropped == 0 {
+                    return;
+                }
                 self.messages.drain(0..dropped);
                 self.messages.insert(
                     0,
@@ -127,6 +136,102 @@ impl ConversationContext {
             }
         }
     }
+}
+
+/// Adjust a front-drop count so it never severs an assistant `tool_calls`
+/// message from the `tool` result(s) that answer it.
+///
+/// OpenAI-style transcripts require every `role:"tool"` result to be preceded
+/// by an assistant message whose `tool_calls` announced its `tool_call_id`. A
+/// blind `drain(0..n)` can drop the announcing assistant while keeping its
+/// results, producing orphaned outputs that strict upstreams (e.g. the OpenAI
+/// Responses API) reject with HTTP 400 (`No tool call found for function call
+/// output with call_id ...`).
+///
+/// Given the naive drop count `n`, extend the cut *forward* past any `tool`
+/// results that would be left leaderless, so the surviving history always
+/// begins on a clean boundary (a non-`tool` message). Returns the adjusted
+/// count, which is always `>= n` and `<= messages.len()`.
+fn pairing_safe_drop_count(messages: &[Message], n: usize) -> usize {
+    let mut cut = n.min(messages.len());
+    // Any tool result remaining at the front whose announcing assistant is
+    // being dropped is an orphan — advance the cut to drop it too.
+    while cut < messages.len() && messages[cut].role == "tool" {
+        cut += 1;
+    }
+    cut
+}
+
+/// Final defense-in-depth pass: return a transcript in which every
+/// assistant `tool_calls` entry and every `role:"tool"` result is mutually
+/// paired, dropping any orphan in either direction.
+///
+/// This is a belt-and-suspenders guard sitting at the outbound boundary so
+/// that *no* code path (compression, future edits, or an upstream that
+/// pre-mangles history) can emit the malformed shape that strict providers
+/// reject with `No tool call found for function call output with call_id ...`.
+///
+/// Rules:
+///   - A `tool` result is kept only if some assistant message announced its
+///     `tool_call_id`.
+///   - Within an assistant `tool_calls` message, only calls that have a
+///     matching `tool` result are kept; if none remain, the whole assistant
+///     entry is dropped (its content, if any, is preserved as a plain
+///     assistant message so no user-visible text is lost).
+///   - All other messages pass through unchanged and in order.
+fn sanitize_tool_pairing(messages: Vec<Message>) -> Vec<Message> {
+    use std::collections::HashSet;
+
+    // Pass 1: which call_ids actually have a result present?
+    let result_ids: HashSet<&str> = messages
+        .iter()
+        .filter(|m| m.role == "tool")
+        .filter_map(|m| m.tool_call_id.as_deref())
+        .collect();
+
+    // Pass 2: which call_ids are announced by a surviving assistant (i.e. an
+    // announced call that also has a result)?
+    let mut kept_call_ids: HashSet<String> = HashSet::new();
+    for m in &messages {
+        if let Some(calls) = &m.tool_calls {
+            for c in calls {
+                if result_ids.contains(c.id.as_str()) {
+                    kept_call_ids.insert(c.id.clone());
+                }
+            }
+        }
+    }
+
+    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
+    for mut m in messages {
+        if let Some(calls) = m.tool_calls.take() {
+            let surviving: Vec<ToolCall> = calls
+                .into_iter()
+                .filter(|c| kept_call_ids.contains(&c.id))
+                .collect();
+            if surviving.is_empty() {
+                // No answered calls in this assistant turn. Preserve any text
+                // content as a plain assistant message; otherwise drop it.
+                match m.content.as_deref() {
+                    Some(text) if !text.is_empty() => out.push(Message::assistant(text)),
+                    _ => {}
+                }
+            } else {
+                m.tool_calls = Some(surviving);
+                out.push(m);
+            }
+            continue;
+        }
+        if m.role == "tool" {
+            let id = m.tool_call_id.as_deref().unwrap_or("");
+            if kept_call_ids.contains(id) {
+                out.push(m);
+            }
+            continue;
+        }
+        out.push(m);
+    }
+    out
 }
 
 /// How a query should be dispatched.
@@ -960,7 +1065,7 @@ impl Router {
                  Do NOT show raw command text or unresolved commands. \
                  Show only the resolved values, concise and well-structured.",
             ));
-            match ai_client.chat(followup).await {
+            match ai_client.chat(sanitize_tool_pairing(followup)).await {
                 Ok(formatted) => final_content = formatted,
                 Err(e) => final_content = format!("AI error: {}", e),
             }
@@ -982,7 +1087,7 @@ impl Router {
                  --- ORIGINAL ANSWER ---\n{}\n--- END ---",
                 final_content
             )));
-            if let Ok(formatted) = ai_client.chat(formatter_msgs).await {
+            if let Ok(formatted) = ai_client.chat(sanitize_tool_pairing(formatter_msgs)).await {
                 if !formatted.trim().is_empty() {
                     final_content = formatted;
                 }
@@ -1956,6 +2061,184 @@ fn needs_output_formatting(content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::client::{FunctionCall, ToolCall};
+
+    /// Build an assistant message announcing one or more tool calls.
+    fn assistant_calls(ids: &[&str]) -> Message {
+        let calls = ids
+            .iter()
+            .map(|id| ToolCall {
+                id: (*id).to_string(),
+                call_type: Some("function".to_string()),
+                function: FunctionCall {
+                    name: "shell_exec".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            })
+            .collect();
+        Message::assistant_tool_calls(None, calls)
+    }
+
+    /// Assert the OpenAI transcript invariant: every `tool` result must be
+    /// preceded by an assistant message whose `tool_calls` announced its
+    /// `tool_call_id`. A violated invariant is exactly the malformed history
+    /// (`No tool call found for function call output with call_id ...`) that a
+    /// strict upstream (e.g. the OpenAI Responses API) rejects with HTTP 400.
+    fn assert_no_orphaned_tool_results(messages: &[Message]) {
+        use std::collections::HashSet;
+        let mut announced: HashSet<&str> = HashSet::new();
+        for m in messages {
+            if let Some(calls) = &m.tool_calls {
+                for c in calls {
+                    announced.insert(c.id.as_str());
+                }
+            }
+            if m.role == "tool" {
+                let id = m.tool_call_id.as_deref().unwrap_or("");
+                assert!(
+                    announced.contains(id),
+                    "orphaned tool result: call_id={id:?} has no preceding assistant tool_call. \
+                     Transcript roles: {:?}",
+                    messages.iter().map(|x| x.role.as_str()).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    /// Reproduces the captured production failure: an agentic tool loop whose
+    /// history grows past the compression `keep` window. A blind front-drain
+    /// severs the `assistant[tool_calls]` message from its `tool` results,
+    /// leaving orphaned outputs that the upstream provider rejects (400 →
+    /// omnillm 502 → task hangs retrying). Mirrors the real 9→7 wire capture:
+    /// assistant announces 3 parallel calls, then two more single-call turns.
+    #[test]
+    fn compress_if_needed_keeps_tool_calls_paired_with_results() {
+        let mut ctx = ConversationContext::new(100);
+        // A big first user turn so the token estimate crosses the 70% budget
+        // threshold (32_000 * 70% = 22_400 estimated tokens) and compression
+        // actually fires (as it did in production). ~30k single-token words.
+        let big = "word ".repeat(30_000);
+        ctx.messages.push(Message::user(&big));
+        // assistant announces 3 parallel tool calls, then their 3 results
+        ctx.messages.push(assistant_calls(&["A", "B", "C"]));
+        ctx.messages.push(Message::tool_result("A", "shell_exec", "out A"));
+        ctx.messages.push(Message::tool_result("B", "shell_exec", "out B"));
+        ctx.messages.push(Message::tool_result("C", "shell_exec", "out C"));
+        // next turn: single tool call + result
+        ctx.messages.push(assistant_calls(&["D"]));
+        ctx.messages.push(Message::tool_result("D", "shell_exec", "out D"));
+        // next turn: single tool call + result
+        ctx.messages.push(assistant_calls(&["E"]));
+        ctx.messages.push(Message::tool_result("E", "shell_exec", "out E"));
+
+        ctx.compress_if_needed();
+
+        assert_no_orphaned_tool_results(&ctx.messages);
+    }
+
+    /// `trim_to_max` has the same blind front-drain shape as `compress_if_needed`
+    /// and must likewise never sever a tool_call/tool_result pair.
+    #[test]
+    fn trim_to_max_keeps_tool_calls_paired_with_results() {
+        let mut ctx = ConversationContext::new(2); // max_messages = 4
+        ctx.messages.push(Message::user("hello"));
+        ctx.messages.push(assistant_calls(&["A", "B"]));
+        ctx.messages.push(Message::tool_result("A", "shell_exec", "out A"));
+        ctx.messages.push(Message::tool_result("B", "shell_exec", "out B"));
+        ctx.messages.push(assistant_calls(&["C"]));
+        ctx.messages.push(Message::tool_result("C", "shell_exec", "out C"));
+
+        ctx.trim_to_max();
+
+        assert_no_orphaned_tool_results(&ctx.messages);
+    }
+
+    /// Defense-in-depth: a `tool` result whose announcing assistant tool_call is
+    /// absent must be stripped before send (forward orphan — the exact shape the
+    /// upstream rejected in production).
+    #[test]
+    fn sanitize_drops_tool_result_without_matching_tool_call() {
+        let msgs = vec![
+            Message::tool_result("A", "shell_exec", "orphan out A"),
+            Message::user("hello"),
+            assistant_calls(&["B"]),
+            Message::tool_result("B", "shell_exec", "out B"),
+        ];
+
+        let clean = sanitize_tool_pairing(msgs);
+
+        assert_no_orphaned_tool_results(&clean);
+        // The valid B pair survives; only the orphaned A result is removed.
+        assert_eq!(clean.len(), 3);
+        assert!(clean.iter().all(|m| m.tool_call_id.as_deref() != Some("A")));
+        assert!(clean
+            .iter()
+            .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some("B")));
+    }
+
+    /// Defense-in-depth: an assistant `tool_calls` message none of whose results
+    /// are present must be stripped before send (reverse orphan) — otherwise the
+    /// upstream sees an announced call that is never answered.
+    #[test]
+    fn sanitize_drops_tool_call_without_any_result() {
+        let msgs = vec![
+            Message::user("hello"),
+            assistant_calls(&["A"]), // no result for A ever arrives
+            Message::assistant("here is your answer"),
+        ];
+
+        let clean = sanitize_tool_pairing(msgs);
+
+        // The dangling assistant tool_call is gone; plain messages remain.
+        assert!(clean.iter().all(|m| m.tool_calls.is_none()));
+        assert_eq!(clean.len(), 2);
+    }
+
+    /// A partially-answered parallel assistant turn keeps only the announced
+    /// calls that actually have results, and keeps those results.
+    #[test]
+    fn sanitize_keeps_only_answered_calls_of_parallel_turn() {
+        let msgs = vec![
+            assistant_calls(&["A", "B", "C"]),
+            Message::tool_result("B", "shell_exec", "out B"),
+        ];
+
+        let clean = sanitize_tool_pairing(msgs);
+
+        assert_no_orphaned_tool_results(&clean);
+        // Assistant survives (it has at least one answered call) but now only
+        // announces B; the B result survives.
+        let assistant = clean.iter().find(|m| m.role == "assistant").unwrap();
+        let announced: Vec<&str> = assistant
+            .tool_calls
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(announced, vec!["B"]);
+        assert!(clean
+            .iter()
+            .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some("B")));
+    }
+
+    /// A valid transcript must pass through completely unchanged.
+    #[test]
+    fn sanitize_leaves_valid_transcript_untouched() {
+        let msgs = vec![
+            Message::user("hello"),
+            assistant_calls(&["A", "B"]),
+            Message::tool_result("A", "shell_exec", "out A"),
+            Message::tool_result("B", "shell_exec", "out B"),
+            Message::assistant("done"),
+        ];
+        let before = msgs.len();
+
+        let clean = sanitize_tool_pairing(msgs);
+
+        assert_no_orphaned_tool_results(&clean);
+        assert_eq!(clean.len(), before);
+    }
 
     #[test]
     fn test_local_routes() {
