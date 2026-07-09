@@ -195,8 +195,7 @@ fn flatten_single_subdir(dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Tauri command: install bundled Python and return status string.
-#[tauri::command]
+/// Install bundled Python and return a user-facing status string.
 pub async fn install_python_command() -> String {
     match install_bundled_python().await {
         Ok(exe) => format!("✅ Python installed: {}", exe.display()),
@@ -204,8 +203,7 @@ pub async fn install_python_command() -> String {
     }
 }
 
-/// Tauri command: check if bundled Python is installed.
-#[tauri::command]
+/// Check if bundled Python is installed.
 pub fn check_bundled_python() -> serde_json::Value {
     match bundled_python_exe() {
         Some(p) => serde_json::json!({

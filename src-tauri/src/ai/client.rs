@@ -1,8 +1,4 @@
-#[cfg(not(test))]
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-#[cfg(not(test))]
-use tauri::Emitter;
 
 use crate::ai::errors::{classify_ai_error, AiError, ErrorClass};
 
@@ -129,7 +125,8 @@ const MAX_ALLOWED_RETRY_ATTEMPTS: u32 = 30;
 
 pub struct AiClient {
     base_url: String,
-    api_key: String,
+    chat_url: String,
+    headers: Vec<(String, String)>,
     model: String,
     request_timeout_secs: u64,
     max_retry_attempts: u32,
@@ -171,13 +168,73 @@ impl AiClient {
         max_retry_attempts: u32,
         retry_base_delay_ms: u64,
     ) -> Self {
+        let chat_url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+        let headers = if api_key.trim().is_empty() {
+            vec![]
+        } else {
+            vec![(
+                "Authorization".to_string(),
+                format!("Bearer {}", api_key.trim()),
+            )]
+        };
+        Self::with_resolved(
+            base_url,
+            chat_url,
+            headers,
+            model,
+            request_timeout_secs,
+            max_retry_attempts,
+            retry_base_delay_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_resolved(
+        base_url: String,
+        chat_url: String,
+        headers: Vec<(String, String)>,
+        model: String,
+        request_timeout_secs: u64,
+        max_retry_attempts: u32,
+        retry_base_delay_ms: u64,
+    ) -> Self {
         Self {
             base_url,
-            api_key,
+            chat_url,
+            headers,
             model,
             request_timeout_secs: request_timeout_secs.max(1),
             max_retry_attempts: max_retry_attempts.clamp(1, MAX_ALLOWED_RETRY_ATTEMPTS),
             retry_base_delay_ms,
+        }
+    }
+
+    pub fn from_settings(settings: &crate::AppSettings) -> Self {
+        let provider = settings.active_provider();
+        match crate::ai::provider::resolve_provider(&provider) {
+            Ok(resolved) => Self::with_resolved(
+                provider.base_url,
+                resolved.chat_url,
+                resolved.headers,
+                resolved.model,
+                settings.ai_timeout_secs,
+                settings.ai_max_retry_attempts,
+                settings.ai_retry_base_delay_ms,
+            ),
+            Err(err) => {
+                log::warn!(
+                    "failed to resolve active provider '{}': {err}",
+                    provider.name
+                );
+                Self::with_retry(
+                    provider.base_url,
+                    provider.api_key,
+                    provider.model,
+                    settings.ai_timeout_secs,
+                    settings.ai_max_retry_attempts,
+                    settings.ai_retry_base_delay_ms,
+                )
+            }
         }
     }
 
@@ -352,10 +409,7 @@ impl AiClient {
             body["tool_choice"] = serde_json::json!(tool_choice.as_api_value());
         }
 
-        let url = format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = self.chat_url.clone();
 
         log::info!(
             "AI request → endpoint={} model={} messages={} tools={} auth={}",
@@ -363,16 +417,20 @@ impl AiClient {
             self.model,
             api_messages.len(),
             tools.len(),
-            if self.api_key.is_empty() {
-                "none"
+            if self
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            {
+                "header"
             } else {
-                "bearer"
+                "none"
             }
         );
 
         let mut req = client.post(&url).json(&body);
-        if !self.api_key.is_empty() {
-            req = req.bearer_auth(&self.api_key);
+        for (name, value) in &self.headers {
+            req = req.header(name, value);
         }
 
         let started = std::time::Instant::now();
@@ -459,104 +517,6 @@ impl AiClient {
             tool_calls,
             finish_reason,
         })
-    }
-
-    /// Stream chat completions and emit Tauri events for each chunk.
-    /// In test mode this is a no-op stub.
-    #[cfg(not(test))]
-    pub async fn chat_stream(
-        &self,
-        messages: Vec<Message>,
-        window: tauri::WebviewWindow,
-    ) -> Result<(), AiError> {
-        let client = self.build_client()?;
-
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": messages.iter().map(|m| serde_json::json!({
-                "role": m.role,
-                "content": m.content_str()
-            })).collect::<Vec<_>>(),
-            "stream": true
-        });
-
-        let url = format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
-
-        log::debug!(
-            "AI stream request → endpoint={} model={} messages={} auth={}",
-            url,
-            self.model,
-            messages.len(),
-            // NOTE: We log "bearer"/"none" rather than the real token. If you
-            // ever add more fields here that touch request body or headers,
-            // route them through `crate::log_masking` first.
-            if self.api_key.is_empty() {
-                "none"
-            } else {
-                "bearer"
-            }
-        );
-
-        let mut req = client.post(&url).json(&body);
-        if !self.api_key.is_empty() {
-            req = req.bearer_auth(&self.api_key);
-        }
-
-        let response = req.send().await.map_err(|e| {
-            if e.is_timeout() {
-                AiError::Timeout
-            } else {
-                AiError::Transport(e.to_string())
-            }
-        })?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
-            return Err(AiError::Api { status, body });
-        }
-
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let bytes = chunk.map_err(|e| AiError::Transport(e.to_string()))?;
-            let text = String::from_utf8_lossy(&bytes);
-            for line in text.lines() {
-                let line = line.trim();
-                if line == "data: [DONE]" {
-                    break;
-                }
-                if let Some(json_str) = line.strip_prefix("data: ") {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
-                        // Check for tool call
-                        if let Some(tool_name) =
-                            val["choices"][0]["delta"]["tool_calls"][0]["function"]["name"].as_str()
-                        {
-                            let _ = window.emit("ai-tool-call", tool_name.to_string());
-                        }
-                        // Text delta
-                        if let Some(delta) = val["choices"][0]["delta"]["content"].as_str() {
-                            if !delta.is_empty() {
-                                let _ = window.emit("ai-stream", delta.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let _ = window.emit("ai-stream-done", "".to_string());
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub async fn chat_stream(
-        &self,
-        _messages: Vec<Message>,
-        _window_placeholder: (),
-    ) -> Result<(), AiError> {
-        Ok(())
     }
 }
 
@@ -696,13 +656,6 @@ mod client_tests {
             .chat_with_tools(vec![Message::user("hello")], vec![])
             .await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_chat_stream_stub_succeeds() {
-        let c = make_client();
-        let result = c.chat_stream(vec![Message::user("hello")], ()).await;
-        assert!(result.is_ok());
     }
 
     // ── Message construction tests ─────────────────────────────────────

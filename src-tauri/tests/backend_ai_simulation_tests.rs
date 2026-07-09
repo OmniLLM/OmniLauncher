@@ -15,7 +15,7 @@ fn integration_enabled() -> bool {
 }
 
 #[tokio::test]
-async fn frontend_like_ai_query_alibaba_ecs_returns_a_number() {
+async fn backend_ai_query_alibaba_ecs_returns_a_number() {
     if !integration_enabled() {
         eprintln!(
             "skipping live AI integration test; set OMNILAUNCHER_RUN_LIVE_AI_TESTS=1 to enable"

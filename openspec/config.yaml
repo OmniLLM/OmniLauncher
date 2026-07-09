@@ -2,13 +2,11 @@ schema: spec-driven
 
 # Project context (optional)
 # This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
 context: |
-  Tech stack: Tauri 2 + Rust (backend, src-tauri/) and React + TypeScript +
-  Vite (frontend, src/). Tests: `cargo test` for Rust, `vitest` for frontend.
+  Tech stack: Rust backend/service in `src-tauri/`. Tests: `cargo test`.
   Conventional commit messages (feat:, fix:, docs(spec):, etc.).
-  Domain: keyboard-first launcher with three modes (launcher / AI / slash),
-  plugin and skill systems, optional split-machine backend with token auth.
+  Domain: backend service and CLI for local AI tools, plugins, skills, slash
+  commands, optional A2A server, and token-authenticated HTTP APIs.
   User config lives under `~/.config/omnilauncher/`; runtime data under
   `~/.omnilauncher/`.
 

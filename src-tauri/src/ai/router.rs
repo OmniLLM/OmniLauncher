@@ -347,6 +347,7 @@ impl Router {
         window.iter().all(|pair| pair == first)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn ai_route(
         query: &str,
         plugin_manager: &PluginManager,

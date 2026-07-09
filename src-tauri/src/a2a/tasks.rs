@@ -194,9 +194,7 @@ impl TaskRegistry {
 
     /// Check whether a cancel has been requested for a task.
     pub fn is_cancel_requested(&self, task_id: &str) -> bool {
-        self.tasks
-            .get(task_id)
-            .map_or(false, |r| r.cancel_requested)
+        self.tasks.get(task_id).is_some_and(|r| r.cancel_requested)
     }
 
     /// Evict the oldest terminal tasks when the count exceeds the cap.

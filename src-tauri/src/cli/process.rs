@@ -23,11 +23,6 @@ pub fn backend_pid_file() -> PathBuf {
     run_dir().join("omnilauncher-backend.pid")
 }
 
-/// PID file for a detached GUI started by `ol gui --detached`.
-pub fn gui_pid_file() -> PathBuf {
-    run_dir().join("omnilauncher-gui.pid")
-}
-
 /// Write a PID to `path`.
 pub fn write_pid(path: &PathBuf, pid: u32) -> std::io::Result<()> {
     std::fs::write(path, pid.to_string())
@@ -158,11 +153,7 @@ pub fn port_pid(port: u16) -> Option<u32> {
 /// is in LISTEN state (`st == 0A`) and bound to `port` to `inodes`. Silently
 /// ignores a missing file so IPv6-less or non-Linux systems are a no-op.
 #[cfg(target_os = "linux")]
-fn collect_listen_inodes(
-    path: &str,
-    port: u16,
-    inodes: &mut std::collections::HashSet<String>,
-) {
+fn collect_listen_inodes(path: &str, port: u16, inodes: &mut std::collections::HashSet<String>) {
     const TCP_LISTEN: &str = "0A";
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
@@ -290,7 +281,7 @@ pub fn current_exe_path() -> std::io::Result<PathBuf> {
 
 /// Spawn `exe <args...>` as a detached background process in its own process
 /// group so it survives the parent shell. Returns the child PID. Used by
-/// `ol start` (`serve`) and `ol gui --detached` (`gui`).
+/// `ol start` to launch `serve`.
 pub fn spawn_detached(exe: &PathBuf, args: &[String]) -> std::io::Result<u32> {
     let mut cmd = std::process::Command::new(exe);
     cmd.args(args);

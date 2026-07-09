@@ -2,16 +2,14 @@
 //! with the historical `--server` / `--debug` flags.
 //!
 //! Dispatch model (busybox-style multi-call):
-//!   - invoked as `omnilauncher` with no command → GUI (unchanged desktop launch)
-//!   - invoked as `ol` with no command → print the ops help, then exit
-//!   - both names accept every subcommand and global flag
+//!   - invoked with no command → print the backend CLI help, then exit
+//!   - both `omnilauncher` and `ol` accept every subcommand and global flag
 //!
-//! `ol` is a controller for the omnilauncher binary: it exposes lifecycle verbs
-//! (serve, gui, start, stop, restart, status, health, logs, doctor) and
+//! `ol` is a controller for the OmniLauncher backend: it exposes lifecycle verbs
+//! (serve, start, stop, restart, status, health, logs, doctor) and
 //! resource-management verbs (settings, skills, plugins), plus `help`/`version`.
-//! It deliberately does NOT expose the GUI launcher's query palette (calc, web,
-//! ps, …) — in a terminal the user already has a shell. We parse with a small
-//! hand-rolled argv scan rather than a clap derive tree.
+//! It deliberately does NOT expose the old desktop launcher/query surface. We
+//! parse with a small hand-rolled argv scan rather than a clap derive tree.
 
 pub mod manage;
 pub mod ops;
@@ -27,16 +25,6 @@ pub struct Globals {
     pub no_color: bool,
     pub quiet: bool,
     pub debug: bool,
-}
-
-/// The basename `ol` triggers help-by-default; anything else (i.e.
-/// `omnilauncher`) triggers GUI-by-default.
-fn invoked_as_ol(argv0: &str) -> bool {
-    std::path::Path::new(argv0)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|name| name == "ol")
-        .unwrap_or(false)
 }
 
 /// Parse global flags out of an argv tail, returning the flags plus the
@@ -74,31 +62,27 @@ pub fn wants_debug(args: &[String]) -> bool {
 }
 
 /// Whether this invocation is a short-lived, foreground CLI command (e.g.
-/// `status`, `health`, `doctor`) as opposed to a long-running mode (`serve`, `gui`,
-/// legacy `--server`) or the bare-GUI default. Used by `main` to keep INFO log
-/// chatter off the terminal for one-shot commands. Bare `ol` (no subcommand,
-/// which now prints help) also counts as foreground.
-pub fn is_foreground_cli(argv0: &str, rest: &[String]) -> bool {
+/// `status`, `health`, `doctor`) as opposed to long-running `serve` / legacy
+/// `--server`. Used by `main` to keep INFO log chatter off the terminal for
+/// one-shot commands. Bare invocation (help) also counts as foreground.
+pub fn is_foreground_cli(_argv0: &str, rest: &[String]) -> bool {
     if wants_legacy_server(rest) {
         return false; // serve is long-running
     }
     let (_, tokens) = extract_globals(rest);
     match tokens.first().map(|s| s.as_str()) {
-        // Long-running / windowed modes: keep normal logging.
-        Some("serve") | Some("gui") => false,
+        // Long-running server mode: keep normal logging.
+        Some("serve") => false,
         // Any other explicit subcommand is a foreground CLI command.
         Some(_) => true,
-        // No subcommand: `ol` → help (foreground); `omnilauncher` → GUI.
-        None => invoked_as_ol(argv0),
+        // No subcommand prints help.
+        None => true,
     }
 }
 
-/// Outcome of dispatch, so `main()` can decide whether to fall through to the
-/// GUI/serve paths (which need to run outside this function to keep their exact
-/// runtime setup) or exit with a code.
+/// Outcome of dispatch, so `main()` can decide whether to run the server or
+/// exit with a handled CLI status code.
 pub enum Dispatch {
-    /// Launch the desktop GUI (foreground). `main` calls `run()`.
-    Gui,
     /// Run the backend server in the foreground. `main` calls `serve_backend`.
     Serve,
     /// A CLI command handled fully in-process; exit with this code.
@@ -107,7 +91,7 @@ pub enum Dispatch {
 
 /// Top-level dispatch. `argv0` is `args[0]` (the program name); `rest` is
 /// everything after it. Returns a `Dispatch` telling `main()` what to do.
-pub fn dispatch(argv0: &str, rest: &[String]) -> Dispatch {
+pub fn dispatch(_argv0: &str, rest: &[String]) -> Dispatch {
     let (globals, tokens) = extract_globals(rest);
     let out = output_from(&globals);
 
@@ -118,14 +102,10 @@ pub fn dispatch(argv0: &str, rest: &[String]) -> Dispatch {
 
     // No subcommand: default action depends on argv[0].
     let Some(command) = tokens.first().cloned() else {
-        if invoked_as_ol(argv0) {
-            // Bare `ol` (TTY or not) prints the ops help and exits. There is no
-            // interactive REPL: `ol` is a command surface, not a shell.
-            print_help(&out);
-            return Dispatch::Handled(0);
-        }
-        // `omnilauncher` with no args → GUI (unchanged).
-        return Dispatch::Gui;
+        // Bare invocation prints help and exits. There is no desktop GUI in
+        // this backend-only repository.
+        print_help(&out);
+        return Dispatch::Handled(0);
     };
 
     let cmd_args: Vec<String> = tokens[1..].to_vec();
@@ -137,19 +117,16 @@ fn dispatch_command(out: &Output, globals: &Globals, command: &str, args: &[Stri
     match command {
         // ── Lifecycle / ops ──────────────────────────────────────────────
         "serve" => Dispatch::Serve,
-        "gui" => {
-            let detached = args.iter().any(|a| a == "--detached");
-            Dispatch::Handled(ops::gui(out, detached, globals.debug))
-        }
         "start" => Dispatch::Handled(ops::start(out, globals.debug)),
         "stop" => {
-            // `stop` (backend, default), `stop --gui` (detached shell), or
-            // `stop --all` (both). Keeps the common no-flag case unchanged.
-            if args.iter().any(|a| a == "--all") {
-                Dispatch::Handled(ops::stop_all(out))
-            } else if args.iter().any(|a| a == "--gui") {
-                Dispatch::Handled(ops::stop_gui(out))
+            if args.iter().any(|a| a == "--gui") {
+                out.failure(
+                    "the desktop GUI has been removed; `ol stop` now targets the backend only",
+                );
+                Dispatch::Handled(2)
             } else {
+                // `stop --all` is accepted as a harmless alias for backend stop
+                // so old scripts that used it continue to stop the only process.
                 Dispatch::Handled(ops::stop(out))
             }
         }
@@ -166,8 +143,9 @@ fn dispatch_command(out: &Output, globals: &Globals, command: &str, args: &[Stri
         }
         "doctor" => Dispatch::Handled(ops::doctor(out)),
 
-        // ── Frontend-managed resources ───────────────────────────────────
+        // ── Resource management ───────────────────────────────────────────
         "settings" => Dispatch::Handled(manage::settings(out, args)),
+        "providers" => Dispatch::Handled(manage::providers(out, args)),
         "skills" => Dispatch::Handled(manage::skills(out, args)),
         "plugins" => Dispatch::Handled(manage::plugins(out, args)),
 
@@ -218,16 +196,12 @@ const OPS_COMMANDS: &[OpsCommand] = &[
         desc: "run the backend API server (foreground)",
     },
     OpsCommand {
-        name: "gui",
-        desc: "launch the desktop shell (--detached to background)",
-    },
-    OpsCommand {
         name: "start",
         desc: "start the backend detached and wait for health",
     },
     OpsCommand {
         name: "stop",
-        desc: "stop the backend (--gui shell, --all both)",
+        desc: "stop the backend (--all accepted as alias)",
     },
     OpsCommand {
         name: "restart",
@@ -252,6 +226,10 @@ const OPS_COMMANDS: &[OpsCommand] = &[
     OpsCommand {
         name: "settings",
         desc: "show/update settings.json fields",
+    },
+    OpsCommand {
+        name: "providers",
+        desc: "list/add/select/update LLM providers and models",
     },
     OpsCommand {
         name: "skills",
@@ -304,15 +282,6 @@ mod tests {
     }
 
     #[test]
-    fn ol_basename_detected_across_paths() {
-        assert!(invoked_as_ol("ol"));
-        assert!(invoked_as_ol("/usr/local/bin/ol"));
-        assert!(invoked_as_ol("/home/x/.local/bin/ol"));
-        assert!(!invoked_as_ol("omnilauncher"));
-        assert!(!invoked_as_ol("/opt/omnilauncher/omnilauncher"));
-    }
-
-    #[test]
     fn globals_are_extracted_and_stripped() {
         let (g, rest) = extract_globals(&s(&["--json", "grep", "TODO", "--quiet"]));
         assert!(g.json);
@@ -335,10 +304,12 @@ mod tests {
     }
 
     #[test]
-    fn omnilauncher_no_args_is_gui() {
-        match dispatch("omnilauncher", &[]) {
-            Dispatch::Gui => {}
-            _ => panic!("omnilauncher with no args must default to GUI"),
+    fn no_args_prints_help_for_both_names() {
+        for name in ["ol", "omnilauncher"] {
+            match dispatch(name, &[]) {
+                Dispatch::Handled(code) => assert_eq!(code, 0),
+                _ => panic!("bare invocation should print help"),
+            }
         }
     }
 
@@ -374,6 +345,7 @@ mod tests {
             &["ai", "hi"][..],
             &["search", "x"][..],
             &["repl"][..],
+            &["gui"][..],
             &["grep", "TODO"][..],
         ] {
             match dispatch("ol", &s(variant)) {
@@ -382,15 +354,6 @@ mod tests {
                 }
                 _ => panic!("`{variant:?}` should be a handled usage error"),
             }
-        }
-    }
-
-    #[test]
-    fn bare_ol_prints_help_not_repl() {
-        // Bare `ol` no longer launches a REPL; it prints ops help and exits 0.
-        match dispatch("ol", &[]) {
-            Dispatch::Handled(code) => assert_eq!(code, 0),
-            _ => panic!("bare `ol` should print help and exit 0"),
         }
     }
 
@@ -435,11 +398,7 @@ mod tests {
         // All three stop forms route to a handled outcome (exit code depends on
         // whether something is running, which is environment-specific; we only
         // assert routing here, not the code).
-        for variant in [
-            &["stop"][..],
-            &["stop", "--gui"][..],
-            &["stop", "--all"][..],
-        ] {
+        for variant in [&["stop"][..], &["stop", "--all"][..]] {
             match dispatch("ol", &s(variant)) {
                 Dispatch::Handled(_) => {}
                 _ => panic!("`{variant:?}` should be handled"),
@@ -453,12 +412,11 @@ mod tests {
         assert!(is_foreground_cli("ol", &s(&["status"])));
         assert!(is_foreground_cli("omnilauncher", &s(&["status"])));
         assert!(is_foreground_cli("ol", &s(&["--json", "status"])));
-        // Long-running / windowed modes are not.
+        // Long-running server mode is not.
         assert!(!is_foreground_cli("ol", &s(&["serve"])));
-        assert!(!is_foreground_cli("ol", &s(&["gui"])));
         assert!(!is_foreground_cli("omnilauncher", &s(&["--server"])));
-        // Bare invocation: `ol` → help (foreground); `omnilauncher` → GUI.
+        // Bare invocation prints help.
         assert!(is_foreground_cli("ol", &[]));
-        assert!(!is_foreground_cli("omnilauncher", &[]));
+        assert!(is_foreground_cli("omnilauncher", &[]));
     }
 }

@@ -1,17 +1,22 @@
 //! CLI management commands for app resources that are also managed by the UI.
 //!
-//! The terminal CLI should not be only a lifecycle wrapper. Anything the
-//! frontend can administer without visual state (settings, skills, external
-//! plugins, plugin runtime dependencies) should also be manageable from the
-//! binary so `make` can stay build/install-only.
+//! The terminal CLI is more than a lifecycle wrapper. Anything backend resources
+//! can administer without visual state (settings, skills, external plugins,
+//! plugin runtime dependencies) should also be manageable from the binary so
+//! `make` can stay build/install-only.
 
 use crate::cli::render::Output;
-use omnilauncher_lib::{plugins::plugin_manager_cmd, AppSettings, SkillInfo, SkillManager};
+use omnilauncher_lib::{
+    plugins::plugin_manager_cmd, provider_caps, AppSettings, Provider, ProviderKind, SkillInfo,
+    SkillManager,
+};
 
 const SETTINGS_FIELDS: &[&str] = &[
     "ai_base_url",
     "ai_model",
     "ai_api_key",
+    "providers",
+    "active_provider_id",
     "ai_timeout_secs",
     "ai_max_tool_iterations",
     "ai_max_retry_attempts",
@@ -29,6 +34,12 @@ const SETTINGS_FIELDS: &[&str] = &[
     "a2a_bind_lan",
     "a2a_port",
     "a2a_token",
+    "a2a_public_url",
+    "a2a_hub_url",
+    "a2a_hub_admin_key",
+    "a2a_hub_upstream_name",
+    "a2a_hub_prefix",
+    "a2a_hub_auto_register",
     "github_token",
     "github_server",
     "github_orgs",
@@ -132,9 +143,9 @@ pub fn skills(out: &Output, args: &[String]) -> i32 {
             skills_remove(out, name)
         }
         "reload" => {
-            // Reload is useful in the GUI because it refreshes in-memory state.
-            // In a short-lived CLI process loading is already fresh; keep the
-            // command as a no-op compatibility affordance.
+            // Reload is useful in long-lived processes because it refreshes
+            // in-memory state. In a short-lived CLI process loading is already
+            // fresh; keep the command as a no-op compatibility affordance.
             let mut mgr = loaded_skill_manager();
             mgr.reload();
             out.success(&format!("reloaded {} skill(s)", mgr.list_meta().len()));
@@ -219,6 +230,283 @@ pub fn plugins(out: &Output, args: &[String]) -> i32 {
     }
 }
 
+/// Dispatch `ol providers ...`.
+pub fn providers(out: &Output, args: &[String]) -> i32 {
+    let Some(cmd) = args.first().map(String::as_str) else {
+        print_providers_help(out);
+        return 0;
+    };
+
+    match cmd {
+        "list" | "ls" => providers_list(out),
+        "active" | "current" => providers_active(out),
+        "add" => providers_add(out, &args[1..]),
+        "set-active" | "select" | "use" => {
+            let Some(id) = args.get(1) else {
+                out.failure("usage: ol providers set-active <id>");
+                return 2;
+            };
+            providers_set_active(out, id)
+        }
+        "set-model" | "model" => {
+            let Some(model) = args.get(1) else {
+                out.failure("usage: ol providers set-model <model> [provider-id]");
+                return 2;
+            };
+            providers_set_model(out, model, args.get(2).map(String::as_str))
+        }
+        "remove" | "delete" => {
+            let Some(id) = args.get(1) else {
+                out.failure("usage: ol providers remove <id>");
+                return 2;
+            };
+            providers_remove(out, id)
+        }
+        "caps" | "kinds" => providers_caps(out),
+        "help" | "--help" | "-h" => {
+            print_providers_help(out);
+            0
+        }
+        other => {
+            out.failure(&format!(
+                "unknown providers command '{other}' — run `ol providers help`"
+            ));
+            2
+        }
+    }
+}
+
+fn providers_list(out: &Output) -> i32 {
+    let settings = omnilauncher_lib::load_settings();
+    let active = settings.active_provider_id.clone();
+    let providers: Vec<Provider> = settings
+        .providers
+        .iter()
+        .map(Provider::masked_for_display)
+        .collect();
+    if out.json {
+        return print_json(
+            out,
+            &serde_json::json!({ "active_provider_id": active, "providers": providers }),
+        );
+    }
+    if providers.is_empty() {
+        out.info("No providers configured.");
+        return 0;
+    }
+    println!(
+        "  {:<2} {:<18} {:<16} {:<22} NAME",
+        "", "ID", "KIND", "MODEL"
+    );
+    for p in providers {
+        println!(
+            "  {:<2} {:<18} {:<16} {:<22} {}",
+            if p.id == active { "*" } else { "" },
+            truncate(&p.id, 18),
+            p.kind,
+            truncate(&p.model, 22),
+            p.name
+        );
+    }
+    0
+}
+
+fn providers_active(out: &Output) -> i32 {
+    let settings = omnilauncher_lib::load_settings();
+    let provider = settings.active_provider().masked_for_display();
+    if out.json {
+        return print_json(out, &provider);
+    }
+    println!("id: {}", provider.id);
+    println!("name: {}", provider.name);
+    println!("kind: {}", provider.kind);
+    println!("base_url: {}", provider.base_url);
+    println!("model: {}", provider.model);
+    let caps = provider_caps(provider.kind);
+    println!(
+        "caps: copilot_auth={} api_key={} auto_models={} manual_models={}",
+        caps.uses_copilot_auth, caps.requires_api_key, caps.auto_list_models, caps.manual_models
+    );
+    0
+}
+
+fn providers_add(out: &Output, args: &[String]) -> i32 {
+    let name = arg_value(args, "--name").or_else(|| args.first().cloned());
+    let Some(name) = name else {
+        out.failure("usage: ol providers add <name> --kind <custom|github-copilot|azure-foundry> [--base-url URL] [--api-key KEY] [--model MODEL] [--models a,b,c]");
+        return 2;
+    };
+    let kind = match arg_value(args, "--kind")
+        .unwrap_or_else(|| "custom".to_string())
+        .parse::<ProviderKind>()
+    {
+        Ok(kind) => kind,
+        Err(e) => {
+            out.failure(&e);
+            return 2;
+        }
+    };
+
+    let mut settings = omnilauncher_lib::load_settings();
+    let id = arg_value(args, "--id").unwrap_or_else(|| provider_id_from_name(&name, &settings));
+    if settings.providers.iter().any(|p| p.id == id) {
+        out.failure(&format!("provider id '{id}' already exists"));
+        return 1;
+    }
+    let models = arg_value(args, "--models")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let model = arg_value(args, "--model")
+        .or_else(|| models.first().cloned())
+        .unwrap_or_else(|| "auto".to_string());
+    let provider = Provider {
+        id: id.clone(),
+        name,
+        kind,
+        base_url: arg_value(args, "--base-url").unwrap_or_default(),
+        api_key: arg_value(args, "--api-key").unwrap_or_default(),
+        model,
+        models,
+        ..Provider::default()
+    };
+    settings.providers.push(provider);
+    if settings.active_provider_id.is_empty() || args.iter().any(|a| a == "--active") {
+        settings.active_provider_id = id.clone();
+    }
+    settings.sync_legacy_ai_fields_from_active_provider();
+    if omnilauncher_lib::save_settings(&settings) {
+        out.success(&format!("added provider: {id}"));
+        0
+    } else {
+        out.failure("failed to save settings");
+        1
+    }
+}
+
+fn providers_set_active(out: &Output, id: &str) -> i32 {
+    let mut settings = omnilauncher_lib::load_settings();
+    if !settings.providers.iter().any(|p| p.id == id) {
+        out.failure(&format!("provider '{id}' not found"));
+        return 1;
+    }
+    settings.active_provider_id = id.to_string();
+    settings.sync_legacy_ai_fields_from_active_provider();
+    if omnilauncher_lib::save_settings(&settings) {
+        out.success(&format!("active provider: {id}"));
+        0
+    } else {
+        out.failure("failed to save settings");
+        1
+    }
+}
+
+fn providers_set_model(out: &Output, model: &str, provider_id: Option<&str>) -> i32 {
+    let mut settings = omnilauncher_lib::load_settings();
+    let id = provider_id
+        .unwrap_or(&settings.active_provider_id)
+        .to_string();
+    let Some(provider) = settings.providers.iter_mut().find(|p| p.id == id) else {
+        out.failure(&format!("provider '{id}' not found"));
+        return 1;
+    };
+    provider.model = model.to_string();
+    if settings.active_provider_id == id {
+        settings.sync_legacy_ai_fields_from_active_provider();
+    }
+    if omnilauncher_lib::save_settings(&settings) {
+        out.success(&format!("provider {id} model: {model}"));
+        0
+    } else {
+        out.failure("failed to save settings");
+        1
+    }
+}
+
+fn providers_remove(out: &Output, id: &str) -> i32 {
+    let mut settings = omnilauncher_lib::load_settings();
+    let before = settings.providers.len();
+    settings.providers.retain(|p| p.id != id);
+    if settings.providers.len() == before {
+        out.failure(&format!("provider '{id}' not found"));
+        return 1;
+    }
+    if settings.active_provider_id == id {
+        settings.active_provider_id = settings
+            .providers
+            .first()
+            .map(|p| p.id.clone())
+            .unwrap_or_default();
+    }
+    settings.ensure_provider_registry();
+    if omnilauncher_lib::save_settings(&settings) {
+        out.success(&format!("removed provider: {id}"));
+        0
+    } else {
+        out.failure("failed to save settings");
+        1
+    }
+}
+
+fn providers_caps(out: &Output) -> i32 {
+    let rows = [
+        ("custom", provider_caps(ProviderKind::Custom)),
+        ("github-copilot", provider_caps(ProviderKind::GithubCopilot)),
+        ("azure-foundry", provider_caps(ProviderKind::AzureFoundry)),
+    ];
+    if out.json {
+        return print_json(out, &rows);
+    }
+    println!(
+        "  {:<16} {:<12} {:<8} {:<11} MANUAL_MODELS",
+        "KIND", "COPILOT", "API_KEY", "AUTO_MODELS"
+    );
+    for (kind, caps) in rows {
+        println!(
+            "  {:<16} {:<12} {:<8} {:<11} {}",
+            kind,
+            caps.uses_copilot_auth,
+            caps.requires_api_key,
+            caps.auto_list_models,
+            caps.manual_models
+        );
+    }
+    0
+}
+
+fn provider_id_from_name(name: &str, settings: &AppSettings) -> String {
+    let base = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    let base = if base.is_empty() {
+        "provider".to_string()
+    } else {
+        base
+    };
+    if !settings.providers.iter().any(|p| p.id == base) {
+        return base;
+    }
+    for i in 2..1000 {
+        let id = format!("{base}-{i}");
+        if !settings.providers.iter().any(|p| p.id == id) {
+            return id;
+        }
+    }
+    format!("{base}-{}", settings.providers.len() + 1)
+}
+
 fn settings_show(out: &Output) -> i32 {
     let settings = omnilauncher_lib::load_settings();
     print_json(out, &settings)
@@ -300,7 +588,7 @@ fn skills_list(out: &Output) -> i32 {
         out.info("No skills installed.");
         return 0;
     }
-    println!("  {:<28} {:<10} {}", "NAME", "VERSION", "DESCRIPTION");
+    println!("  {:<28} {:<10} DESCRIPTION", "NAME", "VERSION");
     for s in skills {
         println!(
             "  {:<28} {:<10} {}",
@@ -364,7 +652,7 @@ fn skills_usage(out: &Output) -> i32 {
         out.info("No skill usage tracked yet.");
         return 0;
     }
-    println!("  {:<28} {:<9} {:<9} {}", "NAME", "USES", "STATE", "PINNED");
+    println!("  {:<28} {:<9} {:<9} PINNED", "NAME", "USES", "STATE");
     let mut rows = usage.skills.into_iter().collect::<Vec<_>>();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     for (name, u) in rows {
@@ -437,10 +725,7 @@ fn plugins_list(out: &Output) -> i32 {
         out.info("No external plugins installed.");
         return 0;
     }
-    println!(
-        "  {:<28} {:<7} {:<10} {}",
-        "REPO", "GIT", "STATE", "PLUGINS"
-    );
+    println!("  {:<28} {:<7} {:<10} PLUGINS", "REPO", "GIT", "STATE");
     for repo in plugins {
         let repo_name = json_str(&repo, "dir_name");
         let git = if repo
@@ -492,10 +777,7 @@ fn plugins_collections(out: &Output) -> i32 {
         out.info("No plugin collections installed.");
         return 0;
     }
-    println!(
-        "  {:<34} {:<7} {:<7} {}",
-        "COLLECTION", "REPOS", "PLUGINS", "KEY"
-    );
+    println!("  {:<34} {:<7} {:<7} KEY", "COLLECTION", "REPOS", "PLUGINS");
     for c in collections {
         println!(
             "  {:<34} {:<7} {:<7} {}",
@@ -589,10 +871,7 @@ fn plugins_runtimes(out: &Output) -> i32 {
     if out.json {
         return print_json(out, &deps);
     }
-    println!(
-        "  {:<10} {:<8} {:<11} {}",
-        "ID", "READY", "INSTALLABLE", "DETAIL"
-    );
+    println!("  {:<10} {:<8} {:<11} DETAIL", "ID", "READY", "INSTALLABLE");
     for d in deps {
         println!(
             "  {:<10} {:<8} {:<11} {}",
@@ -673,6 +952,28 @@ fn print_settings_help(out: &Output) {
     println!("  get <field>                  print one settings field");
     println!("  set <field> <json-or-string> set one field and save settings.json");
     println!("  path                         print settings.json path");
+}
+
+fn print_providers_help(out: &Output) {
+    println!(
+        "{}",
+        out.cyan("ol providers — manage LLM providers and models")
+    );
+    println!();
+    println!("USAGE");
+    println!("  ol providers <COMMAND> [ARGS...]");
+    println!();
+    println!("COMMANDS");
+    println!("  list                                      list configured providers");
+    println!("  active                                    show the active provider");
+    println!("  add <name> --kind <kind> [options]        add custom/github-copilot/azure-foundry provider");
+    println!(
+        "      options: --id ID --base-url URL --api-key KEY --model MODEL --models a,b,c --active"
+    );
+    println!("  set-active <id>                           switch active provider");
+    println!("  set-model <model> [provider-id]           update selected model");
+    println!("  remove <id>                               remove provider");
+    println!("  caps                                      show provider kind capabilities");
 }
 
 fn print_skills_help(out: &Output) {

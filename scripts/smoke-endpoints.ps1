@@ -4,9 +4,9 @@ param(
     [string]$TokenFile = (Join-Path $HOME ".config/omnilauncher/server-token")
 )
 
-# Smoke test for the server HTTP endpoints. Start the backend first:
-#   make start-backend      (or)
-#   $env:OMNILAUNCHER_SERVER_PORT=1422; cargo run --manifest-path src-tauri/Cargo.toml -- --server
+# Backend smoke test for the server HTTP endpoints. Start the backend first:
+#   make build
+#   $env:OMNILAUNCHER_SERVER_PORT=1422; src-tauri/target/release/omnilauncher serve
 # Then: pwsh -NoProfile -File scripts/smoke-endpoints.ps1
 #
 # Auth token resolution order: -Token > $env:OMNILAUNCHER_SERVER_TOKEN > -TokenFile

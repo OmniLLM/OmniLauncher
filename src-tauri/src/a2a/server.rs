@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use crate::http_util::{
-    self, encode_response, extract_auth, json_response, read_body, split_path_query, AuthScheme,
-    CorsPolicy, HttpLimits,
+    self, encode_response, extract_auth, json_response, read_body, split_path_query, token_eq,
+    AuthScheme, CorsPolicy, HttpLimits,
 };
 use crate::live_server::LiveResponse;
 
@@ -88,7 +88,7 @@ async fn handle_a2a_request(
     // ── Auth guard ──────────────────────────────────────────────────────
     let expected = state.auth_token.as_str();
     match extract_auth(request, AuthScheme::Bearer) {
-        Some(tok) if tok == expected => {}
+        Some(tok) if token_eq(tok, expected) => {}
         _ => {
             return LiveResponse::text(
                 "401 Unauthorized",
@@ -202,8 +202,10 @@ tags: route, a2a
     }
 
     fn test_server_state() -> A2aServerState {
-        let mut settings = AppSettings::default();
-        settings.a2a_port = 18123;
+        let settings = AppSettings {
+            a2a_port: 18123,
+            ..Default::default()
+        };
 
         A2aServerState {
             adapter: A2aAdapterState {

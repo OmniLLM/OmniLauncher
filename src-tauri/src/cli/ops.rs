@@ -1,11 +1,10 @@
 //! Self-contained lifecycle / ops commands for the `ol` CLI.
 //!
 //! Ports the behavior of `scripts/ops.sh` into Rust so the binary owns
-//! start/stop/restart/status/logs/serve/gui/doctor and works identically on
+//! start/stop/restart/status/logs/serve/doctor and works identically on
 //! Linux, macOS, and Windows (process/port control via `sysinfo` + std net,
-//! no `pkill`/`lsof`/`ss`). `serve` and `gui` delegate to the binary-crate
-//! entrypoints (`crate::serve_backend` / `crate::run`) so their existing
-//! internals — auth token, A2A, Tauri setup — are preserved verbatim.
+//! no `pkill`/`lsof`/`ss`). `serve` delegates to the binary-crate
+//! backend entrypoint so auth token, A2A, and HTTP setup stay in one place.
 
 use crate::cli::process;
 use crate::cli::render::{Output, Status};
@@ -75,7 +74,8 @@ impl BackendState {
 pub fn backend_state() -> BackendState {
     let port = server_port();
     let url = backend_url();
-    let tracked = process::read_pid(&process::backend_pid_file()).filter(|&p| process::pid_alive(p));
+    let tracked =
+        process::read_pid(&process::backend_pid_file()).filter(|&p| process::pid_alive(p));
     let listening = process::port_listening("127.0.0.1", port);
 
     match (tracked, listening) {
@@ -91,7 +91,10 @@ pub fn backend_state() -> BackendState {
             }
             let healthy = process::probe_health(&url) == process::Health::Ok;
             let owner = process::port_pid(port);
-            BackendState::Untracked { pid: owner, healthy }
+            BackendState::Untracked {
+                pid: owner,
+                healthy,
+            }
         }
         (Some(_pid), false) => {
             // Tracked PID is alive but the port is closed — it is not serving
@@ -102,38 +105,6 @@ pub fn backend_state() -> BackendState {
         (None, false) => {
             process::clear_pid(&process::backend_pid_file());
             BackendState::Stopped
-        }
-    }
-}
-
-/// `ol gui` — launch the desktop shell in the foreground (the old default
-/// no-arg action). With `--detached`, spawn it in the background and record a
-/// PID file instead. `debug` forwards `--debug` to a detached child.
-pub fn gui(out: &Output, detached: bool, debug: bool) -> i32 {
-    if !detached {
-        crate::run();
-        return 0;
-    }
-    let exe = match process::current_exe_path() {
-        Ok(p) => p,
-        Err(e) => {
-            out.failure(&format!("cannot locate own executable: {e}"));
-            return 1;
-        }
-    };
-    let mut child_args = vec!["gui".to_string()];
-    if debug {
-        child_args.push("--debug".to_string());
-    }
-    match process::spawn_detached(&exe, &child_args) {
-        Ok(pid) => {
-            let _ = process::write_pid(&process::gui_pid_file(), pid);
-            out.success(&format!("gui started   pid {pid}"));
-            0
-        }
-        Err(e) => {
-            out.failure(&format!("failed to launch gui: {e}"));
-            1
         }
     }
 }
@@ -239,7 +210,10 @@ pub fn stop(out: &Output) -> i32 {
             let stopped = process::stop_pid(pid, Duration::from_secs(3));
             process::clear_pid(&pid_file);
             if stopped {
-                out.success(&format!("backend stopped   pid {pid}   {}", out.dim("(untracked)")));
+                out.success(&format!(
+                    "backend stopped   pid {pid}   {}",
+                    out.dim("(untracked)")
+                ));
                 0
             } else {
                 out.failure(&format!("failed to stop backend   pid {pid}"));
@@ -297,64 +271,6 @@ fn wait_for_port_free(host: &str, port: u16, timeout: Duration) -> bool {
     }
 }
 
-/// `ol stop --gui` — stop a detached GUI shell (started via `ol gui --detached`)
-/// by its PID file, and clear the file. This ports the last capability that only
-/// lived in the shell wrappers (`scripts/ops.*` stop-frontend) into the binary.
-pub fn stop_gui(out: &Output) -> i32 {
-    let pid_file = process::gui_pid_file();
-    let Some(pid) = process::read_pid(&pid_file) else {
-        out.failure("gui not running (no detached shell tracked)");
-        return 1;
-    };
-    if !process::pid_alive(pid) {
-        process::clear_pid(&pid_file);
-        out.failure("gui not running");
-        return 1;
-    }
-
-    let stopped = process::stop_pid(pid, Duration::from_secs(3));
-    process::clear_pid(&pid_file);
-    if stopped {
-        out.success(&format!("gui stopped   pid {pid}"));
-        0
-    } else {
-        out.failure(&format!("failed to stop gui   pid {pid}"));
-        1
-    }
-}
-
-/// `ol stop --all` — stop both the detached GUI shell and the backend. Reports
-/// success if at least one was running and stopped; a fully-idle system is not
-/// an error (nothing to do).
-pub fn stop_all(out: &Output) -> i32 {
-    // Run both regardless of individual outcome so one failure doesn't skip the
-    // other. `stop`/`stop_gui` return 1 when their target wasn't running, which
-    // is fine here — "stop everything" on an idle system is a no-op, not a
-    // failure.
-    let gui_running = process::read_pid(&process::gui_pid_file())
-        .map(process::pid_alive)
-        .unwrap_or(false);
-    let backend_running = backend_state().is_running();
-
-    if !gui_running && !backend_running {
-        out.info("nothing running");
-        return 0;
-    }
-
-    let mut ok = true;
-    if gui_running {
-        ok &= stop_gui(out) == 0;
-    }
-    if backend_running {
-        ok &= stop(out) == 0;
-    }
-    if ok {
-        0
-    } else {
-        1
-    }
-}
-
 /// `ol health` — probe the backend `/health` endpoint at the configured port and
 /// exit 0 if healthy, 1 otherwise. Unlike `status` (which reports on the managed
 /// PID file), this checks actual HTTP health, so it also works for backends we
@@ -394,9 +310,6 @@ pub fn status(out: &Output) -> i32 {
     let health = process::probe_health(&url);
     let health_up = health == process::Health::Ok;
 
-    // GUI (detached only — a foreground GUI has no PID file)
-    let gui_pid = process::read_pid(&process::gui_pid_file()).filter(|&p| process::pid_alive(p));
-
     if out.json {
         let tracked = matches!(state, BackendState::Tracked { .. });
         let payload = serde_json::json!({
@@ -409,7 +322,6 @@ pub fn status(out: &Output) -> i32 {
             },
             "port": { "number": port, "listening": port_up },
             "health": { "ok": health_up },
-            "gui": { "running": gui_pid.is_some(), "pid": gui_pid },
         });
         println!(
             "{}",
@@ -437,7 +349,9 @@ pub fn status(out: &Output) -> i32 {
             let who = pid
                 .map(|p| format!("pid {p}"))
                 .unwrap_or_else(|| "pid unknown".to_string());
-            let mem_str = mem.map(|m| format!("   {}", human_bytes(m))).unwrap_or_default();
+            let mem_str = mem
+                .map(|m| format!("   {}", human_bytes(m)))
+                .unwrap_or_default();
             format!(
                 "{} running   {who}{mem_str}   {}",
                 out.glyph(Status::Up),
@@ -458,12 +372,6 @@ pub fn status(out: &Output) -> i32 {
         process::Health::Unreachable => format!("{} unreachable", out.glyph(Status::Down)),
     };
     println!("  health    {health_line}");
-
-    let gui_line = match gui_pid {
-        Some(p) => format!("{} running   pid {p}", out.glyph(Status::Up)),
-        None => format!("{} stopped", out.glyph(Status::Down)),
-    };
-    println!("  gui       {gui_line}");
 
     if backend_up {
         0
@@ -757,18 +665,27 @@ mod tests {
         assert_eq!(s.pid(), None);
 
         // Tracked: running, pid is the tracked pid.
-        let t = BackendState::Tracked { pid: 4242, healthy: true };
+        let t = BackendState::Tracked {
+            pid: 4242,
+            healthy: true,
+        };
         assert!(t.is_running());
         assert_eq!(t.pid(), Some(4242));
 
         // Untracked with a resolved owner: running, pid is the owner.
-        let u = BackendState::Untracked { pid: Some(99), healthy: false };
+        let u = BackendState::Untracked {
+            pid: Some(99),
+            healthy: false,
+        };
         assert!(u.is_running());
         assert_eq!(u.pid(), Some(99));
 
         // Untracked with an unresolved owner (e.g. non-Linux): still running,
         // but pid is unknown — callers must NOT treat None here as "stopped".
-        let u_unknown = BackendState::Untracked { pid: None, healthy: true };
+        let u_unknown = BackendState::Untracked {
+            pid: None,
+            healthy: true,
+        };
         assert!(u_unknown.is_running());
         assert_eq!(u_unknown.pid(), None);
     }

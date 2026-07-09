@@ -153,7 +153,7 @@ impl MockLlm {
                         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         resp.status,
                         status_text(resp.status),
-                        resp.body.as_bytes().len(),
+                        resp.body.len(),
                         resp.body
                     );
                     let _ = write_half.write_all(response.as_bytes()).await;

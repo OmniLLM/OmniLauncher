@@ -29,7 +29,10 @@ fn upstream_base_url(settings: &AppSettings) -> String {
     }
 }
 
-fn build_upsert_request(settings: &AppSettings, a2a_token: &str) -> Result<HubUpsertRequest, String> {
+fn build_upsert_request(
+    settings: &AppSettings,
+    a2a_token: &str,
+) -> Result<HubUpsertRequest, String> {
     let token = a2a_token.trim();
     if token.is_empty() {
         return Err("A2A token is empty; enable A2A once so a token is generated".to_string());
@@ -108,10 +111,12 @@ mod tests {
 
     #[test]
     fn build_upsert_request_defaults_to_loopback_a2a_url() {
-        let mut settings = AppSettings::default();
-        settings.a2a_port = 19999;
-        settings.a2a_hub_upstream_name = "omnilauncher".to_string();
-        settings.a2a_hub_prefix = "@ol".to_string();
+        let settings = AppSettings {
+            a2a_port: 19999,
+            a2a_hub_upstream_name: "omnilauncher".to_string(),
+            a2a_hub_prefix: "@ol".to_string(),
+            ..Default::default()
+        };
 
         let req = build_upsert_request(&settings, "tok").unwrap();
 
@@ -124,9 +129,11 @@ mod tests {
 
     #[test]
     fn build_upsert_request_uses_public_url_when_configured() {
-        let mut settings = AppSettings::default();
-        settings.a2a_public_url = "https://agent.example.com/".to_string();
-        settings.a2a_hub_upstream_name = "desktop-agent".to_string();
+        let settings = AppSettings {
+            a2a_public_url: "https://agent.example.com/".to_string(),
+            a2a_hub_upstream_name: "desktop-agent".to_string(),
+            ..Default::default()
+        };
 
         let req = build_upsert_request(&settings, "tok").unwrap();
 

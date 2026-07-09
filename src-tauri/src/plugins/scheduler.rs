@@ -422,12 +422,24 @@ fn unix_to_secs_string(t: i64) -> String {
 /// Launch a background tokio task that polls every 30s and fires due jobs.
 /// Call once at app startup from main.rs.
 pub fn start_scheduler() {
-    tauri::async_runtime::spawn(async move {
+    let task = || async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
             tick_scheduler();
         }
-    });
+    };
+
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(task());
+    } else {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("failed to create scheduler runtime");
+            rt.block_on(task());
+        });
+    }
 }
 
 fn tick_scheduler() {

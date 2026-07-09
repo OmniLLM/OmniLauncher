@@ -13,7 +13,7 @@ use crate::{
     ai::{client::AiClient, router::ConversationContext},
     http_util::{
         self, encode_response, extract_auth, json_response, parse_json, read_body,
-        read_http_request, split_path_query, AuthScheme, CorsPolicy, HttpLimits,
+        read_http_request, split_path_query, token_eq, AuthScheme, CorsPolicy, HttpLimits,
     },
     launcher_config::LauncherConfig,
     live_server::LiveResponse,
@@ -28,7 +28,7 @@ pub struct ServerState {
     pub settings: Arc<RwLock<AppSettings>>,
     pub conversation: Arc<Mutex<ConversationContext>>,
     pub ai_in_flight: Arc<tokio::sync::Semaphore>,
-    pub current_ai_task: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
+    pub current_ai_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub skill_manager: Arc<Mutex<SkillManager>>,
     pub event_bus: EventBus,
     pub latest_selection: Arc<Mutex<Option<SelectionPayload>>>,
@@ -364,7 +364,7 @@ async fn handle_request(
                 header: "X-OmniLauncher-Token",
             },
         ) {
-            Some(tok) if tok == expected_token => {}
+            Some(tok) if token_eq(tok, expected_token) => {}
             _ => {
                 return LiveResponse::text(
                     "401 Unauthorized",
@@ -473,7 +473,7 @@ and try again."
                                 .to_string(),
                         );
                     }
-                    let updated = AppSettings {
+                    let mut updated = AppSettings {
                         ai_base_url: input.ai_base_url,
                         ai_model: input.ai_model,
                         ai_api_key: input.ai_api_key,
@@ -498,20 +498,16 @@ and try again."
                         a2a_hub_auto_register: input.a2a_hub_auto_register,
                         ..current
                     };
+                    updated.set_active_provider_base_url(updated.ai_base_url.clone());
+                    updated.set_active_provider_model(updated.ai_model.clone());
+                    updated.set_active_provider_api_key(updated.ai_api_key.clone());
                     {
                         let mut settings = state.settings.write().await;
                         *settings = updated.clone();
                     }
                     {
                         let mut client = state.ai_client.write().await;
-                        *client = AiClient::with_retry(
-                            updated.ai_base_url.clone(),
-                            updated.resolve_ai_api_key(),
-                            updated.ai_model.clone(),
-                            updated.ai_timeout_secs,
-                            updated.ai_max_retry_attempts,
-                            updated.ai_retry_base_delay_ms,
-                        );
+                        *client = AiClient::from_settings(&updated);
                     }
                     {
                         let mut conversation = state.conversation.lock().await;
@@ -1389,12 +1385,14 @@ Loaded from disk.
 
         // Seed customized state — non-empty API key + a github_server is
         // exactly the "user has put in real config" signal the guard checks.
-        let mut settings = AppSettings::default();
-        settings.ai_api_key = "sk-real-user-key".to_string();
-        settings.github_servers.push(crate::settings::GitHubServer {
-            hostname: "github.com".to_string(),
+        let settings = AppSettings {
+            ai_api_key: "custom-api-key".to_string(),
+            github_servers: vec![crate::settings::GitHubServer {
+                hostname: "github.com".to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
-        });
+        };
 
         let state = ServerState {
             plugin_manager: Arc::new(RwLock::new(crate::PluginManager::new())),
@@ -1448,7 +1446,7 @@ Loaded from disk.
         // Critically, the in-memory state must NOT have been mutated.
         let after = state.settings.read().await.clone();
         assert_eq!(
-            after.ai_api_key, "sk-real-user-key",
+            after.ai_api_key, "custom-api-key",
             "user's API key must survive the rejected POST"
         );
         assert_eq!(
@@ -2417,11 +2415,11 @@ pub async fn ai_query_backend(query: String, state: ServerState) -> Result<(), S
     let max_tool_iterations = state.settings.read().await.ai_max_tool_iterations;
     let loop_detector_enabled = state.settings.read().await.ai_loop_detector_enabled;
 
-    let handle = tauri::async_runtime::spawn(async move {
+    let handle = tokio::spawn(async move {
         let _permit = permit;
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<String>(64);
         let progress_bus = event_bus.clone();
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             let mut iteration = 0u32;
             while let Some(tool_name) = progress_rx.recv().await {
                 iteration += 1;

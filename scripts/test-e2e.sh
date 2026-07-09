@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Linux/macOS counterpart of scripts/test-e2e.ps1.
-# Mimics the frontend user flow: health, settings, AI upstream probe,
+# Backend API E2E test: health, settings, AI upstream probe,
 # search, AI query + SSE wait, favorites, skills, plugins, slash, CORS, 404.
 #
 # Usage:  scripts/test-e2e.sh [-BaseUrl URL] [-AiTimeoutSeconds N] [--token VALUE] [--token-file PATH]

@@ -17,7 +17,9 @@ pub mod skills;
 
 pub use ai::router::{AiResponse, ConversationContext, Router};
 pub use plugins::{PluginManager, QueryResult};
-pub use settings::{load_settings, save_settings, AppSettings};
+pub use settings::{
+    load_settings, provider_caps, save_settings, AppSettings, Provider, ProviderKind,
+};
 pub use skills::{SkillInfo, SkillManager};
 
 pub fn create_plugin_manager() -> PluginManager {

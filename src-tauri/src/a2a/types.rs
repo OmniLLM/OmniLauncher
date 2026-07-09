@@ -381,7 +381,7 @@ mod tests {
         let json = serde_json::to_string_pretty(&card).unwrap();
         let back: AgentCard = serde_json::from_str(&json).unwrap();
         assert_eq!(back.name, "OmniLauncher");
-        assert_eq!(back.capabilities.streaming, false);
+        assert!(!back.capabilities.streaming);
         assert_eq!(back.authentication.schemes, vec!["bearer"]);
         assert_eq!(back.skills.len(), 1);
         assert_eq!(back.skills[0].id, "calculator");

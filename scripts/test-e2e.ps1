@@ -7,9 +7,9 @@ param(
 
 <#
 .SYNOPSIS
-    End-to-end test that mimics the frontend user flow against the backend API.
+    End-to-end test for backend API flows.
 .DESCRIPTION
-    Tests every step a frontend user would take:
+    Tests backend API flows:
     1. Health check
     2. Load settings
     3. Load launcher config

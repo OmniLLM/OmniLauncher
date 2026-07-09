@@ -1412,7 +1412,8 @@ When the user asks to summarize a URL, do the following.
 
     #[test]
     fn test_normalize_enterprise_github_tree_skill_url() {
-        let url = "https://ghostshub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills/jira";
+        let url =
+            "https://ghostshub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills/jira";
         assert_eq!(
             normalize_skill_url(url),
             "https://ghostshub.example.com/cloud-foundations/cloudbot/raw/dev/backend/skills/jira/SKILL.md"
@@ -1430,8 +1431,7 @@ When the user asks to summarize a URL, do the following.
 
     #[test]
     fn test_parse_github_tree_dir_directory() {
-        let url =
-            "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills";
+        let url = "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills";
         let (repo, branch, dir) = parse_github_tree_dir(url).expect("should parse tree dir");
         assert_eq!(repo.host, "ghosthub.example.com");
         assert_eq!(repo.owner, "cloud-foundations");
@@ -1511,7 +1511,8 @@ When the user asks to summarize a URL, do the following.
     #[test]
     #[ignore]
     fn install_jira_from_enterprise() {
-        let url = "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills/jira";
+        let url =
+            "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills/jira";
         let mut mgr = SkillManager::new();
         let result = mgr.install_from_url(url);
         assert!(result.is_ok(), "install_from_url failed: {:?}", result);
@@ -1531,8 +1532,7 @@ When the user asks to summarize a URL, do the following.
     #[test]
     #[ignore]
     fn install_skill_dir_from_enterprise() {
-        let url =
-            "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills";
+        let url = "https://ghosthub.example.com/cloud-foundations/cloudbot/tree/dev/backend/skills";
         let mut mgr = SkillManager::new();
         let result = mgr.install_from_url(url);
         assert!(result.is_ok(), "install_from_url failed: {:?}", result);

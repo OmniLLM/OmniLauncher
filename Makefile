@@ -1,12 +1,11 @@
-# OmniLauncher build/install Makefile
+# OmniLauncher backend build/install Makefile
 #
 # Runtime operations (start/stop/status/logs/settings/skills/plugins/...) live in
 # the self-contained binary CLI (`ol`). Keep Make only for building and managing
 # the installed binary/symlinks.
 
-.PHONY: help build build-frontend build-binary install uninstall install-cli uninstall-cli clean remove-binary
+.PHONY: help build build-binary install uninstall install-cli uninstall-cli clean remove-binary
 
-NPM ?= npm
 CARGO ?= cargo
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
@@ -21,24 +20,21 @@ ifeq ($(OS),Windows_NT)
 endif
 
 help:
-	$(info OmniLauncher - build/install only)
+	$(info OmniLauncher backend - build/install only)
 	$(info )
-	$(info   make build       build frontend assets + release binary)
+	$(info   make build       build release backend binary)
 	$(info   make install     build and install/symlink binary CLI into PREFIX/bin)
 	$(info   make uninstall   remove installed symlinks/copies)
-	$(info   make clean       remove build artifacts)
+	$(info   make clean       remove Rust build artifacts)
 	$(info )
 	$(info Runtime management is inside the binary CLI:)
-	$(info   ol start|stop|restart|status|logs|doctor)
+	$(info   ol serve|start|stop|restart|status|health|logs|doctor)
 	$(info   ol settings|skills|plugins ...)
 	$(info )
 	$(info Variables: PREFIX=$(PREFIX) BINDIR=$(BINDIR))
 	@:
 
-build: build-frontend build-binary
-
-build-frontend:
-	$(NPM) run build
+build: build-binary
 
 build-binary:
 	cd src-tauri && $(CARGO) build --release
@@ -46,7 +42,7 @@ build-binary:
 install: build install-cli
 
 # Install both names: `ol` for CLI muscle memory and `omnilauncher` for direct
-# GUI/serve invocation from PATH. Symlinks keep rebuilds cheap and avoid copying
+# serve/ops invocation from PATH. Symlinks keep rebuilds cheap and avoid copying
 # large binaries around during development.
 install-cli:
 	@mkdir -p "$(BINDIR)"
@@ -63,7 +59,7 @@ uninstall-cli:
 	@echo "removed $(OL) and $(OMNILAUNCHER)"
 
 clean:
-	rm -rf dist src-tauri/target
+	rm -rf src-tauri/target target
 
 remove-binary:
 	rm -f "$(BIN)"

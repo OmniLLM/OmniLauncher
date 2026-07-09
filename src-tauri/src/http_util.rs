@@ -300,6 +300,24 @@ pub fn extract_auth(request: &str, scheme: AuthScheme) -> Option<&str> {
     bearer
 }
 
+/// Constant-time-ish token comparison for fixed secret strings.
+///
+/// This avoids Rust's early-exit `==` path for auth tokens. It still includes
+/// length in the accumulator so different-length guesses do not short-circuit
+/// before all comparable bytes are processed.
+pub fn token_eq(candidate: &str, expected: &str) -> bool {
+    let a = candidate.as_bytes();
+    let b = expected.as_bytes();
+    let max_len = a.len().max(b.len());
+    let mut diff = a.len() ^ b.len();
+    for i in 0..max_len {
+        let av = a.get(i).copied().unwrap_or(0);
+        let bv = b.get(i).copied().unwrap_or(0);
+        diff |= (av ^ bv) as usize;
+    }
+    diff == 0
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

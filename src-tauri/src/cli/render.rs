@@ -170,5 +170,4 @@ mod tests {
         assert!(o.json);
         assert!(!o.color);
     }
-
 }

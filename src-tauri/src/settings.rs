@@ -101,11 +101,151 @@ pub fn default_a2a_hub_prefix() -> String {
     "@omnilauncher".to_string()
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderKind {
+    /// Any OpenAI-compatible endpoint. Requests go to `{base_url}/v1/chat/completions`.
+    #[default]
+    Custom,
+    /// GitHub Copilot Chat. Authentication is handled through the Copilot token flow.
+    GithubCopilot,
+    /// Azure AI Foundry OpenAI-compatible endpoint. Requests go to `{base_url}/chat/completions`.
+    AzureFoundry,
+}
+
+impl std::fmt::Display for ProviderKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Custom => "custom",
+            Self::GithubCopilot => "github-copilot",
+            Self::AzureFoundry => "azure-foundry",
+        };
+        f.write_str(s)
+    }
+}
+
+impl std::str::FromStr for ProviderKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "custom" | "custom-provider" | "openai" | "openai-compatible" => Ok(Self::Custom),
+            "github-copilot" | "copilot" | "github" => Ok(Self::GithubCopilot),
+            "azure-foundry" | "foundry" | "azure" => Ok(Self::AzureFoundry),
+            other => Err(format!(
+                "unknown provider kind '{other}' (expected custom, github-copilot, azure-foundry)"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderCaps {
+    pub uses_copilot_auth: bool,
+    pub requires_api_key: bool,
+    pub auto_list_models: bool,
+    pub manual_models: bool,
+}
+
+pub fn provider_caps(kind: ProviderKind) -> ProviderCaps {
+    match kind {
+        ProviderKind::Custom => ProviderCaps {
+            uses_copilot_auth: false,
+            requires_api_key: true,
+            auto_list_models: true,
+            manual_models: false,
+        },
+        ProviderKind::GithubCopilot => ProviderCaps {
+            uses_copilot_auth: true,
+            requires_api_key: false,
+            auto_list_models: true,
+            manual_models: false,
+        },
+        ProviderKind::AzureFoundry => ProviderCaps {
+            uses_copilot_auth: false,
+            requires_api_key: true,
+            auto_list_models: false,
+            manual_models: true,
+        },
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provider {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub kind: ProviderKind,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub copilot_github_token: String,
+    #[serde(default)]
+    pub copilot_token: String,
+    #[serde(default)]
+    pub copilot_token_expiry: i64,
+    #[serde(default)]
+    pub copilot_enterprise_url: String,
+}
+
+impl Default for Provider {
+    fn default() -> Self {
+        Self {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            kind: ProviderKind::Custom,
+            base_url: "http://127.0.0.1:5000".to_string(),
+            api_key: String::new(),
+            model: "auto".to_string(),
+            models: vec![],
+            copilot_github_token: String::new(),
+            copilot_token: String::new(),
+            copilot_token_expiry: 0,
+            copilot_enterprise_url: String::new(),
+        }
+    }
+}
+
+impl Provider {
+    pub fn from_legacy(ai_base_url: String, ai_model: String, ai_api_key: String) -> Self {
+        Self {
+            base_url: ai_base_url,
+            model: ai_model,
+            api_key: ai_api_key,
+            ..Self::default()
+        }
+    }
+
+    pub fn masked_for_display(&self) -> Self {
+        let mut p = self.clone();
+        if !p.api_key.is_empty() {
+            p.api_key = "«redacted»".to_string();
+        }
+        if !p.copilot_github_token.is_empty() {
+            p.copilot_github_token = "«redacted»".to_string();
+        }
+        if !p.copilot_token.is_empty() {
+            p.copilot_token = "«redacted»".to_string();
+        }
+        p
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub ai_base_url: String,
     pub ai_model: String,
     pub ai_api_key: String,
+    #[serde(default)]
+    pub providers: Vec<Provider>,
+    #[serde(default)]
+    pub active_provider_id: String,
     #[serde(default = "default_ai_timeout_secs")]
     pub ai_timeout_secs: u64,
     #[serde(default = "default_ai_max_tool_iterations")]
@@ -207,6 +347,96 @@ impl AppSettings {
     pub fn resolve_ai_api_key(&self) -> String {
         self.ai_api_key.clone()
     }
+
+    /// Active LLM provider. Falls back to the first provider if the active id is
+    /// stale, then to the legacy flat `ai_*` fields for old settings files.
+    pub fn active_provider(&self) -> Provider {
+        self.providers
+            .iter()
+            .find(|p| p.id == self.active_provider_id)
+            .or_else(|| self.providers.first())
+            .cloned()
+            .unwrap_or_else(|| {
+                Provider::from_legacy(
+                    self.ai_base_url.clone(),
+                    self.ai_model.clone(),
+                    self.resolve_ai_api_key(),
+                )
+            })
+    }
+
+    /// Keep legacy flat fields synchronized with the selected provider so old
+    /// clients and endpoints that still read `ai_base_url` / `ai_model` keep
+    /// working during the backend-only transition.
+    pub fn sync_legacy_ai_fields_from_active_provider(&mut self) {
+        let provider = self.active_provider();
+        self.ai_base_url = provider.base_url;
+        self.ai_model = provider.model;
+        self.ai_api_key = provider.api_key;
+        if self.active_provider_id.is_empty() {
+            self.active_provider_id = provider.id;
+        }
+    }
+
+    pub fn set_active_provider_base_url(&mut self, base_url: String) {
+        self.ai_base_url = base_url.clone();
+        self.ensure_provider_registry_without_sync();
+        if let Some(provider) = self
+            .providers
+            .iter_mut()
+            .find(|p| p.id == self.active_provider_id)
+        {
+            provider.base_url = base_url;
+        }
+    }
+
+    pub fn set_active_provider_model(&mut self, model: String) {
+        self.ai_model = model.clone();
+        self.ensure_provider_registry_without_sync();
+        if let Some(provider) = self
+            .providers
+            .iter_mut()
+            .find(|p| p.id == self.active_provider_id)
+        {
+            provider.model = model;
+        }
+    }
+
+    pub fn set_active_provider_api_key(&mut self, api_key: String) {
+        self.ai_api_key = api_key.clone();
+        self.ensure_provider_registry_without_sync();
+        if let Some(provider) = self
+            .providers
+            .iter_mut()
+            .find(|p| p.id == self.active_provider_id)
+        {
+            provider.api_key = api_key;
+        }
+    }
+
+    fn ensure_provider_registry_without_sync(&mut self) {
+        if self.providers.is_empty() {
+            let provider = Provider::from_legacy(
+                self.ai_base_url.clone(),
+                self.ai_model.clone(),
+                self.ai_api_key.clone(),
+            );
+            self.active_provider_id = provider.id.clone();
+            self.providers.push(provider);
+        } else if self.active_provider_id.is_empty()
+            || !self
+                .providers
+                .iter()
+                .any(|p| p.id == self.active_provider_id)
+        {
+            self.active_provider_id = self.providers[0].id.clone();
+        }
+    }
+
+    pub fn ensure_provider_registry(&mut self) {
+        self.ensure_provider_registry_without_sync();
+        self.sync_legacy_ai_fields_from_active_provider();
+    }
 }
 
 /// Resolve the backend auth token in the same order used by the desktop shell
@@ -279,17 +509,17 @@ fn env_overrides() -> Vec<EnvOverride> {
         EnvOverride {
             var: "OMNILAUNCHER_AI_BASE_URL",
             alias: None,
-            apply: |s, v| s.ai_base_url = v.to_string(),
+            apply: |s, v| s.set_active_provider_base_url(v.to_string()),
         },
         EnvOverride {
             var: "OMNILAUNCHER_AI_MODEL",
             alias: None,
-            apply: |s, v| s.ai_model = v.to_string(),
+            apply: |s, v| s.set_active_provider_model(v.to_string()),
         },
         EnvOverride {
             var: "OMNILAUNCHER_AI_API_KEY",
             alias: Some("OMNILLM_API_KEY"),
-            apply: |s, v| s.ai_api_key = v.to_string(),
+            apply: |s, v| s.set_active_provider_api_key(v.to_string()),
         },
         EnvOverride {
             var: "OMNILAUNCHER_AI_TIMEOUT_SECS",
@@ -477,15 +707,15 @@ fn cli_overrides() -> Vec<CliOverride> {
     vec![
         CliOverride {
             flag: "ai-base-url",
-            apply: |s, v| s.ai_base_url = v.to_string(),
+            apply: |s, v| s.set_active_provider_base_url(v.to_string()),
         },
         CliOverride {
             flag: "ai-model",
-            apply: |s, v| s.ai_model = v.to_string(),
+            apply: |s, v| s.set_active_provider_model(v.to_string()),
         },
         CliOverride {
             flag: "ai-api-key",
-            apply: |s, v| s.ai_api_key = v.to_string(),
+            apply: |s, v| s.set_active_provider_api_key(v.to_string()),
         },
         CliOverride {
             flag: "ai-timeout-secs",
@@ -693,6 +923,8 @@ impl Default for AppSettings {
             ai_base_url: "http://127.0.0.1:5000".to_string(),
             ai_model: "auto".to_string(),
             ai_api_key: String::new(),
+            providers: vec![Provider::default()],
+            active_provider_id: "default".to_string(),
             ai_timeout_secs: default_ai_timeout_secs(),
             ai_max_tool_iterations: default_ai_max_tool_iterations(),
             ai_max_retry_attempts: default_ai_max_retry_attempts(),
@@ -762,10 +994,8 @@ pub fn load_settings() -> AppSettings {
                     if s.github_servers.is_empty() {
                         s.github_servers = detect_gh_hosts();
                     }
-                    log::info!(
-                        "Settings loaded from existing file at {}",
-                        path.display()
-                    );
+                    s.ensure_provider_registry();
+                    log::info!("Settings loaded from existing file at {}", path.display());
                     return s;
                 }
                 Err(err) => {
@@ -787,10 +1017,11 @@ pub fn load_settings() -> AppSettings {
         );
         // Create the file with defaults so the user has something to edit.
         // This is the ONLY path that creates settings.json automatically.
-        let defaults = AppSettings {
+        let mut defaults = AppSettings {
             github_servers: detect_gh_hosts(),
             ..AppSettings::default()
         };
+        defaults.ensure_provider_registry();
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -807,10 +1038,12 @@ pub fn load_settings() -> AppSettings {
     }
     // Fallback: file exists but failed to read/parse — use defaults in memory
     // without touching the file on disk.
-    AppSettings {
+    let mut fallback = AppSettings {
         github_servers: detect_gh_hosts(),
         ..AppSettings::default()
-    }
+    };
+    fallback.ensure_provider_registry();
+    fallback
 }
 
 /// Discover GitHub hostnames the user is authenticated to.
@@ -1051,9 +1284,39 @@ pub fn save_settings(settings: &AppSettings) -> bool {
             );
         }
     }
-    match serde_json::to_string_pretty(settings) {
-        Ok(json) => std::fs::write(&path, json).is_ok(),
+    let mut normalized = settings.clone();
+    normalized.ensure_provider_registry();
+    match serde_json::to_string_pretty(&normalized) {
+        Ok(json) => write_private_file(&path, json.as_bytes()),
         Err(_) => false,
+    }
+}
+
+/// Write a secret-bearing file with owner-only permissions where the platform
+/// supports POSIX modes. Settings can contain provider API keys and A2A bearer
+/// tokens; the backend token file is also written through this helper.
+pub fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> bool {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let result = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .and_then(|mut f| f.write_all(bytes));
+        if result.is_ok() {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            return true;
+        }
+        false
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes).is_ok()
     }
 }
 
@@ -1259,6 +1522,8 @@ mod settings_tests {
             ai_base_url: "http://localhost:5000".to_string(),
             ai_model: "auto".to_string(),
             ai_api_key: String::new(),
+            providers: vec![],
+            active_provider_id: String::new(),
             ai_timeout_secs: 120,
             ai_max_tool_iterations: 10,
             ai_max_retry_attempts: 3,
