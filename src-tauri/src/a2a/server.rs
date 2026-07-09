@@ -80,6 +80,12 @@ async fn handle_a2a_request(
     path: &str,
     request: &str,
 ) -> LiveResponse {
+    // ── Lightweight readiness probe on the A2A port. This replaces the
+    // legacy REST server's 1422 /health check without exposing /api/*.
+    if method == "GET" && path == "/health" {
+        return LiveResponse::json("{\"ok\":true,\"protocol\":\"a2a\"}".to_string());
+    }
+
     // ── CORS preflight ──────────────────────────────────────────────────
     if method == "OPTIONS" {
         return LiveResponse::text("204 No Content", String::new());
@@ -222,6 +228,21 @@ tags: route, a2a
             },
             auth_token: Arc::new("test-token".to_string()),
         }
+    }
+
+    #[tokio::test]
+    async fn health_route_is_public_on_a2a_port() {
+        let state = test_server_state();
+        let response = handle_a2a_request(
+            &state,
+            "GET",
+            "/health",
+            "GET /health HTTP/1.1\r\n\r\n",
+        )
+        .await;
+
+        assert_eq!(response.status, "200 OK");
+        assert!(response.body.contains("\"protocol\":\"a2a\""));
     }
 
     #[tokio::test]

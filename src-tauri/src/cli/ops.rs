@@ -10,17 +10,17 @@ use crate::cli::process;
 use crate::cli::render::{Output, Status};
 use std::time::Duration;
 
-/// Resolve the server port: `OMNILAUNCHER_SERVER_PORT`, else `1422`. Mirrors
-/// the binding logic in `serve_backend` so status/health probes target the same
-/// port the backend actually listens on.
+/// Resolve the A2A agent port: `OMNILAUNCHER_A2A_PORT`, legacy
+/// `OMNILAUNCHER_SERVER_PORT`, else settings/default `1423`.
 pub fn server_port() -> u16 {
-    std::env::var("OMNILAUNCHER_SERVER_PORT")
+    std::env::var("OMNILAUNCHER_A2A_PORT")
+        .or_else(|_| std::env::var("OMNILAUNCHER_SERVER_PORT"))
         .ok()
         .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(1422)
+        .unwrap_or_else(|| omnilauncher_lib::load_settings().a2a_port)
 }
 
-/// Loopback URL used for health/status probes against the local backend.
+/// Loopback URL used for health/status probes against the local A2A agent.
 fn backend_url() -> String {
     format!("http://127.0.0.1:{}", server_port())
 }
@@ -641,11 +641,13 @@ mod tests {
     }
 
     #[test]
-    fn default_port_is_1422() {
+    fn default_port_is_a2a_port() {
         // Only holds when the env override is unset; guard to avoid clobbering
         // a developer's shell.
-        if std::env::var_os("OMNILAUNCHER_SERVER_PORT").is_none() {
-            assert_eq!(server_port(), 1422);
+        if std::env::var_os("OMNILAUNCHER_A2A_PORT").is_none()
+            && std::env::var_os("OMNILAUNCHER_SERVER_PORT").is_none()
+        {
+            assert_eq!(server_port(), 1423);
         }
     }
 
