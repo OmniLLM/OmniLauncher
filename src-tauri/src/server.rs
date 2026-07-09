@@ -128,16 +128,6 @@ struct SaveSettingsRequest {
     a2a_token: Option<String>,
     #[serde(default)]
     a2a_public_url: String,
-    #[serde(default)]
-    a2a_hub_url: String,
-    #[serde(default)]
-    a2a_hub_admin_key: String,
-    #[serde(default = "crate::settings::default_a2a_hub_upstream_name")]
-    a2a_hub_upstream_name: String,
-    #[serde(default = "crate::settings::default_a2a_hub_prefix")]
-    a2a_hub_prefix: String,
-    #[serde(default)]
-    a2a_hub_auto_register: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -491,11 +481,6 @@ and try again."
                         a2a_port: input.a2a_port,
                         a2a_token: input.a2a_token,
                         a2a_public_url: input.a2a_public_url,
-                        a2a_hub_url: input.a2a_hub_url,
-                        a2a_hub_admin_key: input.a2a_hub_admin_key,
-                        a2a_hub_upstream_name: input.a2a_hub_upstream_name,
-                        a2a_hub_prefix: input.a2a_hub_prefix,
-                        a2a_hub_auto_register: input.a2a_hub_auto_register,
                         ..current
                     };
                     updated.set_active_provider_base_url(updated.ai_base_url.clone());
