@@ -93,6 +93,14 @@ pub fn default_a2a_port() -> u16 {
     1423
 }
 
+pub fn default_a2a_hub_upstream_name() -> String {
+    "omnilauncher".to_string()
+}
+
+pub fn default_a2a_hub_prefix() -> String {
+    "@omnilauncher".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub ai_base_url: String,
@@ -158,6 +166,30 @@ pub struct AppSettings {
     /// other config (unlike the backend token which lives in a separate file).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub a2a_token: Option<String>,
+
+    // ── omni-agent-hub upstream registration ────────────────────────────────
+    /// Public URL the hub should use to call this agent's A2A endpoint. Empty
+    /// means `http://127.0.0.1:{a2a_port}` for same-machine hub deployments.
+    #[serde(default)]
+    pub a2a_public_url: String,
+    /// Hub admin API URL, e.g. `http://127.0.0.1:8222`. When set with
+    /// `a2a_hub_auto_register=true`, the backend upserts itself into the hub on
+    /// startup after the A2A token is available.
+    #[serde(default)]
+    pub a2a_hub_url: String,
+    /// Hub admin key. Prefer the env var `OMNILAUNCHER_A2A_HUB_ADMIN_KEY` over
+    /// storing this in settings.json.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub a2a_hub_admin_key: String,
+    /// Upstream display/routing name used inside omni-agent-hub.
+    #[serde(default = "default_a2a_hub_upstream_name")]
+    pub a2a_hub_upstream_name: String,
+    /// Optional text prefix (e.g. `@omnilauncher`) the hub can route on.
+    #[serde(default = "default_a2a_hub_prefix")]
+    pub a2a_hub_prefix: String,
+    /// Auto-register this A2A endpoint into omni-agent-hub at backend startup.
+    #[serde(default)]
+    pub a2a_hub_auto_register: bool,
 
     // ── legacy single-server fields (migrated on first load) ──────────────────
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -385,6 +417,40 @@ fn env_overrides() -> Vec<EnvOverride> {
             alias: None,
             apply: |s, v| s.a2a_token = Some(v.to_string()),
         },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_PUBLIC_URL",
+            alias: None,
+            apply: |s, v| s.a2a_public_url = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_HUB_URL",
+            alias: None,
+            apply: |s, v| s.a2a_hub_url = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_HUB_ADMIN_KEY",
+            alias: None,
+            apply: |s, v| s.a2a_hub_admin_key = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_HUB_UPSTREAM_NAME",
+            alias: None,
+            apply: |s, v| s.a2a_hub_upstream_name = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_HUB_PREFIX",
+            alias: None,
+            apply: |s, v| s.a2a_hub_prefix = v.to_string(),
+        },
+        EnvOverride {
+            var: "OMNILAUNCHER_A2A_HUB_AUTO_REGISTER",
+            alias: None,
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.a2a_hub_auto_register = b;
+                }
+            },
+        },
     ]
 }
 
@@ -531,6 +597,34 @@ fn cli_overrides() -> Vec<CliOverride> {
             flag: "a2a-token",
             apply: |s, v| s.a2a_token = Some(v.to_string()),
         },
+        CliOverride {
+            flag: "a2a-public-url",
+            apply: |s, v| s.a2a_public_url = v.to_string(),
+        },
+        CliOverride {
+            flag: "a2a-hub-url",
+            apply: |s, v| s.a2a_hub_url = v.to_string(),
+        },
+        CliOverride {
+            flag: "a2a-hub-admin-key",
+            apply: |s, v| s.a2a_hub_admin_key = v.to_string(),
+        },
+        CliOverride {
+            flag: "a2a-hub-upstream-name",
+            apply: |s, v| s.a2a_hub_upstream_name = v.to_string(),
+        },
+        CliOverride {
+            flag: "a2a-hub-prefix",
+            apply: |s, v| s.a2a_hub_prefix = v.to_string(),
+        },
+        CliOverride {
+            flag: "a2a-hub-auto-register",
+            apply: |s, v| {
+                if let Ok(b) = parse_bool(v) {
+                    s.a2a_hub_auto_register = b;
+                }
+            },
+        },
     ]
 }
 
@@ -616,6 +710,12 @@ impl Default for AppSettings {
             a2a_bind_lan: false,
             a2a_port: default_a2a_port(),
             a2a_token: None,
+            a2a_public_url: String::new(),
+            a2a_hub_url: String::new(),
+            a2a_hub_admin_key: String::new(),
+            a2a_hub_upstream_name: default_a2a_hub_upstream_name(),
+            a2a_hub_prefix: default_a2a_hub_prefix(),
+            a2a_hub_auto_register: false,
             github_token: String::new(),
             github_server: String::new(),
             github_orgs: vec![],
@@ -1176,6 +1276,12 @@ mod settings_tests {
             a2a_bind_lan: false,
             a2a_port: default_a2a_port(),
             a2a_token: None,
+            a2a_public_url: String::new(),
+            a2a_hub_url: String::new(),
+            a2a_hub_admin_key: String::new(),
+            a2a_hub_upstream_name: default_a2a_hub_upstream_name(),
+            a2a_hub_prefix: default_a2a_hub_prefix(),
+            a2a_hub_auto_register: false,
             github_token: String::new(),
             github_server: String::new(),
             github_orgs: vec![],
