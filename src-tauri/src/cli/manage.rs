@@ -6,6 +6,7 @@
 //! `make` can stay build/install-only.
 
 use crate::cli::render::Output;
+use std::io::IsTerminal;
 use omnilauncher_lib::{
     plugins::plugin_manager_cmd, provider_caps, AppSettings, Provider, ProviderKind, SkillInfo,
     SkillManager,
@@ -326,9 +327,19 @@ fn providers_active(out: &Output) -> i32 {
 }
 
 fn providers_add(out: &Output, args: &[String]) -> i32 {
-    let name = arg_value(args, "--name").or_else(|| args.first().cloned());
+    let name = arg_value(args, "--name").or_else(|| {
+        args.first()
+            .filter(|a| !a.starts_with('-'))
+            .cloned()
+    });
+    // Interactive mode: explicitly requested with -i/--interactive, or implied
+    // when no name is given on an interactive terminal (and not --json).
+    let wants_interactive = args.iter().any(|a| a == "-i" || a == "--interactive");
+    if (wants_interactive || name.is_none()) && !out.json && std::io::stdin().is_terminal() {
+        return providers_add_interactive(out, name);
+    }
     let Some(name) = name else {
-        out.failure("usage: ol providers add <name> --kind <custom|github-copilot|azure-foundry> [--base-url URL] [--api-key KEY] [--model MODEL] [--models a,b,c]");
+        out.failure("usage: ol providers add <name> --kind <custom|github-copilot|azure-foundry> [--base-url URL] [--api-key KEY] [--model MODEL] [--models a,b,c]\n       ol providers add -i    (interactive)");
         return 2;
     };
     let kind = match arg_value(args, "--kind")
@@ -380,6 +391,213 @@ fn providers_add(out: &Output, args: &[String]) -> i32 {
         out.failure("failed to save settings");
         1
     }
+}
+
+/// Interactively prompt for the fields needed to add a provider, respecting
+/// each kind's capabilities (only ask for the fields that apply). Returns a
+/// process exit code. Used when `ol providers add` is run on a TTY without
+/// enough flags, or with `-i` / `--interactive`.
+fn providers_add_interactive(out: &Output, prefilled_name: Option<String>) -> i32 {
+    out.info(&out.cyan("Add a provider (press Ctrl-C to cancel)"));
+
+    // Name
+    let name = match prefilled_name {
+        Some(n) => n,
+        None => match prompt_line(out, "Name", None) {
+            Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+            _ => {
+                out.failure("name is required");
+                return 2;
+            }
+        },
+    };
+
+    // Kind
+    let kind = loop {
+        let raw = prompt_line(
+            out,
+            "Kind [custom | github-copilot | azure-foundry]",
+            Some("custom"),
+        )
+        .unwrap_or_default();
+        match raw.parse::<ProviderKind>() {
+            Ok(kind) => break kind,
+            Err(e) => out.failure(&e),
+        }
+    };
+    let caps = provider_caps(kind);
+
+    let mut settings = omnilauncher_lib::load_settings();
+
+    // Id (default derived from name)
+    let default_id = provider_id_from_name(&name, &settings);
+    let id = loop {
+        let candidate = prompt_line(out, "Id", Some(&default_id))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| default_id.clone());
+        if settings.providers.iter().any(|p| p.id == candidate) {
+            out.failure(&format!("provider id '{candidate}' already exists"));
+        } else {
+            break candidate;
+        }
+    };
+
+    // Base URL (all kinds use it except github-copilot, which manages its own).
+    let base_url = if caps.uses_copilot_auth {
+        String::new()
+    } else {
+        prompt_line(out, "Base URL", None)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    };
+
+    // API key (hidden input) only when the kind requires it.
+    let api_key = if caps.requires_api_key {
+        prompt_secret(out, "API key").unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // Models: manual list for kinds without auto-listing; single model otherwise.
+    let models: Vec<String> = if caps.manual_models {
+        prompt_line(out, "Models (comma-separated)", None)
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let default_model = models.first().cloned().unwrap_or_else(|| "auto".to_string());
+    let model = prompt_line(out, "Model", Some(&default_model))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_model);
+
+    // Make active?
+    let make_active =
+        settings.active_provider_id.is_empty() || prompt_yes_no(out, "Make this the active provider?", false);
+
+    let provider = Provider {
+        id: id.clone(),
+        name,
+        kind,
+        base_url,
+        api_key,
+        model,
+        models,
+        ..Provider::default()
+    };
+    settings.providers.push(provider);
+    if make_active {
+        settings.active_provider_id = id.clone();
+    }
+    settings.sync_legacy_ai_fields_from_active_provider();
+    if omnilauncher_lib::save_settings(&settings) {
+        out.success(&format!("added provider: {id}"));
+        0
+    } else {
+        out.failure("failed to save settings");
+        1
+    }
+}
+
+/// Prompt for a single line of input, showing an optional default that is
+/// returned when the user just presses Enter. Returns `None` on EOF.
+fn prompt_line(out: &Output, label: &str, default: Option<&str>) -> Option<String> {
+    use std::io::Write;
+    let suffix = match default {
+        Some(d) if !d.is_empty() => format!(" [{d}]"),
+        _ => String::new(),
+    };
+    print!("{}{}: ", out.cyan(label), out.dim(&suffix));
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) => None, // EOF
+        Ok(_) => {
+            let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
+            if trimmed.is_empty() {
+                default.map(ToString::to_string).or(Some(String::new()))
+            } else {
+                Some(trimmed)
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+/// Prompt for a secret without echoing it to the terminal when possible.
+/// Falls back to plain input if the terminal cannot be put in raw mode.
+fn prompt_secret(out: &Output, label: &str) -> Option<String> {
+    use std::io::Write;
+    print!("{}: ", out.cyan(label));
+    let _ = std::io::stdout().flush();
+    match read_hidden_line() {
+        Some(secret) => {
+            println!(); // move past the (silent) input line
+            Some(secret)
+        }
+        None => {
+            // Could not disable echo; fall back to visible input.
+            let mut line = String::new();
+            match std::io::stdin().read_line(&mut line) {
+                Ok(0) | Err(_) => None,
+                Ok(_) => Some(line.trim_end_matches(['\n', '\r']).to_string()),
+            }
+        }
+    }
+}
+
+/// Prompt for a yes/no answer with a default. Returns the default on empty
+/// input or EOF.
+fn prompt_yes_no(out: &Output, label: &str, default_yes: bool) -> bool {
+    let hint = if default_yes { "Y/n" } else { "y/N" };
+    match prompt_line(out, &format!("{label} [{hint}]"), None) {
+        Some(ans) => match ans.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" => true,
+            "n" | "no" => false,
+            _ => default_yes,
+        },
+        None => default_yes,
+    }
+}
+
+/// Read a line from stdin with terminal echo disabled (Unix). On non-Unix or
+/// when the terminal cannot be reconfigured, returns `None` so the caller can
+/// fall back to visible input.
+#[cfg(unix)]
+fn read_hidden_line() -> Option<String> {
+    use std::io::BufRead;
+    use std::os::unix::io::AsRawFd;
+
+    let fd = std::io::stdin().as_raw_fd();
+    // SAFETY: termios is a POD struct; we zero it then let tcgetattr fill it.
+    let mut term: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(fd, &mut term) } != 0 {
+        return None;
+    }
+    let original = term;
+    term.c_lflag &= !libc::ECHO;
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &term) } != 0 {
+        return None;
+    }
+    let mut line = String::new();
+    let read = std::io::stdin().lock().read_line(&mut line);
+    // Always restore the original terminal attributes.
+    unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) };
+    match read {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line.trim_end_matches(['\n', '\r']).to_string()),
+    }
+}
+
+#[cfg(not(unix))]
+fn read_hidden_line() -> Option<String> {
+    None
 }
 
 fn providers_set_active(out: &Output, id: &str) -> i32 {
@@ -965,6 +1183,7 @@ fn print_providers_help(out: &Output) {
     println!(
         "      options: --id ID --base-url URL --api-key KEY --model MODEL --models a,b,c --active"
     );
+    println!("  add -i | --interactive                    add a provider via interactive prompts");
     println!("  set-active <id>                           switch active provider");
     println!("  set-model <model> [provider-id]           update selected model");
     println!("  remove <id>                               remove provider");

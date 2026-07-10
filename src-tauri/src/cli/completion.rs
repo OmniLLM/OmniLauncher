@@ -231,7 +231,13 @@ fn providers_command() -> Command {
                 .arg(named_arg("model"))
                 .arg(named_arg("models"))
                 .arg(named_arg("id"))
-                .arg(Arg::new("active").long("active").action(ArgAction::SetTrue)),
+                .arg(Arg::new("active").long("active").action(ArgAction::SetTrue))
+                .arg(
+                    Arg::new("interactive")
+                        .short('i')
+                        .long("interactive")
+                        .action(ArgAction::SetTrue),
+                ),
         )
         .subcommand(
             Command::new("set-active")
