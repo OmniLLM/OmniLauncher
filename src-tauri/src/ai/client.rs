@@ -2,6 +2,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::errors::{classify_ai_error, AiError, ErrorClass};
 
+/// Render an error together with its full `source` chain.
+///
+/// `reqwest::Error`'s `Display` only prints the top-level message
+/// (e.g. "error sending request for url (...)") and drops the underlying
+/// cause — the actual TLS / proxy CONNECT / connection-reset detail lives in
+/// the source chain. Flatten it so logs show the real root cause.
+fn full_error_chain(err: &dyn std::error::Error) -> String {
+    let mut out = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        out.push_str(": ");
+        out.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    out
+}
+
 /// Refresh a Copilot provider's short-lived token synchronously.
 ///
 /// `AiClient::from_settings` is a sync function that may itself be called from
@@ -806,13 +823,14 @@ impl AiClient {
                 );
                 AiError::Timeout
             } else {
+                let detail = full_error_chain(&e);
                 log::warn!(
                     "AI request transport error (endpoint={} model={}): {}",
                     url,
                     self.model,
-                    e
+                    detail
                 );
-                AiError::Transport(e.to_string())
+                AiError::Transport(detail)
             }
         })?;
 
