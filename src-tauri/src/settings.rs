@@ -165,32 +165,31 @@ pub fn provider_caps(kind: ProviderKind) -> ProviderCaps {
 
 /// Split a top-level `ai_model` string into an optional provider id and a
 /// model string. The provider id is only recognized when the substring
-/// before the FIRST '/' exactly matches one of `known_provider_ids`;
-/// otherwise the whole string is returned as the model with no provider.
-/// This keeps model names that themselves contain '/' (e.g.
-/// "jzhu/gpt-5.6-luna") intact when no provider is named "jzhu".
-pub fn parse_model_selector<'a>(
-    ai_model: &'a str,
-    known_provider_ids: &[String],
-) -> (Option<&'a str>, &'a str) {
+/// before the FIRST '/' satisfies `is_known_provider`; otherwise the whole
+/// string is returned as the model with no provider. This keeps model names
+/// that themselves contain '/' (e.g. "jzhu/gpt-5.6-luna") intact when no
+/// provider is named "jzhu".
+pub fn parse_model_selector(
+    ai_model: &str,
+    is_known_provider: impl Fn(&str) -> bool,
+) -> (Option<&str>, &str) {
     if let Some((prefix, rest)) = ai_model.split_once('/') {
-        if known_provider_ids.iter().any(|id| id == prefix) {
+        if is_known_provider(prefix) {
             return (Some(prefix), rest);
         }
     }
     (None, ai_model)
 }
 
-/// Return the first "concrete" model from `candidates`, treating empty and
-/// "auto" (case-insensitive, trimmed) as not concrete. Falls back to "auto".
-fn first_concrete_model(candidates: &[&str]) -> String {
-    for c in candidates {
-        let t = c.trim();
-        if !t.is_empty() && !t.eq_ignore_ascii_case("auto") {
-            return t.to_string();
-        }
+/// Normalize a model string, treating empty and "auto" (case-insensitive,
+/// trimmed) as "not concrete". Returns the trimmed model when concrete.
+fn concrete_model(model: &str) -> Option<&str> {
+    let t = model.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("auto") {
+        None
+    } else {
+        Some(t)
     }
-    "auto".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,19 +368,28 @@ impl AppSettings {
             })
     }
 
+    /// Find a provider by exact id without cloning. Shared by the active
+    /// provider and selector resolution paths so id-matching lives in one place.
+    fn provider_by_id(&self, id: &str) -> Option<&Provider> {
+        self.providers.iter().find(|p| p.id == id)
+    }
+
     /// Resolve the effective provider and concrete model to send, honoring a
     /// `provider-id/model` prefix in the top-level `ai_model`. A valid prefix
     /// overrides `active_provider_id`; the model falls back from the
     /// provider's own `model` to the selector model to "auto".
     pub fn resolve_active_selection(&self) -> (Provider, String) {
-        let ids: Vec<String> = self.providers.iter().map(|p| p.id.clone()).collect();
-        let (prefix, selector_model) = parse_model_selector(&self.ai_model, &ids);
+        let (prefix, selector_model) =
+            parse_model_selector(&self.ai_model, |id| self.provider_by_id(id).is_some());
 
         let provider = prefix
-            .and_then(|id| self.providers.iter().find(|p| p.id == id).cloned())
+            .and_then(|id| self.provider_by_id(id).cloned())
             .unwrap_or_else(|| self.active_provider());
 
-        let effective = first_concrete_model(&[&provider.model, selector_model]);
+        let effective = concrete_model(&provider.model)
+            .or_else(|| concrete_model(selector_model))
+            .unwrap_or("auto")
+            .to_string();
         (provider, effective)
     }
 
@@ -1840,33 +1848,35 @@ mod settings_tests {
 
     #[test]
     fn selector_recognizes_known_provider_prefix() {
-        let ids = vec!["copilot".to_string(), "default".to_string()];
+        let ids = ["copilot", "default"];
+        let known = |id: &str| ids.contains(&id);
         assert_eq!(
-            super::parse_model_selector("copilot/gpt-5.6-sol", &ids),
+            super::parse_model_selector("copilot/gpt-5.6-sol", known),
             (Some("copilot"), "gpt-5.6-sol")
         );
     }
 
     #[test]
     fn selector_keeps_slash_model_when_prefix_unknown() {
-        let ids = vec!["copilot".to_string(), "default".to_string()];
+        let ids = ["copilot", "default"];
+        let known = |id: &str| ids.contains(&id);
         assert_eq!(
-            super::parse_model_selector("jzhu/gpt-5.6-luna", &ids),
+            super::parse_model_selector("jzhu/gpt-5.6-luna", known),
             (None, "jzhu/gpt-5.6-luna")
         );
     }
 
     #[test]
     fn selector_bare_model_and_empty() {
-        let ids = vec!["copilot".to_string()];
-        assert_eq!(super::parse_model_selector("gpt-5.6-sol", &ids), (None, "gpt-5.6-sol"));
-        assert_eq!(super::parse_model_selector("", &ids), (None, ""));
+        let known = |id: &str| id == "copilot";
+        assert_eq!(super::parse_model_selector("gpt-5.6-sol", known), (None, "gpt-5.6-sol"));
+        assert_eq!(super::parse_model_selector("", known), (None, ""));
     }
 
     #[test]
     fn selector_prefix_with_empty_model() {
-        let ids = vec!["copilot".to_string()];
-        assert_eq!(super::parse_model_selector("copilot/", &ids), (Some("copilot"), ""));
+        let known = |id: &str| id == "copilot";
+        assert_eq!(super::parse_model_selector("copilot/", known), (Some("copilot"), ""));
     }
 
     fn provider_named(id: &str, model: &str) -> super::Provider {
