@@ -71,6 +71,10 @@ fn log_startup_banner(role: &str, debug_enabled: bool) {
 }
 
 fn main() {
+    // If invoked by a generated shell completion integration, answer the
+    // callback and exit before any logging or stdout write. No-op otherwise.
+    cli::completion::handle_completion_env();
+
     let args: Vec<String> = std::env::args().collect();
     let argv0 = args.first().cloned().unwrap_or_default();
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
@@ -127,11 +131,7 @@ pub fn serve_backend(args: &[String]) {
     let mut skill_manager = SkillManager::new();
     skill_manager.load_all();
 
-    let a2a_token = match settings
-        .a2a_token
-        .as_ref()
-        .filter(|t| !t.trim().is_empty())
-    {
+    let a2a_token = match settings.a2a_token.as_ref().filter(|t| !t.trim().is_empty()) {
         Some(token) => {
             log::info!("a2a: using existing token");
             token.clone()

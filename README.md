@@ -101,11 +101,45 @@ ol plugins update <repo-dir-name>
 ol plugins remove <repo-dir-name>
 ol plugins runtimes
 ol plugins install-runtime python
+
+ol completion bash            # generate shell completion (bash/zsh/fish/powershell/elvish)
 ```
 
 Global flags apply anywhere: `--json` (machine-readable output), `--no-color` (also honors `NO_COLOR` and non-TTY pipes), `-q`/`--quiet`, and `--debug` (file logging to `~/.omnilauncher/omnilauncher.log`).
 
 Running `omnilauncher` with no arguments prints the same help as `ol`. The legacy `--server` / `--debug` flags still work.
+
+### Shell completion
+
+`ol completion <shell>` writes a completion integration to stdout for Bash, Zsh,
+Fish, PowerShell, or Elvish. Each generated script registers completion for
+**both** `ol` and `omnilauncher`, regardless of which name you generated it with.
+
+```bash
+# Bash — source per-session, or install once:
+source <(ol completion bash)
+ol completion bash | sudo tee /etc/bash_completion.d/ol > /dev/null
+
+# Zsh — put it on your $fpath, e.g.:
+ol completion zsh > "${fpath[1]}/_ol"
+
+# Fish:
+ol completion fish > ~/.config/fish/completions/ol.fish
+
+# Elvish:
+ol completion elvish >> ~/.config/elvish/rc.elv
+```
+
+```powershell
+# PowerShell — add to your profile:
+ol completion powershell | Out-String | Invoke-Expression
+```
+
+Completion is **live and local**: provider IDs/models, installed skill names,
+installed plugin directory names, and settings field names are read from local
+state at the moment you press Tab. It makes **no** network or backend request and
+never suggests secrets (API keys, tokens, or stored setting values). If local
+state can't be read, completion silently falls back to the static command tree.
 
 ### AGENTS.md Context
 

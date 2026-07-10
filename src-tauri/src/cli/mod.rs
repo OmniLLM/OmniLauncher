@@ -11,6 +11,7 @@
 //! It deliberately does NOT expose the old desktop launcher/query surface. We
 //! parse with a small hand-rolled argv scan rather than a clap derive tree.
 
+pub mod completion;
 pub mod manage;
 pub mod ops;
 pub mod process;
@@ -149,6 +150,9 @@ fn dispatch_command(out: &Output, globals: &Globals, command: &str, args: &[Stri
         "skills" => Dispatch::Handled(manage::skills(out, args)),
         "plugins" => Dispatch::Handled(manage::plugins(out, args)),
 
+        // ── Completion ────────────────────────────────────────────────────
+        "completion" => Dispatch::Handled(completion::print(args.first().map(String::as_str))),
+
         // ── Help / version ───────────────────────────────────────────────
         "help" | "--help" | "-h" => {
             print_help(out);
@@ -238,6 +242,10 @@ const OPS_COMMANDS: &[OpsCommand] = &[
     OpsCommand {
         name: "plugins",
         desc: "list/install/update/remove external plugins",
+    },
+    OpsCommand {
+        name: "completion",
+        desc: "generate shell completion for ol and omnilauncher",
     },
 ];
 
@@ -382,6 +390,32 @@ mod tests {
                 !help.contains(removed),
                 "help unexpectedly lists removed command '{removed}'"
             );
+        }
+    }
+
+    #[test]
+    fn completion_missing_shell_is_usage_error() {
+        match dispatch("ol", &s(&["completion"])) {
+            Dispatch::Handled(code) => assert_eq!(code, 2),
+            _ => panic!("completion without a shell should be a usage error"),
+        }
+    }
+
+    #[test]
+    fn completion_invalid_shell_is_usage_error() {
+        match dispatch("ol", &s(&["completion", "nu"])) {
+            Dispatch::Handled(code) => assert_eq!(code, 2),
+            _ => panic!("completion with an invalid shell should be a usage error"),
+        }
+    }
+
+    #[test]
+    fn completion_valid_shells_are_handled_success() {
+        for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+            match dispatch("ol", &s(&["completion", shell])) {
+                Dispatch::Handled(code) => assert_eq!(code, 0, "{shell} failed"),
+                _ => panic!("completion {shell} should be handled"),
+            }
         }
     }
 

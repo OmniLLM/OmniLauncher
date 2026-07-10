@@ -11,7 +11,7 @@ use omnilauncher_lib::{
     SkillManager,
 };
 
-const SETTINGS_FIELDS: &[&str] = &[
+pub(crate) const SETTINGS_FIELDS: &[&str] = &[
     "ai_base_url",
     "ai_model",
     "ai_api_key",
