@@ -210,7 +210,8 @@ impl AiClient {
     }
 
     pub fn from_settings(settings: &crate::AppSettings) -> Self {
-        let provider = settings.active_provider();
+        let (mut provider, effective_model) = settings.resolve_active_selection();
+        provider.model = effective_model;
         match crate::ai::provider::resolve_provider(&provider) {
             Ok(resolved) => Self::with_resolved(
                 provider.base_url,
