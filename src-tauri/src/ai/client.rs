@@ -1,6 +1,41 @@
+use std::sync::{Arc, RwLock};
+
 use serde::{Deserialize, Serialize};
 
 use crate::ai::errors::{classify_ai_error, AiError, ErrorClass};
+
+/// Mutable Copilot token state shared behind an `RwLock` so a long-lived
+/// `AiClient` can refresh its short-lived Copilot token in place (e.g. after a
+/// 401) without being reconstructed.
+#[derive(Debug)]
+struct CopilotTokenState {
+    token: String,
+    expiry: i64,
+}
+
+/// Everything an `AiClient` needs to mint a fresh Copilot token on its own.
+///
+/// The long-lived `GitHub` token exchanges for a short-lived Copilot token via
+/// `copilot_auth::get_copilot_token`. `provider_id` lets us persist the refreshed
+/// token back to on-disk settings so sibling clients reuse it.
+#[derive(Debug)]
+struct CopilotAuth {
+    provider_id: String,
+    github_token: String,
+    enterprise_url: String,
+    state: RwLock<CopilotTokenState>,
+}
+
+/// Persist a refreshed Copilot token back into on-disk settings by provider id.
+fn persist_copilot_token_by_id(provider_id: &str, token: &str, expiry: i64) -> bool {
+    let mut latest = crate::settings::load_settings();
+    let Some(target) = latest.providers.iter_mut().find(|p| p.id == provider_id) else {
+        return false;
+    };
+    target.copilot_token = token.to_string();
+    target.copilot_token_expiry = expiry;
+    crate::settings::save_settings(&latest)
+}
 
 /// Render an error together with its full `source` chain.
 ///
@@ -195,6 +230,9 @@ pub struct AiClient {
     /// per-model between `/chat/completions` and `/responses`. The value is the
     /// Copilot API base URL (e.g. `https://api.githubcopilot.com`).
     copilot_base: Option<String>,
+    /// When `Some`, holds the state needed to refresh this client's short-lived
+    /// Copilot token in place on a 401 (see `refresh_copilot_and_headers`).
+    copilot_auth: Option<Arc<CopilotAuth>>,
 }
 
 impl AiClient {
@@ -271,6 +309,7 @@ impl AiClient {
             max_retry_attempts: max_retry_attempts.clamp(1, MAX_ALLOWED_RETRY_ATTEMPTS),
             retry_base_delay_ms,
             copilot_base: None,
+            copilot_auth: None,
         }
     }
 
@@ -279,6 +318,20 @@ impl AiClient {
     /// is the Copilot API base URL (e.g. `https://api.githubcopilot.com`).
     fn with_copilot_base(mut self, copilot_base: String) -> Self {
         self.copilot_base = Some(copilot_base);
+        self
+    }
+
+    /// Attach the state required to refresh this client's Copilot token in place.
+    fn with_copilot_auth(mut self, provider: &crate::settings::Provider) -> Self {
+        self.copilot_auth = Some(Arc::new(CopilotAuth {
+            provider_id: provider.id.clone(),
+            github_token: provider.copilot_github_token.clone(),
+            enterprise_url: provider.copilot_enterprise_url.clone(),
+            state: RwLock::new(CopilotTokenState {
+                token: provider.copilot_token.clone(),
+                expiry: provider.copilot_token_expiry,
+            }),
+        }));
         self
     }
 
@@ -307,7 +360,7 @@ impl AiClient {
         match crate::ai::provider::resolve_provider(&provider) {
             Ok(resolved) => {
                 let client = Self::with_resolved(
-                    provider.base_url,
+                    provider.base_url.clone(),
                     resolved.chat_url,
                     resolved.headers,
                     resolved.model,
@@ -316,9 +369,11 @@ impl AiClient {
                     settings.ai_retry_base_delay_ms,
                 );
                 if provider.kind == crate::settings::ProviderKind::GithubCopilot {
-                    client.with_copilot_base(crate::ai::copilot_auth::copilot_base_url(
-                        &provider.copilot_enterprise_url,
-                    ))
+                    client
+                        .with_copilot_base(crate::ai::copilot_auth::copilot_base_url(
+                            &provider.copilot_enterprise_url,
+                        ))
+                        .with_copilot_auth(&provider)
                 } else {
                     client
                 }
@@ -779,10 +834,122 @@ impl AiClient {
         })
     }
 
+    /// The `Authorization` header value to send right now. For Copilot providers
+    /// this reflects the live (possibly refreshed) token from `copilot_auth`
+    /// rather than the value frozen into `self.headers` at construction.
+    fn live_auth_header(&self) -> Option<String> {
+        let auth = self.copilot_auth.as_ref()?;
+        let state = auth.state.read().ok()?;
+        Some(format!("Bearer {}", state.token))
+    }
+
+    /// Apply the client's headers to `req`, overriding `Authorization` with the
+    /// live Copilot token when this is a Copilot client.
+    fn apply_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let live_auth = self.live_auth_header();
+        for (name, value) in &self.headers {
+            if live_auth.is_some() && name.eq_ignore_ascii_case("authorization") {
+                continue; // replaced below with the live token
+            }
+            req = req.header(name, value);
+        }
+        if let Some(auth) = live_auth {
+            req = req.header("Authorization", auth);
+        }
+        req
+    }
+
+    /// Refresh the Copilot token in place after an auth failure. Returns `true`
+    /// when a *different* token was obtained (so the caller should retry). The
+    /// new token is stored on `copilot_auth.state` and persisted to settings so
+    /// sibling clients reuse it.
+    async fn refresh_copilot_token(&self) -> bool {
+        let Some(auth) = self.copilot_auth.as_ref() else {
+            return false;
+        };
+        if auth.github_token.trim().is_empty() {
+            log::warn!("copilot: cannot refresh token — no GitHub token stored");
+            return false;
+        }
+
+        let current = auth
+            .state
+            .read()
+            .ok()
+            .map(|s| s.token.clone())
+            .unwrap_or_default();
+
+        let fresh = match crate::ai::copilot_auth::get_copilot_token(
+            &auth.github_token,
+            &auth.enterprise_url,
+        )
+        .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("copilot: token refresh failed: {e}");
+                return false;
+            }
+        };
+
+        if fresh.token == current {
+            log::warn!("copilot: token refresh returned an unchanged token");
+            return false;
+        }
+
+        if let Ok(mut state) = auth.state.write() {
+            state.token = fresh.token.clone();
+            state.expiry = fresh.expires_at;
+        }
+        if persist_copilot_token_by_id(&auth.provider_id, &fresh.token, fresh.expires_at) {
+            log::info!(
+                "copilot: refreshed token in place for provider '{}'",
+                auth.provider_id
+            );
+        }
+        true
+    }
+
     /// POST a JSON body with the client's headers and return the parsed JSON,
     /// mapping transport/HTTP/JSON failures to `AiError`. Shared by the chat and
     /// responses execution paths.
+    ///
+    /// For Copilot providers, a `401` triggers a one-shot in-place token refresh
+    /// and a single retry — this is what keeps a long-lived client working after
+    /// its short-lived Copilot token expires mid-session.
     async fn send_json(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        body: &serde_json::Value,
+        message_count: usize,
+        tool_count: usize,
+    ) -> Result<serde_json::Value, AiError> {
+        match self
+            .send_json_once(client, url, body, message_count, tool_count)
+            .await
+        {
+            Err(AiError::Api {
+                status: 401,
+                body: err_body,
+            }) if self.copilot_auth.is_some() => {
+                log::info!("copilot: got 401, attempting in-place token refresh and one retry");
+                if self.refresh_copilot_token().await {
+                    self.send_json_once(client, url, body, message_count, tool_count)
+                        .await
+                } else {
+                    Err(AiError::Api {
+                        status: 401,
+                        body: err_body,
+                    })
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Single POST attempt used by [`send_json`].
+    async fn send_json_once(
         &self,
         client: &reqwest::Client,
         url: &str,
@@ -796,10 +963,11 @@ impl AiClient {
             self.model,
             message_count,
             tool_count,
-            if self
-                .headers
-                .iter()
-                .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            if self.live_auth_header().is_some()
+                || self
+                    .headers
+                    .iter()
+                    .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
             {
                 "header"
             } else {
@@ -807,10 +975,7 @@ impl AiClient {
             }
         );
 
-        let mut req = client.post(url).json(body);
-        for (name, value) in &self.headers {
-            req = req.header(name, value);
-        }
+        let req = self.apply_headers(client.post(url).json(body));
 
         let started = std::time::Instant::now();
         let response = req.send().await.map_err(|e| {
@@ -1218,5 +1383,50 @@ mod client_tests {
         assert_eq!(out[0]["parameters"]["type"], "object");
         // No nested "function" wrapper in the responses form.
         assert!(out[0]["function"].is_null());
+    }
+
+    fn copilot_client(token: &str) -> AiClient {
+        let provider = crate::settings::Provider {
+            id: "cop-1".into(),
+            kind: crate::settings::ProviderKind::GithubCopilot,
+            copilot_github_token: "gho_x".into(),
+            copilot_token: token.into(),
+            copilot_token_expiry: 0,
+            ..crate::settings::Provider::default()
+        };
+        let resolved = crate::ai::provider::resolve_provider(&provider).unwrap();
+        AiClient::with_resolved(
+            provider.base_url.clone(),
+            resolved.chat_url,
+            resolved.headers,
+            resolved.model,
+            120,
+            3,
+            2_000,
+        )
+        .with_copilot_base("https://api.githubcopilot.com".into())
+        .with_copilot_auth(&provider)
+    }
+
+    #[test]
+    fn live_auth_header_reflects_stored_copilot_token() {
+        let c = copilot_client("tok-a");
+        assert_eq!(c.live_auth_header().as_deref(), Some("Bearer tok-a"));
+    }
+
+    #[test]
+    fn live_auth_header_none_for_non_copilot_client() {
+        let c = make_client();
+        assert!(c.live_auth_header().is_none());
+    }
+
+    #[test]
+    fn live_auth_header_tracks_in_place_token_update() {
+        let c = copilot_client("tok-a");
+        {
+            let auth = c.copilot_auth.as_ref().unwrap();
+            auth.state.write().unwrap().token = "tok-b".into();
+        }
+        assert_eq!(c.live_auth_header().as_deref(), Some("Bearer tok-b"));
     }
 }
