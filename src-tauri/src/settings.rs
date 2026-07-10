@@ -181,6 +181,18 @@ pub fn parse_model_selector<'a>(
     (None, ai_model)
 }
 
+/// Return the first "concrete" model from `candidates`, treating empty and
+/// "auto" (case-insensitive, trimmed) as not concrete. Falls back to "auto".
+fn first_concrete_model(candidates: &[&str]) -> String {
+    for c in candidates {
+        let t = c.trim();
+        if !t.is_empty() && !t.eq_ignore_ascii_case("auto") {
+            return t.to_string();
+        }
+    }
+    "auto".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     pub id: String,
@@ -355,6 +367,22 @@ impl AppSettings {
                     self.resolve_ai_api_key(),
                 )
             })
+    }
+
+    /// Resolve the effective provider and concrete model to send, honoring a
+    /// `provider-id/model` prefix in the top-level `ai_model`. A valid prefix
+    /// overrides `active_provider_id`; the model falls back from the
+    /// provider's own `model` to the selector model to "auto".
+    pub fn resolve_active_selection(&self) -> (Provider, String) {
+        let ids: Vec<String> = self.providers.iter().map(|p| p.id.clone()).collect();
+        let (prefix, selector_model) = parse_model_selector(&self.ai_model, &ids);
+
+        let provider = prefix
+            .and_then(|id| self.providers.iter().find(|p| p.id == id).cloned())
+            .unwrap_or_else(|| self.active_provider());
+
+        let effective = first_concrete_model(&[&provider.model, selector_model]);
+        (provider, effective)
     }
 
     /// Keep legacy flat fields synchronized with the selected provider so old
@@ -1839,5 +1867,72 @@ mod settings_tests {
     fn selector_prefix_with_empty_model() {
         let ids = vec!["copilot".to_string()];
         assert_eq!(super::parse_model_selector("copilot/", &ids), (Some("copilot"), ""));
+    }
+
+    fn provider_named(id: &str, model: &str) -> super::Provider {
+        super::Provider {
+            id: id.to_string(),
+            name: id.to_string(),
+            model: model.to_string(),
+            ..super::Provider::default()
+        }
+    }
+
+    fn settings_with(
+        providers: Vec<super::Provider>,
+        active: &str,
+        ai_model: &str,
+    ) -> super::AppSettings {
+        let mut s = default_shaped_settings();
+        s.providers = providers;
+        s.active_provider_id = active.to_string();
+        s.ai_model = ai_model.to_string();
+        s
+    }
+
+    #[test]
+    fn resolve_prefix_overrides_active_provider() {
+        let s = settings_with(
+            vec![
+                provider_named("default", "m-default"),
+                provider_named("copilot", "m-copilot"),
+            ],
+            "default",
+            "copilot/gpt-5.6-sol",
+        );
+        let (p, model) = s.resolve_active_selection();
+        assert_eq!(p.id, "copilot");
+        assert_eq!(model, "m-copilot");
+    }
+
+    #[test]
+    fn resolve_falls_back_to_selector_model_when_provider_auto() {
+        let s = settings_with(
+            vec![provider_named("copilot", "auto")],
+            "copilot",
+            "copilot/gpt-5.6-sol",
+        );
+        let (p, model) = s.resolve_active_selection();
+        assert_eq!(p.id, "copilot");
+        assert_eq!(model, "gpt-5.6-sol");
+    }
+
+    #[test]
+    fn resolve_bare_model_used_as_fallback_on_active_provider() {
+        let s = settings_with(
+            vec![provider_named("copilot", "")],
+            "copilot",
+            "gpt-5.6-sol",
+        );
+        let (p, model) = s.resolve_active_selection();
+        assert_eq!(p.id, "copilot");
+        assert_eq!(model, "gpt-5.6-sol");
+    }
+
+    #[test]
+    fn resolve_defaults_to_auto_when_nothing_concrete() {
+        let s = settings_with(vec![provider_named("copilot", "auto")], "copilot", "auto");
+        let (_p, model) = s.resolve_active_selection();
+        assert_eq!(model, "auto");
     }
 }
