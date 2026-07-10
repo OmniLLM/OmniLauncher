@@ -1232,6 +1232,24 @@ pub fn read_gh_hosts_yml() -> Vec<GhHostEntry> {
 
 pub fn save_settings(settings: &AppSettings) -> bool {
     let path = settings_path();
+    // Defense-in-depth for the test suite: many tests mutate the process-global
+    // `OMNILAUNCHER_CONFIG_DIR` to redirect writes to a temp dir, guarded by
+    // `CONFIG_DIR_ENV_LOCK`. A single test that forgets the lock (or a race in
+    // the set/remove window) would otherwise let `save_settings` overwrite the
+    // user's real `~/.config/omnilauncher/settings.json`. In test builds we
+    // therefore refuse to write unless the override is set, so no test can ever
+    // clobber real user config regardless of lock discipline.
+    #[cfg(test)]
+    {
+        if std::env::var_os("OMNILAUNCHER_CONFIG_DIR").is_none() {
+            log::warn!(
+                "save_settings refused: OMNILAUNCHER_CONFIG_DIR unset in test build \
+                 (would have written real config at {})",
+                path.display()
+            );
+            return false;
+        }
+    }
     if let Some(parent) = path.parent() {
         if std::fs::create_dir_all(parent).is_err() {
             return false;
@@ -1843,6 +1861,29 @@ mod settings_tests {
 
         std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Guard against the "test wiped my real config" incident: in test builds,
+    /// `save_settings` must refuse to write when `OMNILAUNCHER_CONFIG_DIR` is
+    /// unset, so no test — regardless of env-lock discipline — can ever
+    /// overwrite the user's real `~/.config/omnilauncher/settings.json`.
+    #[test]
+    fn save_settings_refuses_real_config_path_in_tests() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.blocking_lock();
+        // Ensure the override is absent for this check, then restore it after.
+        let prev = std::env::var_os("OMNILAUNCHER_CONFIG_DIR");
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+
+        let saved = save_settings(&default_shaped_settings());
+
+        if let Some(v) = prev {
+            std::env::set_var("OMNILAUNCHER_CONFIG_DIR", v);
+        }
+        assert!(
+            !saved,
+            "save_settings must refuse to write the real config path when \
+             OMNILAUNCHER_CONFIG_DIR is unset in test builds"
+        );
     }
 
 
