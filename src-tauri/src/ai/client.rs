@@ -2,6 +2,49 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::errors::{classify_ai_error, AiError, ErrorClass};
 
+/// Refresh a Copilot provider's short-lived token synchronously.
+///
+/// `AiClient::from_settings` is a sync function that may itself be called from
+/// within a tokio runtime (main/server), so a nested `block_on` would panic.
+/// We therefore run the async refresh on a dedicated OS thread that owns a
+/// fresh current-thread runtime. Returns `Ok(true)` when the token changed.
+fn refresh_copilot_token_blocking(
+    provider: &mut crate::settings::Provider,
+) -> Result<bool, String> {
+    let mut p = provider.clone();
+    let handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build runtime: {e}"))?;
+        let changed = rt.block_on(crate::ai::copilot_auth::refresh_copilot_token_if_needed(
+            &mut p,
+        ))?;
+        Ok::<_, String>((changed, p))
+    });
+    let (changed, refreshed) = handle
+        .join()
+        .map_err(|_| "copilot refresh thread panicked".to_string())??;
+    if changed {
+        *provider = refreshed;
+    }
+    Ok(changed)
+}
+
+/// Persist a refreshed Copilot token back into the on-disk settings for the
+/// matching provider id. Returns the provider id on success.
+fn persist_refreshed_copilot_token(provider: &crate::settings::Provider) -> Option<String> {
+    let mut latest = crate::settings::load_settings();
+    let target = latest.providers.iter_mut().find(|p| p.id == provider.id)?;
+    target.copilot_token = provider.copilot_token.clone();
+    target.copilot_token_expiry = provider.copilot_token_expiry;
+    if crate::settings::save_settings(&latest) {
+        Some(provider.id.clone())
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
@@ -131,6 +174,10 @@ pub struct AiClient {
     request_timeout_secs: u64,
     max_retry_attempts: u32,
     retry_base_delay_ms: u64,
+    /// When `Some`, this is a GitHub Copilot provider and requests are routed
+    /// per-model between `/chat/completions` and `/responses`. The value is the
+    /// Copilot API base URL (e.g. `https://api.githubcopilot.com`).
+    copilot_base: Option<String>,
 }
 
 impl AiClient {
@@ -206,22 +253,59 @@ impl AiClient {
             request_timeout_secs: request_timeout_secs.max(1),
             max_retry_attempts: max_retry_attempts.clamp(1, MAX_ALLOWED_RETRY_ATTEMPTS),
             retry_base_delay_ms,
+            copilot_base: None,
         }
+    }
+
+    /// Mark this client as a GitHub Copilot provider whose requests are routed
+    /// per-model between `/chat/completions` and `/responses`. `copilot_base`
+    /// is the Copilot API base URL (e.g. `https://api.githubcopilot.com`).
+    fn with_copilot_base(mut self, copilot_base: String) -> Self {
+        self.copilot_base = Some(copilot_base);
+        self
     }
 
     pub fn from_settings(settings: &crate::AppSettings) -> Self {
         let (mut provider, effective_model) = settings.resolve_active_selection();
         provider.model = effective_model;
+
+        // For GitHub Copilot, refresh the short-lived Copilot token on demand
+        // (when missing or near expiry) before baking it into request headers.
+        // If it changes, persist so other clients reuse it.
+        if provider.kind == crate::settings::ProviderKind::GithubCopilot {
+            match refresh_copilot_token_blocking(&mut provider) {
+                Ok(true) => {
+                    if let Some(saved) = persist_refreshed_copilot_token(&provider) {
+                        log::info!("copilot: refreshed token for provider '{saved}'");
+                    }
+                }
+                Ok(false) => {}
+                Err(err) => log::warn!(
+                    "copilot: failed to refresh token for provider '{}': {err}",
+                    provider.name
+                ),
+            }
+        }
+
         match crate::ai::provider::resolve_provider(&provider) {
-            Ok(resolved) => Self::with_resolved(
-                provider.base_url,
-                resolved.chat_url,
-                resolved.headers,
-                resolved.model,
-                settings.ai_timeout_secs,
-                settings.ai_max_retry_attempts,
-                settings.ai_retry_base_delay_ms,
-            ),
+            Ok(resolved) => {
+                let client = Self::with_resolved(
+                    provider.base_url,
+                    resolved.chat_url,
+                    resolved.headers,
+                    resolved.model,
+                    settings.ai_timeout_secs,
+                    settings.ai_max_retry_attempts,
+                    settings.ai_retry_base_delay_ms,
+                );
+                if provider.kind == crate::settings::ProviderKind::GithubCopilot {
+                    client.with_copilot_base(crate::ai::copilot_auth::copilot_base_url(
+                        &provider.copilot_enterprise_url,
+                    ))
+                } else {
+                    client
+                }
+            }
             Err(err) => {
                 log::warn!(
                     "failed to resolve active provider '{}': {err}",
@@ -354,6 +438,12 @@ impl AiClient {
     }
 
     /// Single (non-retrying) API call — used internally by `chat_with_tools_choice`.
+    ///
+    /// For non-Copilot providers this is a plain OpenAI chat-completions call.
+    /// For GitHub Copilot providers (`copilot_base.is_some()`) it selects the
+    /// per-model request shape (`/chat/completions` vs `/responses`) and, when a
+    /// chat-completions request returns `unsupported_api_for_model`, transparently
+    /// retries once on `/responses`.
     async fn chat_with_tools_once(
         &self,
         messages: Vec<Message>,
@@ -361,8 +451,50 @@ impl AiClient {
         tool_choice: ToolChoice,
     ) -> Result<ChatResponse, AiError> {
         let client = self.build_client()?;
+        let api_messages = Self::build_api_messages(&messages);
 
-        let api_messages: Vec<serde_json::Value> = messages
+        let Some(base) = &self.copilot_base else {
+            // Standard OpenAI-compatible path (custom / azure-foundry).
+            return self
+                .execute_chat(&client, &self.chat_url, &api_messages, &tools, tool_choice)
+                .await;
+        };
+
+        let base = base.trim_end_matches('/');
+        match crate::ai::copilot_models::select_shape(&self.model, false) {
+            crate::ai::copilot_models::CopilotShape::Responses => {
+                let url = format!("{base}/responses");
+                self.execute_responses(&client, &url, &messages, &tools, tool_choice)
+                    .await
+            }
+            crate::ai::copilot_models::CopilotShape::Chat => {
+                let result = self
+                    .execute_chat(&client, &self.chat_url, &api_messages, &tools, tool_choice)
+                    .await;
+                match result {
+                    Err(AiError::Api { status, body })
+                        if crate::ai::copilot_models::is_unsupported_chat_completions_error(
+                            status, &body,
+                        ) =>
+                    {
+                        log::info!(
+                            "copilot: model '{}' rejected /chat/completions ({}); retrying on /responses",
+                            self.model,
+                            status
+                        );
+                        let url = format!("{base}/responses");
+                        self.execute_responses(&client, &url, &messages, &tools, tool_choice)
+                            .await
+                    }
+                    other => other,
+                }
+            }
+        }
+    }
+
+    /// Convert internal `Message`s into OpenAI chat-completions `messages`.
+    fn build_api_messages(messages: &[Message]) -> Vec<serde_json::Value> {
+        messages
             .iter()
             .map(|m| {
                 let mut msg = serde_json::json!({ "role": m.role });
@@ -398,26 +530,255 @@ impl AiClient {
 
                 msg
             })
-            .collect();
+            .collect()
+    }
 
+    /// Execute an OpenAI chat-completions request and parse the response.
+    async fn execute_chat(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        api_messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        tool_choice: ToolChoice,
+    ) -> Result<ChatResponse, AiError> {
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": api_messages,
         });
-
         if !tools.is_empty() {
             body["tools"] = serde_json::json!(tools);
             body["tool_choice"] = serde_json::json!(tool_choice.as_api_value());
         }
 
-        let url = self.chat_url.clone();
+        let json = self
+            .send_json(client, url, &body, api_messages.len(), tools.len())
+            .await?;
 
+        let choice = &json["choices"][0];
+        let message = &choice["message"];
+        let content = message["content"].as_str().map(|s| s.to_string());
+        let finish_reason = choice["finish_reason"].as_str().map(|s| s.to_string());
+
+        let tool_calls = message["tool_calls"].as_array().map(|tcs| {
+            tcs.iter()
+                .filter_map(|tc| {
+                    Some(ToolCall {
+                        id: tc["id"].as_str()?.to_string(),
+                        call_type: Some("function".to_string()),
+                        function: FunctionCall {
+                            name: tc["function"]["name"].as_str()?.to_string(),
+                            arguments: tc["function"]["arguments"].as_str()?.to_string(),
+                        },
+                    })
+                })
+                .collect()
+        });
+
+        log::debug!(
+            "AI response parsed (chat): finish_reason={:?} content_len={} tool_calls={}",
+            finish_reason,
+            content.as_ref().map(|c| c.len()).unwrap_or(0),
+            tool_calls
+                .as_ref()
+                .map(|tcs: &Vec<ToolCall>| tcs.len())
+                .unwrap_or(0),
+        );
+
+        Ok(ChatResponse {
+            content,
+            tool_calls,
+            finish_reason,
+        })
+    }
+
+    /// Execute an OpenAI Responses request (`POST /responses`) and parse the
+    /// response into the same `ChatResponse` shape the agent loop consumes.
+    async fn execute_responses(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        messages: &[Message],
+        tools: &[serde_json::Value],
+        tool_choice: ToolChoice,
+    ) -> Result<ChatResponse, AiError> {
+        let input = Self::build_responses_input(messages);
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "input": input,
+            "stream": false,
+        });
+        if !tools.is_empty() {
+            body["tools"] = serde_json::json!(Self::chat_tools_to_responses_tools(tools));
+            body["tool_choice"] = serde_json::json!(tool_choice.as_api_value());
+        }
+
+        let json = self
+            .send_json(client, url, &body, messages.len(), tools.len())
+            .await?;
+
+        Self::parse_responses_json(&json)
+    }
+
+    /// Convert internal `Message`s into the Responses API `input` array.
+    fn build_responses_input(messages: &[Message]) -> Vec<serde_json::Value> {
+        let mut input: Vec<serde_json::Value> = Vec::new();
+        for m in messages {
+            match m.role.as_str() {
+                "system" | "user" => {
+                    let text_type = "input_text";
+                    input.push(serde_json::json!({
+                        "type": "message",
+                        "role": m.role,
+                        "content": [{ "type": text_type, "text": m.content_str() }],
+                    }));
+                }
+                "assistant" => {
+                    if let Some(text) = m.content.as_ref().filter(|c| !c.is_empty()) {
+                        input.push(serde_json::json!({
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{ "type": "output_text", "text": text }],
+                        }));
+                    }
+                    if let Some(tcs) = &m.tool_calls {
+                        for tc in tcs {
+                            input.push(serde_json::json!({
+                                "type": "function_call",
+                                "call_id": tc.id,
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            }));
+                        }
+                    }
+                }
+                "tool" => {
+                    input.push(serde_json::json!({
+                        "type": "function_call_output",
+                        "call_id": m.tool_call_id.clone().unwrap_or_default(),
+                        "output": m.content_str(),
+                    }));
+                }
+                _ => {}
+            }
+        }
+        input
+    }
+
+    /// Convert OpenAI chat-completions tool definitions
+    /// (`{type:function, function:{name, parameters, description}}`) into the
+    /// flattened Responses API form (`{type:function, name, parameters,
+    /// description}`).
+    fn chat_tools_to_responses_tools(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        tools
+            .iter()
+            .map(|t| {
+                let f = &t["function"];
+                let mut out = serde_json::json!({ "type": "function" });
+                if let Some(name) = f["name"].as_str() {
+                    out["name"] = serde_json::json!(name);
+                }
+                if !f["parameters"].is_null() {
+                    out["parameters"] = f["parameters"].clone();
+                }
+                if let Some(desc) = f["description"].as_str() {
+                    out["description"] = serde_json::json!(desc);
+                }
+                out
+            })
+            .collect()
+    }
+
+    /// Parse a Responses API payload into a `ChatResponse`.
+    fn parse_responses_json(json: &serde_json::Value) -> Result<ChatResponse, AiError> {
+        let mut content = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+        if let Some(output) = json["output"].as_array() {
+            for item in output {
+                match item["type"].as_str() {
+                    Some("message") => {
+                        if let Some(blocks) = item["content"].as_array() {
+                            for block in blocks {
+                                let bt = block["type"].as_str().unwrap_or("");
+                                if bt == "output_text" || bt == "text" {
+                                    if let Some(text) = block["text"].as_str() {
+                                        content.push_str(text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Some("function_call") => {
+                        let id = item["call_id"]
+                            .as_str()
+                            .or_else(|| item["id"].as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let name = item["name"].as_str().unwrap_or("").to_string();
+                        let arguments = item["arguments"].as_str().unwrap_or("{}").to_string();
+                        tool_calls.push(ToolCall {
+                            id,
+                            call_type: Some("function".to_string()),
+                            function: FunctionCall { name, arguments },
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Map Responses status/output into an OpenAI-style finish_reason the
+        // agent loop understands (`tool_calls` / `length` / `stop`).
+        let finish_reason = if !tool_calls.is_empty() {
+            Some("tool_calls".to_string())
+        } else {
+            match json["incomplete_details"]["reason"].as_str() {
+                Some("max_output_tokens") => Some("length".to_string()),
+                _ if json["status"].as_str() == Some("incomplete") => Some("length".to_string()),
+                _ => Some("stop".to_string()),
+            }
+        };
+
+        log::debug!(
+            "AI response parsed (responses): finish_reason={:?} content_len={} tool_calls={}",
+            finish_reason,
+            content.len(),
+            tool_calls.len(),
+        );
+
+        Ok(ChatResponse {
+            content: if content.is_empty() {
+                None
+            } else {
+                Some(content)
+            },
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
+            finish_reason,
+        })
+    }
+
+    /// POST a JSON body with the client's headers and return the parsed JSON,
+    /// mapping transport/HTTP/JSON failures to `AiError`. Shared by the chat and
+    /// responses execution paths.
+    async fn send_json(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        body: &serde_json::Value,
+        message_count: usize,
+        tool_count: usize,
+    ) -> Result<serde_json::Value, AiError> {
         log::info!(
             "AI request → endpoint={} model={} messages={} tools={} auth={}",
             url,
             self.model,
-            api_messages.len(),
-            tools.len(),
+            message_count,
+            tool_count,
             if self
                 .headers
                 .iter()
@@ -429,7 +790,7 @@ impl AiClient {
             }
         );
 
-        let mut req = client.post(&url).json(&body);
+        let mut req = client.post(url).json(body);
         for (name, value) in &self.headers {
             req = req.header(name, value);
         }
@@ -478,46 +839,10 @@ impl AiClient {
             self.model
         );
 
-        let json: serde_json::Value = response
+        response
             .json()
             .await
-            .map_err(|e| AiError::Json(e.to_string()))?;
-
-        let choice = &json["choices"][0];
-        let message = &choice["message"];
-        let content = message["content"].as_str().map(|s| s.to_string());
-        let finish_reason = choice["finish_reason"].as_str().map(|s| s.to_string());
-
-        let tool_calls = message["tool_calls"].as_array().map(|tcs| {
-            tcs.iter()
-                .filter_map(|tc| {
-                    Some(ToolCall {
-                        id: tc["id"].as_str()?.to_string(),
-                        call_type: Some("function".to_string()),
-                        function: FunctionCall {
-                            name: tc["function"]["name"].as_str()?.to_string(),
-                            arguments: tc["function"]["arguments"].as_str()?.to_string(),
-                        },
-                    })
-                })
-                .collect()
-        });
-
-        log::debug!(
-            "AI response parsed: finish_reason={:?} content_len={} tool_calls={}",
-            finish_reason,
-            content.as_ref().map(|c| c.len()).unwrap_or(0),
-            tool_calls
-                .as_ref()
-                .map(|tcs: &Vec<ToolCall>| tcs.len())
-                .unwrap_or(0),
-        );
-
-        Ok(ChatResponse {
-            content,
-            tool_calls,
-            finish_reason,
-        })
+            .map_err(|e| AiError::Json(e.to_string()))
     }
 }
 
@@ -785,5 +1110,95 @@ mod client_tests {
         let json = serde_json::to_string(&tc).unwrap();
         // "type" field should be skipped when None
         assert!(!json.contains("\"type\""));
+    }
+
+    #[test]
+    fn responses_input_maps_roles() {
+        let messages = vec![
+            Message::system("be helpful"),
+            Message::user("hi"),
+            Message::assistant_tool_calls(
+                None,
+                vec![ToolCall {
+                    id: "call-1".into(),
+                    call_type: Some("function".into()),
+                    function: FunctionCall {
+                        name: "get_time".into(),
+                        arguments: "{}".into(),
+                    },
+                }],
+            ),
+            Message::tool_result("call-1", "get_time", "12:00"),
+        ];
+        let input = AiClient::build_responses_input(&messages);
+        // system + user + function_call + function_call_output
+        assert_eq!(input.len(), 4);
+        assert_eq!(input[0]["type"], "message");
+        assert_eq!(input[0]["role"], "system");
+        assert_eq!(input[0]["content"][0]["type"], "input_text");
+        assert_eq!(input[2]["type"], "function_call");
+        assert_eq!(input[2]["call_id"], "call-1");
+        assert_eq!(input[2]["name"], "get_time");
+        assert_eq!(input[3]["type"], "function_call_output");
+        assert_eq!(input[3]["call_id"], "call-1");
+        assert_eq!(input[3]["output"], "12:00");
+    }
+
+    #[test]
+    fn responses_parse_text_and_tool_calls() {
+        let json = serde_json::json!({
+            "status": "completed",
+            "output": [
+                { "type": "message", "content": [
+                    { "type": "output_text", "text": "Hello " },
+                    { "type": "output_text", "text": "world" }
+                ]},
+                { "type": "function_call", "call_id": "c1", "name": "do_it", "arguments": "{\"x\":1}" }
+            ]
+        });
+        let resp = AiClient::parse_responses_json(&json).unwrap();
+        assert_eq!(resp.content.as_deref(), Some("Hello world"));
+        let tcs = resp.tool_calls.unwrap();
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].id, "c1");
+        assert_eq!(tcs[0].function.name, "do_it");
+        assert_eq!(tcs[0].function.arguments, "{\"x\":1}");
+        // Tool calls present → finish_reason maps to tool_calls.
+        assert_eq!(resp.finish_reason.as_deref(), Some("tool_calls"));
+    }
+
+    #[test]
+    fn responses_parse_incomplete_maps_to_length() {
+        let json = serde_json::json!({
+            "status": "incomplete",
+            "incomplete_details": { "reason": "max_output_tokens" },
+            "output": [ { "type": "message", "content": [
+                { "type": "output_text", "text": "partial" }
+            ]}]
+        });
+        let resp = AiClient::parse_responses_json(&json).unwrap();
+        assert_eq!(resp.content.as_deref(), Some("partial"));
+        assert!(resp.tool_calls.is_none());
+        assert_eq!(resp.finish_reason.as_deref(), Some("length"));
+    }
+
+    #[test]
+    fn responses_tools_are_flattened() {
+        let chat_tools = vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "search the web",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        })];
+        let out = AiClient::chat_tools_to_responses_tools(&chat_tools);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["type"], "function");
+        assert_eq!(out[0]["name"], "search");
+        assert_eq!(out[0]["description"], "search the web");
+        assert_eq!(out[0]["parameters"]["type"], "object");
+        // No nested "function" wrapper in the responses form.
+        assert!(out[0]["function"].is_null());
     }
 }

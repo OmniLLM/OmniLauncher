@@ -1,7 +1,7 @@
 use crate::plugins::{Plugin, Query, QueryResult};
 use async_trait::async_trait;
 
-pub(crate) fn open_url_in_browser(url: &str) -> std::io::Result<()> {
+pub fn open_url_in_browser(url: &str) -> std::io::Result<()> {
     let result = {
         #[cfg(target_os = "windows")]
         {

@@ -268,6 +268,12 @@ fn providers_command() -> Command {
                 )),
         )
         .subcommand(Command::new("caps").visible_alias("kinds"))
+        .subcommand(
+            Command::new("login").visible_alias("auth").arg(with_completer(
+                resource_name_arg("id"),
+                complete_provider_ids,
+            )),
+        )
         .subcommand(Command::new("help"))
 }
 

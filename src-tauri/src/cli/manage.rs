@@ -259,6 +259,7 @@ pub fn providers(out: &Output, args: &[String]) -> i32 {
             providers_remove(out, id)
         }
         "caps" | "kinds" => providers_caps(out),
+        "login" | "auth" => providers_login(out, args.get(1).map(String::as_str)),
         "help" | "--help" | "-h" => {
             print_providers_help(out);
             0
@@ -657,6 +658,98 @@ fn providers_remove(out: &Output, id: &str) -> i32 {
     settings.ensure_provider_registry();
     if omnilauncher_lib::save_settings(&settings) {
         out.success(&format!("removed provider: {id}"));
+        0
+    } else {
+        out.failure("failed to save settings");
+        1
+    }
+}
+
+fn providers_login(out: &Output, id: Option<&str>) -> i32 {
+    use omnilauncher_lib::ai::copilot_auth;
+
+    let mut settings = omnilauncher_lib::load_settings();
+
+    // Resolve the target provider: explicit id, else the active provider.
+    let target_id = match id {
+        Some(id) => id.to_string(),
+        None => settings.active_provider().id,
+    };
+    let Some(idx) = settings.providers.iter().position(|p| p.id == target_id) else {
+        out.failure(&format!("provider '{target_id}' not found"));
+        return 1;
+    };
+    if settings.providers[idx].kind != ProviderKind::GithubCopilot {
+        out.failure(&format!(
+            "provider '{target_id}' is kind '{}'; login only applies to github-copilot providers",
+            settings.providers[idx].kind
+        ));
+        return 2;
+    }
+
+    // The CLI dispatch path is synchronous; build a dedicated runtime for the
+    // async OAuth flow.
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            out.failure(&format!("failed to start async runtime: {e}"));
+            return 1;
+        }
+    };
+
+    let enterprise = settings.providers[idx].copilot_enterprise_url.clone();
+
+    let outcome: Result<(String, String, i64, String), String> = rt.block_on(async {
+        let device = copilot_auth::get_device_code().await?;
+
+        out.info(&format!(
+            "Visit {} and enter code: {}",
+            out.cyan(&device.verification_uri),
+            out.cyan(&device.user_code)
+        ));
+        // Best-effort: open the browser for the user. Ignore failures (headless).
+        let _ = omnilauncher_lib::plugins::url_opener::open_url_in_browser(&device.verification_uri);
+        out.info("Waiting for authorization...");
+
+        let github_token = copilot_auth::poll_access_token(&device).await?;
+
+        // Fetch a friendly display name (best effort).
+        let name = match copilot_auth::get_user(&github_token).await {
+            Ok(user) => copilot_auth::copilot_provider_name(&user),
+            Err(e) => {
+                log::warn!("copilot login: failed to fetch user info: {e}");
+                String::new()
+            }
+        };
+
+        // Exchange for the initial short-lived Copilot token.
+        let copilot = copilot_auth::get_copilot_token(&github_token, &enterprise).await?;
+        Ok((github_token, copilot.token, copilot.expires_at, name))
+    });
+
+    let (github_token, copilot_token, expires_at, name) = match outcome {
+        Ok(v) => v,
+        Err(e) => {
+            out.failure(&format!("login failed: {e}"));
+            return 1;
+        }
+    };
+
+    let provider = &mut settings.providers[idx];
+    provider.copilot_github_token = github_token;
+    provider.copilot_token = copilot_token;
+    provider.copilot_token_expiry = expires_at;
+    if !name.is_empty() {
+        provider.name = name.clone();
+    }
+
+    settings.sync_legacy_ai_fields_from_active_provider();
+    if omnilauncher_lib::save_settings(&settings) {
+        let who = if name.is_empty() { target_id } else { name };
+        out.success(&format!("logged in to GitHub Copilot as {who}"));
         0
     } else {
         out.failure("failed to save settings");
@@ -1187,6 +1280,7 @@ fn print_providers_help(out: &Output) {
     println!("  set-active <id>                           switch active provider");
     println!("  set-model <model> [provider-id]           update selected model");
     println!("  remove <id>                               remove provider");
+    println!("  login [id]                                GitHub Copilot device-code OAuth login");
     println!("  caps                                      show provider kind capabilities");
 }
 

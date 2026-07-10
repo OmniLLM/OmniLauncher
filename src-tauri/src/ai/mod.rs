@@ -1,5 +1,7 @@
 pub mod agent_context;
 pub mod client;
+pub mod copilot_auth;
+pub mod copilot_models;
 pub mod errors;
 pub mod provider;
 pub mod router;

@@ -61,8 +61,8 @@ pub fn resolve_provider(provider: &Provider) -> Result<ResolvedRequest, String> 
             let token = provider.copilot_token.trim();
             if token.is_empty() {
                 return Err(format!(
-                    "provider '{}' needs GitHub Copilot auth; run provider login once token flow is configured",
-                    provider.name
+                    "provider '{}' needs GitHub Copilot auth; run `ol providers login {}`",
+                    provider.name, provider.id
                 ));
             }
             let base = copilot_base_url(provider);
@@ -102,15 +102,7 @@ pub fn resolve_provider(provider: &Provider) -> Result<ResolvedRequest, String> 
 }
 
 fn copilot_base_url(provider: &Provider) -> String {
-    let enterprise = provider.copilot_enterprise_url.trim();
-    if enterprise.is_empty() {
-        return "https://api.githubcopilot.com".to_string();
-    }
-    let host = enterprise
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_end_matches('/');
-    format!("https://copilot-api.{host}")
+    crate::ai::copilot_auth::copilot_base_url(&provider.copilot_enterprise_url)
 }
 
 #[cfg(test)]
