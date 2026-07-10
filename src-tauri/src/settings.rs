@@ -162,6 +162,25 @@ pub fn provider_caps(kind: ProviderKind) -> ProviderCaps {
     }
 }
 
+
+/// Split a top-level `ai_model` string into an optional provider id and a
+/// model string. The provider id is only recognized when the substring
+/// before the FIRST '/' exactly matches one of `known_provider_ids`;
+/// otherwise the whole string is returned as the model with no provider.
+/// This keeps model names that themselves contain '/' (e.g.
+/// "jzhu/gpt-5.6-luna") intact when no provider is named "jzhu".
+pub fn parse_model_selector<'a>(
+    ai_model: &'a str,
+    known_provider_ids: &[String],
+) -> (Option<&'a str>, &'a str) {
+    if let Some((prefix, rest)) = ai_model.split_once('/') {
+        if known_provider_ids.iter().any(|id| id == prefix) {
+            return (Some(prefix), rest);
+        }
+    }
+    (None, ai_model)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     pub id: String,
@@ -1788,5 +1807,37 @@ mod settings_tests {
 
         std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+
+    #[test]
+    fn selector_recognizes_known_provider_prefix() {
+        let ids = vec!["copilot".to_string(), "default".to_string()];
+        assert_eq!(
+            super::parse_model_selector("copilot/gpt-5.6-sol", &ids),
+            (Some("copilot"), "gpt-5.6-sol")
+        );
+    }
+
+    #[test]
+    fn selector_keeps_slash_model_when_prefix_unknown() {
+        let ids = vec!["copilot".to_string(), "default".to_string()];
+        assert_eq!(
+            super::parse_model_selector("jzhu/gpt-5.6-luna", &ids),
+            (None, "jzhu/gpt-5.6-luna")
+        );
+    }
+
+    #[test]
+    fn selector_bare_model_and_empty() {
+        let ids = vec!["copilot".to_string()];
+        assert_eq!(super::parse_model_selector("gpt-5.6-sol", &ids), (None, "gpt-5.6-sol"));
+        assert_eq!(super::parse_model_selector("", &ids), (None, ""));
+    }
+
+    #[test]
+    fn selector_prefix_with_empty_model() {
+        let ids = vec!["copilot".to_string()];
+        assert_eq!(super::parse_model_selector("copilot/", &ids), (Some("copilot"), ""));
     }
 }
