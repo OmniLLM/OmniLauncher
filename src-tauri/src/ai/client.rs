@@ -860,9 +860,14 @@ impl AiClient {
     }
 
     /// Refresh the Copilot token in place after an auth failure. Returns `true`
-    /// when a *different* token was obtained (so the caller should retry). The
-    /// new token is stored on `copilot_auth.state` and persisted to settings so
+    /// when a usable token was obtained (so the caller should retry once). The
+    /// token is stored on `copilot_auth.state` and persisted to settings so
     /// sibling clients reuse it.
+    ///
+    /// A successful re-exchange authorizes exactly one retry even when GitHub
+    /// hands back the *same* short-lived token: the 401 may have been caused by
+    /// transient upstream propagation lag rather than a truly dead token, and
+    /// the caller (`send_json`) retries at most once, so this cannot loop.
     async fn refresh_copilot_token(&self) -> bool {
         let Some(auth) = self.copilot_auth.as_ref() else {
             return false;
@@ -892,19 +897,16 @@ impl AiClient {
             }
         };
 
-        if fresh.token == current {
-            log::warn!("copilot: token refresh returned an unchanged token");
-            return false;
-        }
-
+        let unchanged = fresh.token == current;
         if let Ok(mut state) = auth.state.write() {
             state.token = fresh.token.clone();
             state.expiry = fresh.expires_at;
         }
         if persist_copilot_token_by_id(&auth.provider_id, &fresh.token, fresh.expires_at) {
             log::info!(
-                "copilot: refreshed token in place for provider '{}'",
-                auth.provider_id
+                "copilot: refreshed token in place for provider '{}'{}",
+                auth.provider_id,
+                if unchanged { " (token unchanged)" } else { "" }
             );
         }
         true
