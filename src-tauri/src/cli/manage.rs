@@ -703,7 +703,7 @@ fn providers_login(out: &Output, id: Option<&str>) -> i32 {
 
     let enterprise = settings.providers[idx].copilot_enterprise_url.clone();
 
-    let outcome: Result<(String, String, i64, String), String> = rt.block_on(async {
+    let outcome: Result<(String, String, i64, String, String, i64), String> = rt.block_on(async {
         let device = copilot_auth::get_device_code().await?;
 
         out.info(&format!(
@@ -715,7 +715,17 @@ fn providers_login(out: &Output, id: Option<&str>) -> i32 {
         let _ = omnilauncher_lib::plugins::url_opener::open_url_in_browser(&device.verification_uri);
         out.info("Waiting for authorization...");
 
-        let github_token = copilot_auth::poll_access_token(&device).await?;
+        let token = copilot_auth::poll_access_token(&device).await?;
+        let github_token = token.access_token;
+        // When the GitHub App issues expiring user tokens, capture the refresh
+        // token + absolute expiry so the outer token can be rotated later
+        // without another device-code login. Empty/zero when non-expiring.
+        let github_refresh_token = token.refresh_token;
+        let github_expiry = if token.expires_in > 0 {
+            copilot_auth::now_unix() + token.expires_in
+        } else {
+            0
+        };
 
         // Fetch a friendly display name (best effort).
         let name = match copilot_auth::get_user(&github_token).await {
@@ -728,19 +738,29 @@ fn providers_login(out: &Output, id: Option<&str>) -> i32 {
 
         // Exchange for the initial short-lived Copilot token.
         let copilot = copilot_auth::get_copilot_token(&github_token, &enterprise).await?;
-        Ok((github_token, copilot.token, copilot.expires_at, name))
+        Ok((
+            github_token,
+            copilot.token,
+            copilot.expires_at,
+            name,
+            github_refresh_token,
+            github_expiry,
+        ))
     });
 
-    let (github_token, copilot_token, expires_at, name) = match outcome {
-        Ok(v) => v,
-        Err(e) => {
-            out.failure(&format!("login failed: {e}"));
-            return 1;
-        }
-    };
+    let (github_token, copilot_token, expires_at, name, github_refresh_token, github_expiry) =
+        match outcome {
+            Ok(v) => v,
+            Err(e) => {
+                out.failure(&format!("login failed: {e}"));
+                return 1;
+            }
+        };
 
     let provider = &mut settings.providers[idx];
     provider.copilot_github_token = github_token;
+    provider.copilot_github_refresh_token = github_refresh_token;
+    provider.copilot_github_token_expiry = github_expiry;
     provider.copilot_token = copilot_token;
     provider.copilot_token_expiry = expires_at;
     if !name.is_empty() {
@@ -775,9 +795,12 @@ fn providers_logout(out: &Output, id: Option<&str>) -> i32 {
             continue;
         }
         let had_any = !p.copilot_github_token.is_empty()
+            || !p.copilot_github_refresh_token.is_empty()
             || !p.copilot_token.is_empty()
             || p.copilot_token_expiry != 0;
         p.copilot_github_token.clear();
+        p.copilot_github_refresh_token.clear();
+        p.copilot_github_token_expiry = 0;
         p.copilot_token.clear();
         p.copilot_token_expiry = 0;
         if had_any {

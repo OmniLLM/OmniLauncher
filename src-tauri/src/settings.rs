@@ -209,6 +209,10 @@ pub struct Provider {
     #[serde(default)]
     pub copilot_github_token: String,
     #[serde(default)]
+    pub copilot_github_refresh_token: String,
+    #[serde(default)]
+    pub copilot_github_token_expiry: i64,
+    #[serde(default)]
     pub copilot_token: String,
     #[serde(default)]
     pub copilot_token_expiry: i64,
@@ -227,6 +231,8 @@ impl Default for Provider {
             model: "auto".to_string(),
             models: vec![],
             copilot_github_token: String::new(),
+            copilot_github_refresh_token: String::new(),
+            copilot_github_token_expiry: 0,
             copilot_token: String::new(),
             copilot_token_expiry: 0,
             copilot_enterprise_url: String::new(),
@@ -251,6 +257,9 @@ impl Provider {
         }
         if !p.copilot_github_token.is_empty() {
             p.copilot_github_token = "«redacted»".to_string();
+        }
+        if !p.copilot_github_refresh_token.is_empty() {
+            p.copilot_github_refresh_token = "«redacted»".to_string();
         }
         if !p.copilot_token.is_empty() {
             p.copilot_token = "«redacted»".to_string();

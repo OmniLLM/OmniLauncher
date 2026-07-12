@@ -47,6 +47,11 @@ struct CopilotTokenState {
 
 struct CopilotCredentials {
     github_token: String,
+    /// GitHub OAuth refresh token; rotates the outer token without re-login.
+    /// Empty when the GitHub App issues non-expiring user tokens.
+    refresh_token: String,
+    /// Absolute unix expiry of `github_token`; 0 = non-expiring.
+    github_expiry: i64,
     enterprise_url: String,
 }
 
@@ -80,6 +85,8 @@ impl CopilotAuth {
             return false;
         };
         credentials.github_token = provider.copilot_github_token.clone();
+        credentials.refresh_token = provider.copilot_github_refresh_token.clone();
+        credentials.github_expiry = provider.copilot_github_token_expiry;
         credentials.enterprise_url = provider.copilot_enterprise_url.clone();
         true
     }
@@ -104,6 +111,76 @@ impl CopilotAuth {
             }
         }
     }
+
+    /// Rotate the long-lived GitHub OAuth token via its refresh token when it is
+    /// near expiry, updating the in-memory credentials and persisting the rotated
+    /// outer token to settings. No-op (returns `false`) when there is no refresh
+    /// token or the token is non-expiring / not yet near expiry.
+    ///
+    /// This is what makes Copilot auth survive indefinitely without a manual
+    /// `ol providers login`: the outer token is the credential GitHub expires
+    /// (surfacing as `401 Bad credentials` on the copilot-token exchange), and
+    /// this renews it ahead of time. A failed rotation is logged, not fatal —
+    /// the subsequent copilot-token exchange surfaces the 401 as before.
+    async fn rotate_github_token(&self) -> bool {
+        let (refresh_token, github_expiry) = {
+            let Ok(credentials) = self.credentials.read() else {
+                return false;
+            };
+            (
+                credentials.refresh_token.clone(),
+                credentials.github_expiry,
+            )
+        };
+
+        if refresh_token.trim().is_empty() || github_expiry == 0 {
+            return false; // non-expiring outer token, or nothing to rotate with
+        }
+        if crate::ai::copilot_auth::now_unix()
+            <= github_expiry - crate::ai::copilot_auth::REFRESH_SKEW_SECS
+        {
+            return false; // still fresh
+        }
+
+        let fresh = match crate::ai::copilot_auth::refresh_access_token(&refresh_token).await {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("copilot: failed to rotate GitHub OAuth token: {e}");
+                return false;
+            }
+        };
+
+        let new_expiry = if fresh.expires_in > 0 {
+            crate::ai::copilot_auth::now_unix() + fresh.expires_in
+        } else {
+            0
+        };
+        if let Ok(mut credentials) = self.credentials.write() {
+            credentials.github_token = fresh.access_token.clone();
+            if !fresh.refresh_token.is_empty() {
+                credentials.refresh_token = fresh.refresh_token.clone();
+            }
+            credentials.github_expiry = new_expiry;
+        }
+
+        let new_refresh = if fresh.refresh_token.is_empty() {
+            refresh_token
+        } else {
+            fresh.refresh_token
+        };
+        if persist_github_token_by_id(
+            &self.provider_id,
+            &fresh.access_token,
+            &new_refresh,
+            new_expiry,
+        ) {
+            log::info!(
+                "copilot: rotated GitHub OAuth token for provider '{}'",
+                self.provider_id
+            );
+        }
+        true
+    }
 }
 
 /// Persist a refreshed Copilot token back into on-disk settings by provider id.
@@ -114,6 +191,25 @@ fn persist_copilot_token_by_id(provider_id: &str, token: &str, expiry: i64) -> b
     };
     target.copilot_token = token.to_string();
     target.copilot_token_expiry = expiry;
+    crate::settings::save_settings(&latest)
+}
+
+/// Persist a rotated long-lived GitHub OAuth token (and its refresh token +
+/// expiry) back into on-disk settings by provider id, so other clients and the
+/// next process reuse the renewed credential instead of the dead one.
+fn persist_github_token_by_id(
+    provider_id: &str,
+    github_token: &str,
+    refresh_token: &str,
+    expiry: i64,
+) -> bool {
+    let mut latest = crate::settings::load_settings();
+    let Some(target) = latest.providers.iter_mut().find(|p| p.id == provider_id) else {
+        return false;
+    };
+    target.copilot_github_token = github_token.to_string();
+    target.copilot_github_refresh_token = refresh_token.to_string();
+    target.copilot_github_token_expiry = expiry;
     crate::settings::save_settings(&latest)
 }
 
@@ -407,6 +503,8 @@ impl AiClient {
             provider_id: provider.id.clone(),
             credentials: RwLock::new(CopilotCredentials {
                 github_token: provider.copilot_github_token.clone(),
+                refresh_token: provider.copilot_github_refresh_token.clone(),
+                github_expiry: provider.copilot_github_token_expiry,
                 enterprise_url: provider.copilot_enterprise_url.clone(),
             }),
             state: RwLock::new(CopilotTokenState {
@@ -432,6 +530,8 @@ impl AiClient {
             provider_id: provider.id.clone(),
             credentials: RwLock::new(CopilotCredentials {
                 github_token: provider.copilot_github_token.clone(),
+                refresh_token: provider.copilot_github_refresh_token.clone(),
+                github_expiry: provider.copilot_github_token_expiry,
                 enterprise_url: provider.copilot_enterprise_url.clone(),
             }),
             state: RwLock::new(CopilotTokenState {
@@ -991,6 +1091,10 @@ impl AiClient {
         // Login runs as a separate CLI process and updates settings.json. Reload
         // this provider's current long-lived credential before exchanging it.
         auth.reload_credentials();
+        // Renew the outer GitHub token first when it is close to expiry, so the
+        // copilot-token exchange below uses a valid credential rather than a dead
+        // one (which would 401 with "Bad credentials" and force a re-login).
+        auth.rotate_github_token().await;
         let has_github_token = auth
             .credentials
             .read()

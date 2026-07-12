@@ -34,7 +34,7 @@ const GITHUB_BASE_URL: &str = "https://github.com";
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 
 /// Refresh the Copilot token when within this many seconds of expiry.
-const REFRESH_SKEW_SECS: i64 = 300;
+pub const REFRESH_SKEW_SECS: i64 = 300;
 
 /// Shared HTTP client with a 15s timeout, matching `plugins::web_fetch`.
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
@@ -57,12 +57,25 @@ pub struct DeviceCode {
 }
 
 /// Response from GitHub's OAuth token endpoint (device-code grant).
+///
+/// When the GitHub App has "Expiration of user authorization tokens" enabled,
+/// GitHub returns an expiring `access_token` (valid `expires_in` seconds)
+/// together with a long-lived `refresh_token`. Exchanging the refresh token
+/// (`grant_type=refresh_token`) mints a new access token without a fresh
+/// device-code login, giving unattended, indefinite operation. When expiration
+/// is disabled these fields are empty/zero and the access token never expires.
 #[derive(Debug, Clone, Deserialize)]
-struct AccessTokenResponse {
+pub struct AccessTokenResponse {
     #[serde(default)]
-    access_token: String,
+    pub access_token: String,
     #[serde(default)]
-    error: String,
+    pub refresh_token: String,
+    #[serde(default)]
+    pub expires_in: i64,
+    #[serde(default)]
+    pub refresh_token_expires_in: i64,
+    #[serde(default)]
+    pub error: String,
 }
 
 /// Response from the Copilot internal token API.
@@ -73,7 +86,7 @@ pub struct CopilotTokenResponse {
     pub expires_at: i64,
 }
 
-fn now_unix() -> i64 {
+pub fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -119,7 +132,10 @@ pub async fn get_device_code() -> Result<DeviceCode, String> {
 }
 
 /// Poll for the access token after the user authorizes the device.
-pub async fn poll_access_token(device: &DeviceCode) -> Result<String, String> {
+///
+/// Returns the full token response so callers can persist a `refresh_token`
+/// (and its expiry) when the GitHub App issues expiring user tokens.
+pub async fn poll_access_token(device: &DeviceCode) -> Result<AccessTokenResponse, String> {
     // GitHub asks callers to wait `interval` seconds between polls; add a small
     // cushion to avoid `slow_down`.
     let mut interval = Duration::from_secs(device.interval.max(1) + 1);
@@ -148,7 +164,7 @@ pub async fn poll_access_token(device: &DeviceCode) -> Result<String, String> {
 
         match result {
             Ok(resp) => match resp.json::<AccessTokenResponse>().await {
-                Ok(token) if !token.access_token.is_empty() => return Ok(token.access_token),
+                Ok(token) if !token.access_token.is_empty() => return Ok(token),
                 Ok(token) => {
                     if token.error == "expired_token" {
                         return Err("device code expired, please try again".to_string());
@@ -169,6 +185,52 @@ pub async fn poll_access_token(device: &DeviceCode) -> Result<String, String> {
 
         tokio::time::sleep(interval).await;
     }
+}
+
+/// Exchange a long-lived GitHub OAuth refresh token for a fresh access token
+/// (and a rotated refresh token) via the device-flow refresh grant. This renews
+/// the *outer* GitHub token without a new device-code login — only possible when
+/// the GitHub App has user-token expiration enabled (otherwise no refresh token
+/// is ever issued).
+///
+/// GitHub rotates the refresh token on every successful exchange, so callers
+/// MUST persist the returned `refresh_token`.
+pub async fn refresh_access_token(refresh_token: &str) -> Result<AccessTokenResponse, String> {
+    if refresh_token.trim().is_empty() {
+        return Err("no refresh token available".to_string());
+    }
+
+    let resp = CLIENT
+        .post(format!("{GITHUB_BASE_URL}/login/oauth/access_token"))
+        .header("Accept", "application/json")
+        .json(&serde_json::json!({
+            "client_id": CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("access token refresh request failed: {e}"))?;
+
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("failed to read access token refresh response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "access token refresh failed with status {status}: {body}"
+        ));
+    }
+    let parsed = serde_json::from_str::<AccessTokenResponse>(&body)
+        .map_err(|e| format!("failed to decode access token refresh response: {e}"))?;
+    if parsed.access_token.is_empty() {
+        return Err(format!(
+            "access token refresh returned no token (error={:?}): {body}",
+            parsed.error
+        ));
+    }
+    Ok(parsed)
 }
 
 /// Exchange a GitHub access token for a short-lived Copilot API token.
@@ -248,20 +310,72 @@ pub fn copilot_provider_name(user: &serde_json::Value) -> String {
     }
 }
 
+/// Rotate the long-lived GitHub OAuth token using its refresh token when the
+/// token is present and within [`REFRESH_SKEW_SECS`] of expiry. Returns `Ok(true)`
+/// when the outer token was rotated (caller should persist the new
+/// `copilot_github_token`, `copilot_github_refresh_token`, and
+/// `copilot_github_token_expiry`).
+///
+/// This is what lets Copilot auth survive indefinitely without a manual
+/// device-code re-login: the outer GitHub token is the credential GitHub
+/// eventually expires (surfacing as `401 Bad credentials` on the copilot-token
+/// exchange), and this refreshes it ahead of time. It is a no-op when:
+///   - no refresh token is stored (GitHub App has user-token expiration
+///     disabled, so the outer token never expires), or
+///   - `copilot_github_token_expiry` is 0 (non-expiring) or not yet near expiry.
+pub async fn rotate_github_token_if_needed(provider: &mut Provider) -> Result<bool, String> {
+    if provider.copilot_github_refresh_token.trim().is_empty()
+        || provider.copilot_github_token_expiry == 0
+    {
+        return Ok(false);
+    }
+    if now_unix() <= provider.copilot_github_token_expiry - REFRESH_SKEW_SECS {
+        return Ok(false);
+    }
+
+    let fresh = refresh_access_token(&provider.copilot_github_refresh_token).await?;
+    provider.copilot_github_token = fresh.access_token;
+    if !fresh.refresh_token.is_empty() {
+        provider.copilot_github_refresh_token = fresh.refresh_token;
+    }
+    provider.copilot_github_token_expiry = if fresh.expires_in > 0 {
+        now_unix() + fresh.expires_in
+    } else {
+        0
+    };
+    Ok(true)
+}
+
 /// Refresh the provider's short-lived Copilot token when it is missing or within
 /// 5 minutes of expiry. Requires `copilot_github_token` to be set. Returns
 /// `Ok(true)` when the token was refreshed (caller should persist), `Ok(false)`
 /// when the existing token is still valid or no GitHub token is present.
+///
+/// Before exchanging, the long-lived GitHub token is rotated via its refresh
+/// token when near expiry (see [`rotate_github_token_if_needed`]) so the
+/// exchange below uses a valid outer credential. The returned bool is `true`
+/// when either the outer or inner token changed, so the caller persists both.
 pub async fn refresh_copilot_token_if_needed(provider: &mut Provider) -> Result<bool, String> {
+    // Renew the outer GitHub token first when it is close to expiry. A failed
+    // rotation is not fatal here: fall through and let the copilot-token
+    // exchange surface the 401 so the user is directed to re-login.
+    let rotated = match rotate_github_token_if_needed(provider).await {
+        Ok(changed) => changed,
+        Err(e) => {
+            log::warn!("copilot: failed to rotate GitHub OAuth token: {e}");
+            false
+        }
+    };
+
     if provider.copilot_github_token.trim().is_empty() {
-        return Ok(false);
+        return Ok(rotated);
     }
 
     let needs_refresh = provider.copilot_token.trim().is_empty()
         || provider.copilot_token_expiry == 0
         || now_unix() > provider.copilot_token_expiry - REFRESH_SKEW_SECS;
     if !needs_refresh {
-        return Ok(false);
+        return Ok(rotated);
     }
 
     let fresh = get_copilot_token(
