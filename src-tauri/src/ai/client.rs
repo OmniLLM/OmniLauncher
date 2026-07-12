@@ -4,6 +4,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::errors::{classify_ai_error, AiError, ErrorClass};
 
+/// Refresh the short-lived Copilot token when it is within this many seconds of
+/// expiry. Mirrors omnillm's 5-minute skew (`internal/providers/copilot/token.go`).
+const COPILOT_REFRESH_SKEW_SECS: i64 = 300;
+
+/// Current UNIX time in seconds. Local helper so the request path can compare
+/// against a token's `expiry` without depending on `copilot_auth`'s private one.
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Async fetcher that exchanges a long-lived GitHub token (+ enterprise URL) for
+/// a fresh short-lived Copilot token. Injectable so tests can exercise the
+/// proactive/reactive refresh paths hermetically without hitting api.github.com;
+/// production uses [`crate::ai::copilot_auth::get_copilot_token`]. Mirrors
+/// omnillm's `tokenFetcher` seam.
+pub type CopilotTokenFetcher = Arc<
+    dyn Fn(
+            String,
+            String,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<crate::ai::copilot_auth::CopilotTokenResponse, String>,
+                    > + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
 /// Mutable Copilot token state shared behind an `RwLock` so a long-lived
 /// `AiClient` can refresh its short-lived Copilot token in place (e.g. after a
 /// 401) without being reconstructed.
@@ -13,17 +45,65 @@ struct CopilotTokenState {
     expiry: i64,
 }
 
+struct CopilotCredentials {
+    github_token: String,
+    enterprise_url: String,
+}
+
 /// Everything an `AiClient` needs to mint a fresh Copilot token on its own.
 ///
 /// The long-lived `GitHub` token exchanges for a short-lived Copilot token via
-/// `copilot_auth::get_copilot_token`. `provider_id` lets us persist the refreshed
-/// token back to on-disk settings so sibling clients reuse it.
-#[derive(Debug)]
+/// `copilot_auth::get_copilot_token`. `provider_id` lets us reload credentials
+/// after a separate `ol providers login` and persist refreshed tokens by id.
 struct CopilotAuth {
     provider_id: String,
-    github_token: String,
-    enterprise_url: String,
+    credentials: RwLock<CopilotCredentials>,
     state: RwLock<CopilotTokenState>,
+    refresh_lock: tokio::sync::Mutex<()>,
+    /// Optional override for the token exchange (tests inject a fake issuer).
+    /// `None` uses `crate::ai::copilot_auth::get_copilot_token`.
+    fetcher: Option<CopilotTokenFetcher>,
+}
+
+impl CopilotAuth {
+    /// Adopt credentials written by a separate OmniLauncher login process.
+    fn reload_credentials(&self) -> bool {
+        let settings = crate::settings::load_settings();
+        let Some(provider) = settings
+            .providers
+            .iter()
+            .find(|provider| provider.id == self.provider_id)
+        else {
+            return false;
+        };
+        let Ok(mut credentials) = self.credentials.write() else {
+            return false;
+        };
+        credentials.github_token = provider.copilot_github_token.clone();
+        credentials.enterprise_url = provider.copilot_enterprise_url.clone();
+        true
+    }
+
+    /// Run the configured fetcher (or the default) using a snapshot of the
+    /// current credentials. Never hold the credentials lock across `.await`.
+    async fn fetch_token(&self) -> Result<crate::ai::copilot_auth::CopilotTokenResponse, String> {
+        let (github_token, enterprise_url) = {
+            let Ok(credentials) = self.credentials.read() else {
+                return Err("Copilot credentials lock poisoned".to_string());
+            };
+            (
+                credentials.github_token.clone(),
+                credentials.enterprise_url.clone(),
+            )
+        };
+
+        match &self.fetcher {
+            Some(f) => f(github_token, enterprise_url).await,
+            None => {
+                crate::ai::copilot_auth::get_copilot_token(&github_token, &enterprise_url).await
+            }
+        }
+    }
 }
 
 /// Persist a refreshed Copilot token back into on-disk settings by provider id.
@@ -325,12 +405,41 @@ impl AiClient {
     fn with_copilot_auth(mut self, provider: &crate::settings::Provider) -> Self {
         self.copilot_auth = Some(Arc::new(CopilotAuth {
             provider_id: provider.id.clone(),
-            github_token: provider.copilot_github_token.clone(),
-            enterprise_url: provider.copilot_enterprise_url.clone(),
+            credentials: RwLock::new(CopilotCredentials {
+                github_token: provider.copilot_github_token.clone(),
+                enterprise_url: provider.copilot_enterprise_url.clone(),
+            }),
             state: RwLock::new(CopilotTokenState {
                 token: provider.copilot_token.clone(),
                 expiry: provider.copilot_token_expiry,
             }),
+            refresh_lock: tokio::sync::Mutex::new(()),
+            fetcher: None,
+        }));
+        self
+    }
+
+    /// Like [`with_copilot_auth`] but injects a custom token fetcher. Used by
+    /// tests to exercise the proactive/reactive refresh paths without reaching
+    /// api.github.com.
+    #[cfg(test)]
+    fn with_copilot_auth_fetcher(
+        mut self,
+        provider: &crate::settings::Provider,
+        fetcher: CopilotTokenFetcher,
+    ) -> Self {
+        self.copilot_auth = Some(Arc::new(CopilotAuth {
+            provider_id: provider.id.clone(),
+            credentials: RwLock::new(CopilotCredentials {
+                github_token: provider.copilot_github_token.clone(),
+                enterprise_url: provider.copilot_enterprise_url.clone(),
+            }),
+            state: RwLock::new(CopilotTokenState {
+                token: provider.copilot_token.clone(),
+                expiry: provider.copilot_token_expiry,
+            }),
+            refresh_lock: tokio::sync::Mutex::new(()),
+            fetcher: Some(fetcher),
         }));
         self
     }
@@ -397,6 +506,12 @@ impl AiClient {
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+    /// The fully-resolved chat completions URL this client will POST to. Exposed
+    /// so callers/tests can confirm which provider a (possibly rebuilt) client is
+    /// actually routing to — e.g. after switching the active provider.
+    pub fn chat_url(&self) -> &str {
+        &self.chat_url
     }
     pub fn model(&self) -> &str {
         &self.model
@@ -872,7 +987,16 @@ impl AiClient {
         let Some(auth) = self.copilot_auth.as_ref() else {
             return false;
         };
-        if auth.github_token.trim().is_empty() {
+        let _refresh_guard = auth.refresh_lock.lock().await;
+        // Login runs as a separate CLI process and updates settings.json. Reload
+        // this provider's current long-lived credential before exchanging it.
+        auth.reload_credentials();
+        let has_github_token = auth
+            .credentials
+            .read()
+            .map(|credentials| !credentials.github_token.trim().is_empty())
+            .unwrap_or(false);
+        if !has_github_token {
             log::warn!("copilot: cannot refresh token — no GitHub token stored");
             return false;
         }
@@ -884,12 +1008,7 @@ impl AiClient {
             .map(|s| s.token.clone())
             .unwrap_or_default();
 
-        let fresh = match crate::ai::copilot_auth::get_copilot_token(
-            &auth.github_token,
-            &auth.enterprise_url,
-        )
-        .await
-        {
+        let fresh = match auth.fetch_token().await {
             Ok(t) => t,
             Err(e) => {
                 log::warn!("copilot: token refresh failed: {e}");
@@ -912,6 +1031,44 @@ impl AiClient {
         true
     }
 
+    /// Proactively refresh the Copilot token when it is missing or within
+    /// [`COPILOT_REFRESH_SKEW_SECS`] of expiry, BEFORE sending a request. This
+    /// mirrors omnillm's per-request `GetToken()` (which the reactive 401 path
+    /// alone does not cover): a long-lived server builds its `AiClient` once, so
+    /// without this the short-lived token would expire mid-session and every
+    /// request would eat a 401 round-trip (or fail outright if the upstream
+    /// returns a non-401 for an expired token). The common case (valid token)
+    /// only takes a read lock and returns immediately.
+    async fn ensure_fresh_copilot_token(&self) {
+        let Some(auth) = self.copilot_auth.as_ref() else {
+            return;
+        };
+        // Reload before checking the credential so a client created before login
+        // can proactively adopt a newly persisted GitHub token.
+        auth.reload_credentials();
+        let has_github_token = auth
+            .credentials
+            .read()
+            .map(|credentials| !credentials.github_token.trim().is_empty())
+            .unwrap_or(false);
+        if !has_github_token {
+            return;
+        }
+        let needs_refresh = auth
+            .state
+            .read()
+            .map(|s| {
+                s.token.trim().is_empty()
+                    || s.expiry == 0
+                    || now_unix() > s.expiry - COPILOT_REFRESH_SKEW_SECS
+            })
+            .unwrap_or(true);
+        if needs_refresh {
+            // `refresh_copilot_token` re-fetches, stores, and persists.
+            let _ = self.refresh_copilot_token().await;
+        }
+    }
+
     /// POST a JSON body with the client's headers and return the parsed JSON,
     /// mapping transport/HTTP/JSON failures to `AiError`. Shared by the chat and
     /// responses execution paths.
@@ -927,6 +1084,9 @@ impl AiClient {
         message_count: usize,
         tool_count: usize,
     ) -> Result<serde_json::Value, AiError> {
+        // Proactively refresh a near-expired Copilot token before the first
+        // attempt so we don't rely solely on the reactive 401 path.
+        self.ensure_fresh_copilot_token().await;
         match self
             .send_json_once(client, url, body, message_count, tool_count)
             .await
@@ -1430,5 +1590,178 @@ mod client_tests {
             auth.state.write().unwrap().token = "tok-b".into();
         }
         assert_eq!(c.live_auth_header().as_deref(), Some("Bearer tok-b"));
+    }
+
+    // ── Copilot token auto-refresh E2E tests ──────────────────────────────
+    //
+    // These drive the full send → refresh → send path against a REAL local
+    // mock Copilot chat endpoint, using the injectable token fetcher so no
+    // network (api.github.com) is touched. They cover the two ways a
+    // long-lived client keeps working after its short-lived token expires:
+    //   * proactively — a near-expiry token is refreshed BEFORE the request,
+    //   * reactively  — a 401 triggers a one-shot refresh + single retry.
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    /// A minimal mock Copilot `/chat/completions` server.
+    ///
+    /// It authorizes requests only when the `Authorization` header carries
+    /// `expected_good`; every other bearer gets a 401. Returns the bound port
+    /// and a shared counter of how many requests carried the good token.
+    async fn spawn_mock_copilot(expected_good: &'static str) -> (u16, Arc<AtomicUsize>) {
+        // The CI/dev environment may export HTTP(S)_PROXY (a Squid proxy) which
+        // reqwest would otherwise use even for 127.0.0.1, breaking the mock.
+        // Force a proxy bypass for loopback.
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+        std::env::set_var("no_proxy", "127.0.0.1,localhost");
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let good_hits = Arc::new(AtomicUsize::new(0));
+        let counter = good_hits.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let counter = counter.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n = match stream.read(&mut buf).await {
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let authorized = req.lines().filter_map(|l| l.split_once(':')).any(|(k, v)| {
+                        k.eq_ignore_ascii_case("authorization")
+                            && v.trim() == format!("Bearer {expected_good}")
+                    });
+
+                    let response = if authorized {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        let body = serde_json::json!({
+                            "choices": [{
+                                "message": { "content": "hello", "role": "assistant" },
+                                "finish_reason": "stop"
+                            }]
+                        })
+                        .to_string();
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                    } else {
+                        let body = "{\"error\":\"unauthorized\"}";
+                        format!(
+                            "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                    };
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.flush().await;
+                });
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        (port, good_hits)
+    }
+
+    /// Build a Copilot client pointed at a local mock, seeded with `stored_token`
+    /// / `stored_expiry`, whose refresh fetcher always mints `fresh_token`.
+    fn copilot_client_with_mock(
+        port: u16,
+        stored_token: &str,
+        stored_expiry: i64,
+        fresh_token: &'static str,
+    ) -> AiClient {
+        let provider = crate::settings::Provider {
+            id: "cop-e2e".into(),
+            kind: crate::settings::ProviderKind::GithubCopilot,
+            copilot_github_token: "gho_x".into(),
+            copilot_token: stored_token.into(),
+            copilot_token_expiry: stored_expiry,
+            model: "gpt-4.1".into(),
+            ..crate::settings::Provider::default()
+        };
+        let base = format!("http://127.0.0.1:{port}");
+        let chat_url = format!("{base}/chat/completions");
+        let headers = vec![(
+            "Authorization".to_string(),
+            format!("Bearer {stored_token}"),
+        )];
+        let fetcher: CopilotTokenFetcher = Arc::new(move |_gh, _ent| {
+            Box::pin(async move {
+                Ok(crate::ai::copilot_auth::CopilotTokenResponse {
+                    token: fresh_token.to_string(),
+                    expires_at: now_unix() + 3600,
+                })
+            })
+        });
+        AiClient::with_resolved(base.clone(), chat_url, headers, "gpt-4.1".into(), 5, 1, 10)
+            .with_copilot_base(base)
+            .with_copilot_auth_fetcher(&provider, fetcher)
+    }
+
+    #[tokio::test]
+    async fn copilot_proactively_refreshes_near_expiry_token_before_request() {
+        // Mock only accepts the FRESH token; the stored token is stale/near-expiry.
+        let (port, good_hits) = spawn_mock_copilot("fresh-token").await;
+        let client = copilot_client_with_mock(
+            port,
+            "stale-token",
+            now_unix() + 10, // within the 300s refresh skew → must refresh first
+            "fresh-token",
+        );
+
+        let resp = client
+            .chat(vec![Message::user("hi")])
+            .await
+            .expect("request should succeed after proactive refresh");
+        assert_eq!(resp, "hello");
+        assert_eq!(
+            good_hits.load(Ordering::SeqCst),
+            1,
+            "the mock must have seen exactly one request, and it must carry the refreshed token"
+        );
+        // The in-place state now holds the refreshed token.
+        assert_eq!(
+            client.live_auth_header().as_deref(),
+            Some("Bearer fresh-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn copilot_reactively_refreshes_on_401_then_retries() {
+        // Stored token looks valid (far-future expiry) so there is NO proactive
+        // refresh; the mock rejects it with 401, exercising the reactive path.
+        let (port, good_hits) = spawn_mock_copilot("fresh-token").await;
+        let client = copilot_client_with_mock(
+            port,
+            "dead-token",
+            now_unix() + 3600, // valid-looking → skips proactive refresh
+            "fresh-token",
+        );
+
+        let resp = client
+            .chat(vec![Message::user("hi")])
+            .await
+            .expect("request should succeed after reactive 401 refresh + retry");
+        assert_eq!(resp, "hello");
+        assert_eq!(
+            good_hits.load(Ordering::SeqCst),
+            1,
+            "exactly one authorized request (the retry) should reach the mock"
+        );
+        assert_eq!(
+            client.live_auth_header().as_deref(),
+            Some("Bearer fresh-token")
+        );
     }
 }

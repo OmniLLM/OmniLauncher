@@ -117,6 +117,17 @@ struct SaveSettingsRequest {
     /// and legacy posts remain compatible.
     #[serde(default)]
     backend_url: String,
+    /// Full multi-provider registry, mirrored from settings so a settings save
+    /// round-trip preserves it. Legacy clients that don't send it get `None`,
+    /// in which case the existing on-disk providers are kept untouched.
+    #[serde(default)]
+    providers: Option<Vec<crate::settings::Provider>>,
+    /// The provider the user selected as active. When present (and valid) this
+    /// is what makes "switch provider" actually take effect — without it the
+    /// POST could only edit the *currently* active provider's fields, so a
+    /// switch was silently dropped and requests kept hitting the old provider.
+    #[serde(default)]
+    active_provider_id: Option<String>,
     /// A2A server fields — mirrored so the settings round-trip preserves them.
     #[serde(default)]
     a2a_enabled: bool,
@@ -483,9 +494,43 @@ and try again."
                         a2a_public_url: input.a2a_public_url,
                         ..current
                     };
-                    updated.set_active_provider_base_url(updated.ai_base_url.clone());
-                    updated.set_active_provider_model(updated.ai_model.clone());
-                    updated.set_active_provider_api_key(updated.ai_api_key.clone());
+                    // Apply the incoming provider registry and active selection
+                    // BEFORE syncing the legacy `ai_*` fields below. Order matters:
+                    // switching the active provider must happen first so the
+                    // base_url/model/api_key sync lands on the newly selected
+                    // provider rather than the previously active one. Legacy
+                    // clients omit these (`None`) and keep the existing registry.
+                    if let Some(providers) = input.providers {
+                        updated.providers = providers;
+                    }
+                    let switched_provider = match input.active_provider_id {
+                        Some(active_id) if updated.providers.iter().any(|p| p.id == active_id) => {
+                            let changed = active_id != updated.active_provider_id;
+                            updated.active_provider_id = active_id;
+                            changed
+                        }
+                        Some(active_id) => {
+                            log::warn!(
+                                "POST /api/settings: ignoring unknown active_provider_id '{active_id}'"
+                            );
+                            false
+                        }
+                        None => false,
+                    };
+                    updated.ensure_provider_registry();
+                    if switched_provider {
+                        // A provider switch: the newly active provider already
+                        // carries its own base_url/model/api_key in the registry,
+                        // so derive the legacy `ai_*` fields FROM it rather than
+                        // clobbering them with the (stale) top-level payload.
+                        updated.sync_legacy_ai_fields_from_active_provider();
+                    } else {
+                        // No switch: write the edited top-level fields back onto
+                        // the (unchanged) active provider, as before.
+                        updated.set_active_provider_base_url(updated.ai_base_url.clone());
+                        updated.set_active_provider_model(updated.ai_model.clone());
+                        updated.set_active_provider_api_key(updated.ai_api_key.clone());
+                    }
                     {
                         let mut settings = state.settings.write().await;
                         *settings = updated.clone();
