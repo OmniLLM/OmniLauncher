@@ -260,6 +260,7 @@ pub fn providers(out: &Output, args: &[String]) -> i32 {
         }
         "caps" | "kinds" => providers_caps(out),
         "login" | "auth" => providers_login(out, args.get(1).map(String::as_str)),
+        "logout" | "signout" => providers_logout(out, args.get(1).map(String::as_str)),
         "help" | "--help" | "-h" => {
             print_providers_help(out);
             0
@@ -755,6 +756,61 @@ fn providers_login(out: &Output, id: Option<&str>) -> i32 {
         out.failure("failed to save settings");
         1
     }
+}
+
+/// Wipe any stored Copilot/GitHub OAuth tokens for a provider (or all github-copilot
+/// providers when `id` is `None`). Legacy top-level `ai_api_key` is also cleared so
+/// stale credentials never leak back into a fresh OAuth. The device-code flow can
+/// then be re-run from scratch via `ol providers login`.
+fn providers_logout(out: &Output, id: Option<&str>) -> i32 {
+    let mut settings = omnilauncher_lib::load_settings();
+
+    let mut cleared: Vec<String> = Vec::new();
+    for p in settings.providers.iter_mut() {
+        let target = match id {
+            Some(want) => p.id == want,
+            None => p.kind == ProviderKind::GithubCopilot,
+        };
+        if !target {
+            continue;
+        }
+        let had_any = !p.copilot_github_token.is_empty()
+            || !p.copilot_token.is_empty()
+            || p.copilot_token_expiry != 0;
+        p.copilot_github_token.clear();
+        p.copilot_token.clear();
+        p.copilot_token_expiry = 0;
+        if had_any {
+            cleared.push(p.id.clone());
+        } else {
+            // Still record it so the user gets confirmation the slot is empty.
+            cleared.push(format!("{} (already empty)", p.id));
+        }
+    }
+
+    if cleared.is_empty() {
+        if let Some(want) = id {
+            out.failure(&format!("provider '{want}' not found"));
+        } else {
+            out.info("no github-copilot providers configured");
+        }
+        return 1;
+    }
+
+    // Legacy leak-guard: the top-level ai_api_key was historically reused as a
+    // bearer for Copilot before per-provider fields existed. Blank it so the
+    // next OAuth truly starts from scratch.
+    settings.ai_api_key.clear();
+
+    settings.sync_legacy_ai_fields_from_active_provider();
+    if !omnilauncher_lib::save_settings(&settings) {
+        out.failure("failed to save settings");
+        return 1;
+    }
+
+    out.success(&format!("cleared Copilot tokens for: {}", cleared.join(", ")));
+    out.info("re-authenticate with: ol providers login [id]");
+    0
 }
 
 fn providers_caps(out: &Output) -> i32 {
@@ -1281,6 +1337,7 @@ fn print_providers_help(out: &Output) {
     println!("  set-model <model> [provider-id]           update selected model");
     println!("  remove <id>                               remove provider");
     println!("  login [id]                                GitHub Copilot device-code OAuth login");
+    println!("  logout [id]                               clear stored Copilot tokens (all copilot providers if id omitted)");
     println!("  caps                                      show provider kind capabilities");
 }
 
