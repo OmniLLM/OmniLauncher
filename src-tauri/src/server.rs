@@ -531,23 +531,46 @@ and try again."
                         updated.set_active_provider_model(updated.ai_model.clone());
                         updated.set_active_provider_api_key(updated.ai_api_key.clone());
                     }
-                    {
-                        let mut settings = state.settings.write().await;
-                        *settings = updated.clone();
-                    }
-                    {
-                        let mut client = state.ai_client.write().await;
-                        *client = AiClient::from_settings(&updated);
-                    }
-                    {
-                        let mut conversation = state.conversation.lock().await;
-                        conversation.max_turns = updated.ai_max_tool_iterations;
-                    }
                     let ok = save_settings(&updated);
                     if ok {
                         log::info!("server saved settings successfully");
                     } else {
                         log::error!("server failed to save settings");
+                    }
+                    let refreshed_provider = {
+                        let mut client = state.ai_client.write().await;
+                        // Construct after saving `updated`: Copilot startup refresh may
+                        // persist a rotated one-time refresh token, which must not be
+                        // overwritten by a later save of this pre-refresh snapshot.
+                        let (new_client, refreshed_provider) =
+                            AiClient::from_settings_with_refreshed_provider(&updated);
+                        *client = new_client;
+                        refreshed_provider
+                    };
+                    if let Some(refreshed_provider) = refreshed_provider {
+                        if let Some(target) = updated
+                            .providers
+                            .iter_mut()
+                            .find(|provider| provider.id == refreshed_provider.id)
+                        {
+                            target.copilot_github_token = refreshed_provider.copilot_github_token;
+                            target.copilot_github_refresh_token =
+                                refreshed_provider.copilot_github_refresh_token;
+                            target.copilot_github_token_expiry =
+                                refreshed_provider.copilot_github_token_expiry;
+                            target.copilot_github_refresh_token_expiry =
+                                refreshed_provider.copilot_github_refresh_token_expiry;
+                            target.copilot_token = refreshed_provider.copilot_token;
+                            target.copilot_token_expiry = refreshed_provider.copilot_token_expiry;
+                        }
+                    }
+                    {
+                        let mut settings = state.settings.write().await;
+                        *settings = updated.clone();
+                    }
+                    {
+                        let mut conversation = state.conversation.lock().await;
+                        conversation.max_turns = updated.ai_max_tool_iterations;
                     }
                     state
                         .event_bus

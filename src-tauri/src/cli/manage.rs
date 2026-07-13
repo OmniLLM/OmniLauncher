@@ -6,11 +6,11 @@
 //! `make` can stay build/install-only.
 
 use crate::cli::render::Output;
-use std::io::IsTerminal;
 use omnilauncher_lib::{
     plugins::plugin_manager_cmd, provider_caps, AppSettings, Provider, ProviderKind, SkillInfo,
     SkillManager,
 };
+use std::io::IsTerminal;
 
 pub(crate) const SETTINGS_FIELDS: &[&str] = &[
     "ai_base_url",
@@ -329,11 +329,8 @@ fn providers_active(out: &Output) -> i32 {
 }
 
 fn providers_add(out: &Output, args: &[String]) -> i32 {
-    let name = arg_value(args, "--name").or_else(|| {
-        args.first()
-            .filter(|a| !a.starts_with('-'))
-            .cloned()
-    });
+    let name =
+        arg_value(args, "--name").or_else(|| args.first().filter(|a| !a.starts_with('-')).cloned());
     // Interactive mode: explicitly requested with -i/--interactive, or implied
     // when no name is given on an interactive terminal (and not --json).
     let wants_interactive = args.iter().any(|a| a == "-i" || a == "--interactive");
@@ -473,15 +470,18 @@ fn providers_add_interactive(out: &Output, prefilled_name: Option<String>) -> i3
     } else {
         Vec::new()
     };
-    let default_model = models.first().cloned().unwrap_or_else(|| "auto".to_string());
+    let default_model = models
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "auto".to_string());
     let model = prompt_line(out, "Model", Some(&default_model))
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or(default_model);
 
     // Make active?
-    let make_active =
-        settings.active_provider_id.is_empty() || prompt_yes_no(out, "Make this the active provider?", false);
+    let make_active = settings.active_provider_id.is_empty()
+        || prompt_yes_no(out, "Make this the active provider?", false);
 
     let provider = Provider {
         id: id.clone(),
@@ -666,6 +666,16 @@ fn providers_remove(out: &Output, id: &str) -> i32 {
     }
 }
 
+struct CopilotLoginOutcome {
+    github_token: String,
+    copilot_token: String,
+    copilot_expiry: i64,
+    name: String,
+    github_refresh_token: String,
+    github_expiry: i64,
+    github_refresh_expiry: i64,
+}
+
 fn providers_login(out: &Output, id: Option<&str>) -> i32 {
     use omnilauncher_lib::ai::copilot_auth;
 
@@ -703,7 +713,7 @@ fn providers_login(out: &Output, id: Option<&str>) -> i32 {
 
     let enterprise = settings.providers[idx].copilot_enterprise_url.clone();
 
-    let outcome: Result<(String, String, i64, String, String, i64), String> = rt.block_on(async {
+    let outcome: Result<CopilotLoginOutcome, String> = rt.block_on(async {
         let device = copilot_auth::get_device_code().await?;
 
         out.info(&format!(
@@ -712,7 +722,8 @@ fn providers_login(out: &Output, id: Option<&str>) -> i32 {
             out.cyan(&device.user_code)
         ));
         // Best-effort: open the browser for the user. Ignore failures (headless).
-        let _ = omnilauncher_lib::plugins::url_opener::open_url_in_browser(&device.verification_uri);
+        let _ =
+            omnilauncher_lib::plugins::url_opener::open_url_in_browser(&device.verification_uri);
         out.info("Waiting for authorization...");
 
         let token = copilot_auth::poll_access_token(&device).await?;
@@ -723,6 +734,11 @@ fn providers_login(out: &Output, id: Option<&str>) -> i32 {
         let github_refresh_token = token.refresh_token;
         let github_expiry = if token.expires_in > 0 {
             copilot_auth::now_unix() + token.expires_in
+        } else {
+            0
+        };
+        let github_refresh_expiry = if token.refresh_token_expires_in > 0 {
+            copilot_auth::now_unix() + token.refresh_token_expires_in
         } else {
             0
         };
@@ -738,38 +754,43 @@ fn providers_login(out: &Output, id: Option<&str>) -> i32 {
 
         // Exchange for the initial short-lived Copilot token.
         let copilot = copilot_auth::get_copilot_token(&github_token, &enterprise).await?;
-        Ok((
+        Ok(CopilotLoginOutcome {
             github_token,
-            copilot.token,
-            copilot.expires_at,
+            copilot_token: copilot.token,
+            copilot_expiry: copilot.expires_at,
             name,
             github_refresh_token,
             github_expiry,
-        ))
+            github_refresh_expiry,
+        })
     });
 
-    let (github_token, copilot_token, expires_at, name, github_refresh_token, github_expiry) =
-        match outcome {
-            Ok(v) => v,
-            Err(e) => {
-                out.failure(&format!("login failed: {e}"));
-                return 1;
-            }
-        };
+    let outcome = match outcome {
+        Ok(v) => v,
+        Err(e) => {
+            out.failure(&format!("login failed: {e}"));
+            return 1;
+        }
+    };
 
     let provider = &mut settings.providers[idx];
-    provider.copilot_github_token = github_token;
-    provider.copilot_github_refresh_token = github_refresh_token;
-    provider.copilot_github_token_expiry = github_expiry;
-    provider.copilot_token = copilot_token;
-    provider.copilot_token_expiry = expires_at;
-    if !name.is_empty() {
-        provider.name = name.clone();
+    provider.copilot_github_token = outcome.github_token;
+    provider.copilot_github_refresh_token = outcome.github_refresh_token;
+    provider.copilot_github_token_expiry = outcome.github_expiry;
+    provider.copilot_github_refresh_token_expiry = outcome.github_refresh_expiry;
+    provider.copilot_token = outcome.copilot_token;
+    provider.copilot_token_expiry = outcome.copilot_expiry;
+    if !outcome.name.is_empty() {
+        provider.name = outcome.name.clone();
     }
 
     settings.sync_legacy_ai_fields_from_active_provider();
     if omnilauncher_lib::save_settings(&settings) {
-        let who = if name.is_empty() { target_id } else { name };
+        let who = if outcome.name.is_empty() {
+            target_id
+        } else {
+            outcome.name
+        };
         out.success(&format!("logged in to GitHub Copilot as {who}"));
         0
     } else {
@@ -797,10 +818,13 @@ fn providers_logout(out: &Output, id: Option<&str>) -> i32 {
         let had_any = !p.copilot_github_token.is_empty()
             || !p.copilot_github_refresh_token.is_empty()
             || !p.copilot_token.is_empty()
+            || p.copilot_github_token_expiry != 0
+            || p.copilot_github_refresh_token_expiry != 0
             || p.copilot_token_expiry != 0;
         p.copilot_github_token.clear();
         p.copilot_github_refresh_token.clear();
         p.copilot_github_token_expiry = 0;
+        p.copilot_github_refresh_token_expiry = 0;
         p.copilot_token.clear();
         p.copilot_token_expiry = 0;
         if had_any {
@@ -831,7 +855,10 @@ fn providers_logout(out: &Output, id: Option<&str>) -> i32 {
         return 1;
     }
 
-    out.success(&format!("cleared Copilot tokens for: {}", cleared.join(", ")));
+    out.success(&format!(
+        "cleared Copilot tokens for: {}",
+        cleared.join(", ")
+    ));
     out.info("re-authenticate with: ol providers login [id]");
     0
 }

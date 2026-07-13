@@ -162,7 +162,6 @@ pub fn provider_caps(kind: ProviderKind) -> ProviderCaps {
     }
 }
 
-
 /// Split a top-level `ai_model` string into an optional provider id and a
 /// model string. The provider id is only recognized when the substring
 /// before the FIRST '/' satisfies `is_known_provider`; otherwise the whole
@@ -213,6 +212,8 @@ pub struct Provider {
     #[serde(default)]
     pub copilot_github_token_expiry: i64,
     #[serde(default)]
+    pub copilot_github_refresh_token_expiry: i64,
+    #[serde(default)]
     pub copilot_token: String,
     #[serde(default)]
     pub copilot_token_expiry: i64,
@@ -233,6 +234,7 @@ impl Default for Provider {
             copilot_github_token: String::new(),
             copilot_github_refresh_token: String::new(),
             copilot_github_token_expiry: 0,
+            copilot_github_refresh_token_expiry: 0,
             copilot_token: String::new(),
             copilot_token_expiry: 0,
             copilot_enterprise_url: String::new(),
@@ -1404,6 +1406,34 @@ mod settings_tests {
     }
 
     #[test]
+    fn provider_copilot_oauth_fields_are_backward_compatible_and_redacted() {
+        let legacy: Provider =
+            serde_json::from_str(r#"{"id":"cop","name":"Copilot","kind":"github-copilot"}"#)
+                .unwrap();
+        assert!(legacy.copilot_github_refresh_token.is_empty());
+        assert_eq!(legacy.copilot_github_token_expiry, 0);
+        assert_eq!(legacy.copilot_github_refresh_token_expiry, 0);
+
+        let provider = Provider {
+            copilot_github_token: "access-secret".into(),
+            copilot_github_refresh_token: "refresh-secret".into(),
+            copilot_github_token_expiry: 123,
+            copilot_github_refresh_token_expiry: 456,
+            copilot_token: "inner-secret".into(),
+            copilot_token_expiry: 789,
+            ..legacy
+        };
+        let round_trip: Provider =
+            serde_json::from_str(&serde_json::to_string(&provider).unwrap()).unwrap();
+        assert_eq!(round_trip.copilot_github_refresh_token_expiry, 456);
+        let masked = round_trip.masked_for_display();
+        assert_eq!(masked.copilot_github_token, "«redacted»");
+        assert_eq!(masked.copilot_github_refresh_token, "«redacted»");
+        assert_eq!(masked.copilot_token, "«redacted»");
+        assert_eq!(masked.copilot_github_refresh_token_expiry, 456);
+    }
+
+    #[test]
     fn test_serialized_settings_do_not_include_backend_token() {
         let json = serde_json::to_string(&AppSettings::default()).unwrap();
         assert!(!json.contains("backend_token"));
@@ -1895,7 +1925,6 @@ mod settings_tests {
         );
     }
 
-
     #[test]
     fn selector_recognizes_known_provider_prefix() {
         let ids = ["copilot", "default"];
@@ -1919,14 +1948,20 @@ mod settings_tests {
     #[test]
     fn selector_bare_model_and_empty() {
         let known = |id: &str| id == "copilot";
-        assert_eq!(super::parse_model_selector("gpt-5.6-sol", known), (None, "gpt-5.6-sol"));
+        assert_eq!(
+            super::parse_model_selector("gpt-5.6-sol", known),
+            (None, "gpt-5.6-sol")
+        );
         assert_eq!(super::parse_model_selector("", known), (None, ""));
     }
 
     #[test]
     fn selector_prefix_with_empty_model() {
         let known = |id: &str| id == "copilot";
-        assert_eq!(super::parse_model_selector("copilot/", known), (Some("copilot"), ""));
+        assert_eq!(
+            super::parse_model_selector("copilot/", known),
+            (Some("copilot"), "")
+        );
     }
 
     fn provider_named(id: &str, model: &str) -> super::Provider {

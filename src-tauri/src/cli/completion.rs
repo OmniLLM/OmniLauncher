@@ -269,10 +269,20 @@ fn providers_command() -> Command {
         )
         .subcommand(Command::new("caps").visible_alias("kinds"))
         .subcommand(
-            Command::new("login").visible_alias("auth").arg(with_completer(
-                resource_name_arg("id"),
-                complete_provider_ids,
-            )),
+            Command::new("login")
+                .visible_alias("auth")
+                .arg(with_completer(
+                    resource_name_arg("id"),
+                    complete_provider_ids,
+                )),
+        )
+        .subcommand(
+            Command::new("logout")
+                .visible_alias("signout")
+                .arg(with_completer(
+                    resource_name_arg("id"),
+                    complete_provider_ids,
+                )),
         )
         .subcommand(Command::new("help"))
 }
@@ -642,6 +652,8 @@ mod tests {
         let providers = command.find_subcommand("providers").unwrap();
         assert!(providers.find_subcommand("set-active").is_some());
         assert!(providers.find_subcommand("set-model").is_some());
+        assert!(providers.find_subcommand("login").is_some());
+        assert!(providers.find_subcommand("logout").is_some());
         let plugins = command.find_subcommand("plugins").unwrap();
         assert!(plugins.find_subcommand("install-runtime").is_some());
         let completion = command.find_subcommand("completion").unwrap();

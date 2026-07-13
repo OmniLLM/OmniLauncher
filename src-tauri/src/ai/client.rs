@@ -52,6 +52,8 @@ struct CopilotCredentials {
     refresh_token: String,
     /// Absolute unix expiry of `github_token`; 0 = non-expiring.
     github_expiry: i64,
+    /// Absolute unix expiry of `refresh_token`; 0 = unknown/not supplied.
+    refresh_expiry: i64,
     enterprise_url: String,
 }
 
@@ -87,6 +89,7 @@ impl CopilotAuth {
         credentials.github_token = provider.copilot_github_token.clone();
         credentials.refresh_token = provider.copilot_github_refresh_token.clone();
         credentials.github_expiry = provider.copilot_github_token_expiry;
+        credentials.refresh_expiry = provider.copilot_github_refresh_token_expiry;
         credentials.enterprise_url = provider.copilot_enterprise_url.clone();
         true
     }
@@ -112,34 +115,34 @@ impl CopilotAuth {
         }
     }
 
-    /// Rotate the long-lived GitHub OAuth token via its refresh token when it is
-    /// near expiry, updating the in-memory credentials and persisting the rotated
-    /// outer token to settings. No-op (returns `false`) when there is no refresh
-    /// token or the token is non-expiring / not yet near expiry.
-    ///
-    /// This is what makes Copilot auth survive indefinitely without a manual
-    /// `ol providers login`: the outer token is the credential GitHub expires
-    /// (surfacing as `401 Bad credentials` on the copilot-token exchange), and
-    /// this renews it ahead of time. A failed rotation is logged, not fatal —
-    /// the subsequent copilot-token exchange surfaces the 401 as before.
-    async fn rotate_github_token(&self) -> bool {
-        let (refresh_token, github_expiry) = {
+    /// Rotate the outer GitHub credential proactively or as one forced recovery
+    /// after the Copilot-token exchange reports `Bad credentials`.
+    async fn rotate_github_token(&self, force: bool) -> bool {
+        let (refresh_token, github_expiry, refresh_expiry) = {
             let Ok(credentials) = self.credentials.read() else {
                 return false;
             };
             (
                 credentials.refresh_token.clone(),
                 credentials.github_expiry,
+                credentials.refresh_expiry,
             )
         };
 
-        if refresh_token.trim().is_empty() || github_expiry == 0 {
-            return false; // non-expiring outer token, or nothing to rotate with
+        if refresh_token.trim().is_empty() || (!force && github_expiry == 0) {
+            return false;
         }
-        if crate::ai::copilot_auth::now_unix()
-            <= github_expiry - crate::ai::copilot_auth::REFRESH_SKEW_SECS
-        {
-            return false; // still fresh
+        let now = crate::ai::copilot_auth::now_unix();
+        if !force && now <= github_expiry - crate::ai::copilot_auth::REFRESH_SKEW_SECS {
+            return false;
+        }
+        if refresh_expiry > 0 && now >= refresh_expiry {
+            log::warn!(
+                "copilot: GitHub OAuth refresh token expired for provider '{}'; run `ol providers login {}`",
+                self.provider_id,
+                self.provider_id
+            );
+            return false;
         }
 
         let fresh = match crate::ai::copilot_auth::refresh_access_token(&refresh_token).await {
@@ -155,27 +158,37 @@ impl CopilotAuth {
         } else {
             0
         };
-        if let Ok(mut credentials) = self.credentials.write() {
-            credentials.github_token = fresh.access_token.clone();
-            if !fresh.refresh_token.is_empty() {
-                credentials.refresh_token = fresh.refresh_token.clone();
-            }
-            credentials.github_expiry = new_expiry;
-        }
-
+        let new_refresh_expiry = if fresh.refresh_token_expires_in > 0 {
+            crate::ai::copilot_auth::now_unix() + fresh.refresh_token_expires_in
+        } else {
+            0
+        };
         let new_refresh = if fresh.refresh_token.is_empty() {
             refresh_token
         } else {
             fresh.refresh_token
         };
-        if persist_github_token_by_id(
-            &self.provider_id,
-            &fresh.access_token,
-            &new_refresh,
-            new_expiry,
-        ) {
+        if let Ok(mut credentials) = self.credentials.write() {
+            credentials.github_token = fresh.access_token;
+            credentials.refresh_token = new_refresh;
+            credentials.github_expiry = new_expiry;
+            credentials.refresh_expiry = new_refresh_expiry;
+        }
+
+        let saved = match (self.credentials.read(), self.state.read()) {
+            (Ok(credentials), Ok(state)) => {
+                persist_copilot_credentials_by_id(&self.provider_id, &credentials, &state)
+            }
+            _ => false,
+        };
+        if saved {
             log::info!(
                 "copilot: rotated GitHub OAuth token for provider '{}'",
+                self.provider_id
+            );
+        } else {
+            log::error!(
+                "copilot: rotated GitHub OAuth token for provider '{}' but could not persist it; restart may require login",
                 self.provider_id
             );
         }
@@ -183,33 +196,36 @@ impl CopilotAuth {
     }
 }
 
-/// Persist a refreshed Copilot token back into on-disk settings by provider id.
-fn persist_copilot_token_by_id(provider_id: &str, token: &str, expiry: i64) -> bool {
-    let mut latest = crate::settings::load_settings();
-    let Some(target) = latest.providers.iter_mut().find(|p| p.id == provider_id) else {
-        return false;
-    };
-    target.copilot_token = token.to_string();
-    target.copilot_token_expiry = expiry;
-    crate::settings::save_settings(&latest)
-}
-
-/// Persist a rotated long-lived GitHub OAuth token (and its refresh token +
-/// expiry) back into on-disk settings by provider id, so other clients and the
-/// next process reuse the renewed credential instead of the dead one.
-fn persist_github_token_by_id(
+/// Persist one coherent Copilot credential generation by provider id.
+fn persist_copilot_credentials_by_id(
     provider_id: &str,
-    github_token: &str,
-    refresh_token: &str,
-    expiry: i64,
+    credentials: &CopilotCredentials,
+    state: &CopilotTokenState,
 ) -> bool {
     let mut latest = crate::settings::load_settings();
     let Some(target) = latest.providers.iter_mut().find(|p| p.id == provider_id) else {
         return false;
     };
-    target.copilot_github_token = github_token.to_string();
-    target.copilot_github_refresh_token = refresh_token.to_string();
-    target.copilot_github_token_expiry = expiry;
+    target.copilot_github_token = credentials.github_token.clone();
+    target.copilot_github_refresh_token = credentials.refresh_token.clone();
+    target.copilot_github_token_expiry = credentials.github_expiry;
+    target.copilot_github_refresh_token_expiry = credentials.refresh_expiry;
+    target.copilot_token = state.token.clone();
+    target.copilot_token_expiry = state.expiry;
+    crate::settings::save_settings(&latest)
+}
+
+fn persist_copilot_provider(provider: &crate::settings::Provider) -> bool {
+    let mut latest = crate::settings::load_settings();
+    let Some(target) = latest.providers.iter_mut().find(|p| p.id == provider.id) else {
+        return false;
+    };
+    target.copilot_github_token = provider.copilot_github_token.clone();
+    target.copilot_github_refresh_token = provider.copilot_github_refresh_token.clone();
+    target.copilot_github_token_expiry = provider.copilot_github_token_expiry;
+    target.copilot_github_refresh_token_expiry = provider.copilot_github_refresh_token_expiry;
+    target.copilot_token = provider.copilot_token.clone();
+    target.copilot_token_expiry = provider.copilot_token_expiry;
     crate::settings::save_settings(&latest)
 }
 
@@ -235,10 +251,10 @@ fn full_error_chain(err: &dyn std::error::Error) -> String {
 /// `AiClient::from_settings` is a sync function that may itself be called from
 /// within a tokio runtime (main/server), so a nested `block_on` would panic.
 /// We therefore run the async refresh on a dedicated OS thread that owns a
-/// fresh current-thread runtime. Returns `Ok(true)` when the token changed.
+/// fresh current-thread runtime. Returns the structured refresh outcome.
 fn refresh_copilot_token_blocking(
     provider: &mut crate::settings::Provider,
-) -> Result<bool, String> {
+) -> Result<crate::ai::copilot_auth::CopilotRefreshOutcome, String> {
     let mut p = provider.clone();
     let handle = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -250,27 +266,13 @@ fn refresh_copilot_token_blocking(
         ))?;
         Ok::<_, String>((changed, p))
     });
-    let (changed, refreshed) = handle
+    let (outcome, refreshed) = handle
         .join()
         .map_err(|_| "copilot refresh thread panicked".to_string())??;
-    if changed {
+    if outcome.changed() {
         *provider = refreshed;
     }
-    Ok(changed)
-}
-
-/// Persist a refreshed Copilot token back into the on-disk settings for the
-/// matching provider id. Returns the provider id on success.
-fn persist_refreshed_copilot_token(provider: &crate::settings::Provider) -> Option<String> {
-    let mut latest = crate::settings::load_settings();
-    let target = latest.providers.iter_mut().find(|p| p.id == provider.id)?;
-    target.copilot_token = provider.copilot_token.clone();
-    target.copilot_token_expiry = provider.copilot_token_expiry;
-    if crate::settings::save_settings(&latest) {
-        Some(provider.id.clone())
-    } else {
-        None
-    }
+    Ok(outcome)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -505,6 +507,7 @@ impl AiClient {
                 github_token: provider.copilot_github_token.clone(),
                 refresh_token: provider.copilot_github_refresh_token.clone(),
                 github_expiry: provider.copilot_github_token_expiry,
+                refresh_expiry: provider.copilot_github_refresh_token_expiry,
                 enterprise_url: provider.copilot_enterprise_url.clone(),
             }),
             state: RwLock::new(CopilotTokenState {
@@ -532,6 +535,7 @@ impl AiClient {
                 github_token: provider.copilot_github_token.clone(),
                 refresh_token: provider.copilot_github_refresh_token.clone(),
                 github_expiry: provider.copilot_github_token_expiry,
+                refresh_expiry: provider.copilot_github_refresh_token_expiry,
                 enterprise_url: provider.copilot_enterprise_url.clone(),
             }),
             state: RwLock::new(CopilotTokenState {
@@ -545,20 +549,36 @@ impl AiClient {
     }
 
     pub fn from_settings(settings: &crate::AppSettings) -> Self {
+        Self::from_settings_with_refreshed_provider(settings).0
+    }
+
+    pub(crate) fn from_settings_with_refreshed_provider(
+        settings: &crate::AppSettings,
+    ) -> (Self, Option<crate::settings::Provider>) {
         let (mut provider, effective_model) = settings.resolve_active_selection();
         provider.model = effective_model;
 
         // For GitHub Copilot, refresh the short-lived Copilot token on demand
         // (when missing or near expiry) before baking it into request headers.
         // If it changes, persist so other clients reuse it.
+        let mut refreshed_provider = None;
         if provider.kind == crate::settings::ProviderKind::GithubCopilot {
             match refresh_copilot_token_blocking(&mut provider) {
-                Ok(true) => {
-                    if let Some(saved) = persist_refreshed_copilot_token(&provider) {
-                        log::info!("copilot: refreshed token for provider '{saved}'");
+                Ok(outcome) if outcome.changed() => {
+                    refreshed_provider = Some(provider.clone());
+                    if persist_copilot_provider(&provider) {
+                        log::info!(
+                            "copilot: refreshed credentials for provider '{}'",
+                            provider.id
+                        );
+                    } else {
+                        log::error!(
+                            "copilot: refreshed credentials for provider '{}' but could not persist them; restart may require login",
+                            provider.id
+                        );
                     }
                 }
-                Ok(false) => {}
+                Ok(_) => {}
                 Err(err) => log::warn!(
                     "copilot: failed to refresh token for provider '{}': {err}",
                     provider.name
@@ -566,7 +586,7 @@ impl AiClient {
             }
         }
 
-        match crate::ai::provider::resolve_provider(&provider) {
+        let client = match crate::ai::provider::resolve_provider(&provider) {
             Ok(resolved) => {
                 let client = Self::with_resolved(
                     provider.base_url.clone(),
@@ -601,7 +621,8 @@ impl AiClient {
                     settings.ai_retry_base_delay_ms,
                 )
             }
-        }
+        };
+        (client, refreshed_provider)
     }
 
     pub fn base_url(&self) -> &str {
@@ -1094,7 +1115,7 @@ impl AiClient {
         // Renew the outer GitHub token first when it is close to expiry, so the
         // copilot-token exchange below uses a valid credential rather than a dead
         // one (which would 401 with "Bad credentials" and force a re-login).
-        auth.rotate_github_token().await;
+        auth.rotate_github_token(false).await;
         let has_github_token = auth
             .credentials
             .read()
@@ -1114,8 +1135,25 @@ impl AiClient {
 
         let fresh = match auth.fetch_token().await {
             Ok(t) => t,
+            Err(e)
+                if crate::ai::copilot_auth::is_bad_credentials(&e)
+                    && auth.rotate_github_token(true).await =>
+            {
+                match auth.fetch_token().await {
+                    Ok(t) => t,
+                    Err(retry_error) => {
+                        log::warn!(
+                            "copilot: token refresh failed after renewing GitHub OAuth credential: {retry_error}"
+                        );
+                        return false;
+                    }
+                }
+            }
             Err(e) => {
-                log::warn!("copilot: token refresh failed: {e}");
+                log::warn!(
+                    "copilot: token refresh failed: {e}; re-authenticate with `ol providers login {}` if credentials were rejected",
+                    auth.provider_id
+                );
                 return false;
             }
         };
@@ -1125,11 +1163,22 @@ impl AiClient {
             state.token = fresh.token.clone();
             state.expiry = fresh.expires_at;
         }
-        if persist_copilot_token_by_id(&auth.provider_id, &fresh.token, fresh.expires_at) {
+        let saved = match (auth.credentials.read(), auth.state.read()) {
+            (Ok(credentials), Ok(state)) => {
+                persist_copilot_credentials_by_id(&auth.provider_id, &credentials, &state)
+            }
+            _ => false,
+        };
+        if saved {
             log::info!(
                 "copilot: refreshed token in place for provider '{}'{}",
                 auth.provider_id,
                 if unchanged { " (token unchanged)" } else { "" }
+            );
+        } else {
+            log::error!(
+                "copilot: refreshed token for provider '{}' but could not persist the credential generation",
+                auth.provider_id
             );
         }
         true

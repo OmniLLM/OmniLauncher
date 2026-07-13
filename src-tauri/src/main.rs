@@ -127,7 +127,6 @@ fn main() {
 pub fn serve_backend(args: &[String]) {
     let mut settings = load_settings_with_overrides(args);
     settings.a2a_enabled = true;
-    let ai_client = AiClient::from_settings(&settings);
     let mut skill_manager = SkillManager::new();
     skill_manager.load_all();
 
@@ -144,6 +143,11 @@ pub fn serve_backend(args: &[String]) {
             new_token
         }
     };
+
+    // Construct only after any first-enable settings save. Copilot construction
+    // may persist a rotated one-time OAuth refresh token, which a stale settings
+    // save must never overwrite.
+    let ai_client = AiClient::from_settings(&settings);
 
     let mut conversation = ConversationContext::default();
     let sid = omnilauncher_lib::db::conversation::current_session_id();
