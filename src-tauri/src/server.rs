@@ -232,6 +232,11 @@ async fn serve_api_listener(listener: TcpListener, state: ServerState) {
             .unwrap_or_else(|_| "unknown".to_string())
     );
 
+    // Watch settings.json for out-of-band edits (e.g. `ol providers set-active`
+    // run while the desktop app is up, or a manual edit) and reload the live
+    // AiClient when the file changes. mtime polling keeps this dependency-free.
+    spawn_settings_watcher(state.clone());
+
     loop {
         let (mut stream, addr) = match listener.accept().await {
             Ok(parts) => parts,
@@ -580,6 +585,17 @@ and try again."
                 }
                 Err(error) => error,
             }
+        }
+        ("POST", "/api/settings/reload") => {
+            // Re-read settings.json from disk and rebuild the live AiClient.
+            // Used by `ol providers set-active`/`set-model` (and any other
+            // out-of-band writer) to make a provider/model switch take effect
+            // without restarting the backend.
+            let active_id = reload_settings_from_disk(state).await;
+            json_response(&serde_json::json!({
+                "reloaded": true,
+                "active_provider_id": active_id,
+            }))
         }
         ("POST", "/api/models") => {
             let body = read_body(request);
@@ -2291,7 +2307,105 @@ async fn reload_external_plugins_state(state: &ServerState) {
     pm.reload_external_plugins(&settings.plugin_dirs);
 }
 
-/// Install a plugin runtime dependency (python/node/dotnet), emitting progress
+/// Re-read `settings.json` from disk and rebuild the live `AiClient` + in-memory
+/// settings so an out-of-band edit (e.g. `ol providers set-active`, a file
+/// watcher, or a manual edit) takes effect without restarting the backend.
+///
+/// This mirrors the provider-switch rebuild in `POST /api/settings` but sources
+/// its input from disk rather than a request payload, which is exactly what the
+/// CLI path needs: the CLI writes `settings.json`, then asks the running server
+/// to reload it. Without this, the server keeps routing to the stale provider
+/// held in `state.ai_client`, producing 401s against the old endpoint.
+///
+/// Returns the active provider id after reload.
+async fn reload_settings_from_disk(state: &ServerState) -> String {    let mut updated = crate::load_settings();
+    updated.ensure_provider_registry();
+
+    // Rebuild the AI client from the freshly loaded settings. Copilot startup
+    // refresh may rotate a one-time token; persist it back onto the registry so
+    // a later save does not clobber it (same contract as POST /api/settings).
+    let refreshed_provider = {
+        let mut client = state.ai_client.write().await;
+        let (new_client, refreshed_provider) =
+            AiClient::from_settings_with_refreshed_provider(&updated);
+        *client = new_client;
+        refreshed_provider
+    };
+    if let Some(refreshed_provider) = refreshed_provider {
+        if let Some(target) = updated
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == refreshed_provider.id)
+        {
+            target.copilot_github_token = refreshed_provider.copilot_github_token;
+            target.copilot_github_refresh_token = refreshed_provider.copilot_github_refresh_token;
+            target.copilot_github_token_expiry = refreshed_provider.copilot_github_token_expiry;
+            target.copilot_github_refresh_token_expiry =
+                refreshed_provider.copilot_github_refresh_token_expiry;
+            target.copilot_token = refreshed_provider.copilot_token;
+            target.copilot_token_expiry = refreshed_provider.copilot_token_expiry;
+        }
+        save_settings(&updated);
+    }
+
+    let active_id = updated.active_provider_id.clone();
+    {
+        let mut settings = state.settings.write().await;
+        *settings = updated.clone();
+    }
+    {
+        let mut conversation = state.conversation.lock().await;
+        conversation.max_turns = updated.ai_max_tool_iterations;
+    }
+    state
+        .event_bus
+        .emit_json("omnilauncher://settings-saved", &updated)
+        .await;
+    log::info!(
+        "reloaded settings from disk: active provider '{}' model '{}'",
+        active_id,
+        updated.ai_model
+    );
+    active_id
+}
+
+/// Spawn a background task that polls `settings.json`'s mtime and reloads the
+/// live settings/AiClient whenever it changes on disk. This is the "server
+/// watches file" half of picking up out-of-band provider switches: it catches
+/// edits from any writer (CLI, manual edits) even if they don't call the
+/// `/api/settings/reload` endpoint. mtime polling avoids adding a filesystem
+/// notification crate.
+fn spawn_settings_watcher(state: ServerState) {
+    tokio::spawn(async move {
+        let path = crate::settings::settings_path();
+        // Seed with the current mtime so we only react to future changes, not
+        // the file that already existed at startup.
+        let mut last = file_mtime(&path);
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            let current = file_mtime(&path);
+            if current != last {
+                last = current;
+                // Ignore transient absence (e.g. atomic rename in progress):
+                // only reload when the file is present with a fresh mtime.
+                if current.is_some() {
+                    log::info!("settings.json changed on disk; reloading live settings");
+                    reload_settings_from_disk(&state).await;
+                }
+            }
+        }
+    });
+}
+
+/// Best-effort modification time of a file as a `SystemTime`, `None` if the file
+/// is missing or its metadata is unreadable.
+fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+
 /// over the SSE bus so the desktop UI's `omnilauncher://plugin-runtime-progress`
 /// listener updates live — mirroring the Tauri command path in `main.rs`.
 async fn install_runtime_dep_backend(id: &str, state: &ServerState) -> Result<String, String> {

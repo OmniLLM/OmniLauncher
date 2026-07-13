@@ -611,6 +611,7 @@ fn providers_set_active(out: &Output, id: &str) -> i32 {
     settings.active_provider_id = id.to_string();
     settings.sync_legacy_ai_fields_from_active_provider();
     if omnilauncher_lib::save_settings(&settings) {
+        notify_backend_reload();
         out.success(&format!("active provider: {id}"));
         0
     } else {
@@ -633,12 +634,61 @@ fn providers_set_model(out: &Output, model: &str, provider_id: Option<&str>) -> 
         settings.sync_legacy_ai_fields_from_active_provider();
     }
     if omnilauncher_lib::save_settings(&settings) {
+        notify_backend_reload();
         out.success(&format!("provider {id} model: {model}"));
         0
     } else {
         out.failure("failed to save settings");
         1
     }
+}
+
+/// Best-effort: tell a running backend to reload `settings.json` so a
+/// provider/model switch takes effect immediately instead of only after a
+/// restart. The CLI persists settings to disk, but the live app holds its
+/// provider in memory; without this nudge it keeps routing to the previously
+/// active provider (yielding 401s against the stale endpoint).
+///
+/// This is intentionally silent about failures: if the backend is not running
+/// (the common case for a pure CLI user), there is nothing to reload and the
+/// disk write alone is sufficient — the next launch picks up the change.
+fn notify_backend_reload() {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::time::Duration;
+
+    let settings = omnilauncher_lib::load_settings();
+    let token = omnilauncher_lib::settings::resolve_backend_auth_token(&settings);
+    let port = crate::cli::ops::server_port();
+
+    let addr = match (std::net::Ipv4Addr::LOCALHOST, port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut it| it.next())
+    {
+        Some(a) => a,
+        None => return,
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(400)) else {
+        return; // backend not running — disk write is enough.
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+
+    let req = format!(
+        "POST /api/settings/reload HTTP/1.0\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         X-OmniLauncher-Token: {token}\r\n\
+         Content-Length: 0\r\n\
+         Connection: close\r\n\r\n"
+    );
+    if stream.write_all(req.as_bytes()).is_err() {
+        return;
+    }
+    let mut buf = String::new();
+    let _ = stream.read_to_string(&mut buf);
+    // Response is ignored deliberately: a 200 means the live app switched, any
+    // other outcome still leaves settings.json correct on disk.
 }
 
 fn providers_remove(out: &Output, id: &str) -> i32 {

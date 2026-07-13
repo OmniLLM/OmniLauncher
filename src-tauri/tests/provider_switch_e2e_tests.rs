@@ -25,6 +25,11 @@ use omnilauncher_lib::{
 
 const TOKEN: &str = "switch-e2e-token";
 
+/// Both tests mutate the process-global `OMNILAUNCHER_CONFIG_DIR` env var, and
+/// cargo runs integration tests in one process in parallel. Serialize them so
+/// one test's temp-dir redirect can't leak into the other's disk reads.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Build settings with two providers: a GitHub Copilot provider (active) and a
 /// custom OpenAI-compatible provider we will switch to.
 fn seed_settings() -> AppSettings {
@@ -111,8 +116,12 @@ fn body_of(response: &str) -> &str {
         .unwrap_or("")
 }
 
+#[allow(clippy::await_holding_lock)] // env guard intentionally spans the test
 #[tokio::test]
 async fn switching_active_provider_reroutes_the_live_client() {
+    // Serialize with other tests that mutate OMNILAUNCHER_CONFIG_DIR: cargo runs
+    // integration tests in one process, in parallel, and set_var is process-global.
+    let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Isolate config writes to a temp dir so save_settings does not touch real
     // user config (and is permitted under the test-build guard). Each integration
     // test binary is its own process, so there is no in-process env race here.
@@ -186,6 +195,102 @@ async fn switching_active_provider_reroutes_the_live_client() {
         assert!(
             !client.chat_url().contains("githubcopilot.com"),
             "client must NOT route to Copilot after switch, got {}",
+            client.chat_url()
+        );
+        assert!(
+            client.chat_url().contains("127.0.0.1:9911"),
+            "client should route to the custom provider base_url, got {}",
+            client.chat_url()
+        );
+        assert_eq!(client.model(), "llama-3", "client model should switch");
+    }
+
+    std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Regression test for the CLI path: `ol providers set-active` / `set-model`
+/// write `settings.json` to disk and then nudge the running backend to reload.
+/// Before the fix there was no reload hook at all, so the live app kept routing
+/// to the previously active provider (producing 401s against the stale
+/// endpoint) until a full restart. This drives the same `POST
+/// /api/settings/reload` endpoint the CLI calls and asserts the live `AiClient`
+/// re-resolves to the newly active provider read from disk.
+#[allow(clippy::await_holding_lock)] // env guard intentionally spans the test
+#[tokio::test]
+async fn reloading_from_disk_reroutes_the_live_client() {
+    let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = std::env::temp_dir().join(format!("oml-reload-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::env::set_var("OMNILAUNCHER_CONFIG_DIR", &tmp);
+
+    // Persist the seed (Copilot active) to disk, then build the live state from
+    // it — this is the world as it exists before the CLI switch.
+    let seed = seed_settings();
+    assert!(
+        omnilauncher_lib::save_settings(&seed),
+        "seeding settings.json should succeed"
+    );
+    let state = make_state(seed);
+
+    // Sanity: the server starts out routed to Copilot.
+    {
+        let client = state.ai_client.read().await;
+        assert!(
+            client.chat_url().contains("githubcopilot.com"),
+            "precondition: active client should be Copilot, got {}",
+            client.chat_url()
+        );
+    }
+
+    let listener = bind_api_listener("127.0.0.1", 0).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server_state = state.clone();
+    tokio::spawn(async move { serve_bound(listener, server_state).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Simulate what `ol providers set-active custom-1` does: mutate the active
+    // provider on disk WITHOUT touching the running server's in-memory state.
+    {
+        let mut disk = omnilauncher_lib::load_settings();
+        disk.active_provider_id = "custom-1".into();
+        disk.sync_legacy_ai_fields_from_active_provider();
+        assert!(
+            omnilauncher_lib::save_settings(&disk),
+            "CLI-style settings write should succeed"
+        );
+    }
+
+    // The live client is still stale until the reload nudge arrives.
+    {
+        let client = state.ai_client.read().await;
+        assert!(
+            client.chat_url().contains("githubcopilot.com"),
+            "client should still be stale before reload, got {}",
+            client.chat_url()
+        );
+    }
+
+    // The CLI nudge: POST /api/settings/reload.
+    let reload = http(port, "POST", "/api/settings/reload", Some("")).await;
+    assert!(
+        reload.starts_with("HTTP/1.1 200"),
+        "reload should succeed: {reload}"
+    );
+    let payload: serde_json::Value = serde_json::from_str(body_of(&reload)).unwrap();
+    assert_eq!(payload["reloaded"], true);
+    assert_eq!(payload["active_provider_id"], "custom-1");
+
+    // In-memory settings now reflect the on-disk switch.
+    let stored = state.settings.read().await.clone();
+    assert_eq!(stored.active_provider_id, "custom-1");
+
+    // The LIVE client was rebuilt from disk and no longer routes to Copilot.
+    {
+        let client = state.ai_client.read().await;
+        assert!(
+            !client.chat_url().contains("githubcopilot.com"),
+            "client must NOT route to Copilot after reload, got {}",
             client.chat_url()
         );
         assert!(
