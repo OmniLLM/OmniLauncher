@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+const REDACTED: &str = "«redacted»";
+
+fn is_redacted(value: &str) -> bool {
+    value == REDACTED
+}
+
 /// A single GitHub server connection (github.com or GHE instance).
 ///
 /// Token resolution order:
@@ -66,6 +72,97 @@ impl GitHubServer {
             .into_iter()
             .find(|h| h.hostname == hostname)
             .and_then(|h| h.oauth_token)
+    }
+
+    pub fn masked_for_display(&self) -> Self {
+        let mut masked = self.clone();
+        if !masked.token.is_empty() {
+            masked.token = REDACTED.to_string();
+        }
+        masked
+    }
+}
+
+fn default_mcp_transport_type() -> String {
+    "http".to_string()
+}
+
+/// OAuth client metadata for an HTTP MCP server. Tokens are deliberately not
+/// stored here; the MCP credential store persists and rotates them separately.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct McpOAuthConfig {
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+    /// Optional environment variable containing the client secret. This keeps
+    /// confidential-client secrets out of settings.json.
+    #[serde(default)]
+    pub client_secret_env: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+/// One remote MCP connection. OmniLauncher currently supports Streamable HTTP;
+/// the explicit `type` field keeps the config compatible with common MCP clients.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    #[serde(rename = "type", default = "default_mcp_transport_type")]
+    pub transport_type: String,
+    pub url: String,
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub oauth: Option<McpOAuthConfig>,
+}
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            transport_type: default_mcp_transport_type(),
+            url: String::new(),
+            headers: std::collections::BTreeMap::new(),
+            oauth: None,
+        }
+    }
+}
+
+fn is_sensitive_header_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "authorization"
+        || lower == "proxy-authorization"
+        || lower == "cookie"
+        || lower == "set-cookie"
+        || lower.contains("api-key")
+        || lower.contains("apikey")
+        || lower.contains("token")
+        || lower.contains("secret")
+}
+
+impl McpOAuthConfig {
+    pub fn masked_for_display(&self) -> Self {
+        let mut masked = self.clone();
+        if !masked.client_secret.is_empty() {
+            masked.client_secret = REDACTED.to_string();
+        }
+        masked
+    }
+}
+
+impl McpServerConfig {
+    pub fn masked_for_display(&self) -> Self {
+        let mut masked = self.clone();
+        for (name, value) in masked.headers.iter_mut() {
+            if !value.is_empty() && is_sensitive_header_name(name) {
+                *value = REDACTED.to_string();
+            }
+        }
+        masked.oauth = masked
+            .oauth
+            .as_ref()
+            .map(McpOAuthConfig::masked_for_display);
+        masked
     }
 }
 
@@ -255,18 +352,112 @@ impl Provider {
     pub fn masked_for_display(&self) -> Self {
         let mut p = self.clone();
         if !p.api_key.is_empty() {
-            p.api_key = "«redacted»".to_string();
+            p.api_key = REDACTED.to_string();
         }
         if !p.copilot_github_token.is_empty() {
-            p.copilot_github_token = "«redacted»".to_string();
+            p.copilot_github_token = REDACTED.to_string();
         }
         if !p.copilot_github_refresh_token.is_empty() {
-            p.copilot_github_refresh_token = "«redacted»".to_string();
+            p.copilot_github_refresh_token = REDACTED.to_string();
         }
         if !p.copilot_token.is_empty() {
-            p.copilot_token = "«redacted»".to_string();
+            p.copilot_token = REDACTED.to_string();
         }
         p
+    }
+}
+
+impl AppSettings {
+    pub fn masked_for_display(&self) -> Self {
+        let mut settings = self.clone();
+        if !settings.ai_api_key.is_empty() {
+            settings.ai_api_key = REDACTED.to_string();
+        }
+        settings.providers = settings
+            .providers
+            .iter()
+            .map(Provider::masked_for_display)
+            .collect();
+        settings.github_servers = settings
+            .github_servers
+            .iter()
+            .map(GitHubServer::masked_for_display)
+            .collect();
+        settings.mcp_servers = settings
+            .mcp_servers
+            .iter()
+            .map(|(name, config)| (name.clone(), config.masked_for_display()))
+            .collect();
+        if settings.a2a_token.as_deref().is_some_and(is_redacted) {
+            // Already masked; keep the stable placeholder.
+        } else if settings.a2a_token.is_some() {
+            settings.a2a_token = Some(REDACTED.to_string());
+        }
+        settings
+    }
+
+    /// Restore values represented by the display-only redaction marker before
+    /// persisting a settings round trip. A literal non-redacted value remains
+    /// an intentional user edit.
+    pub fn restore_redacted_secrets_from(&mut self, latest: &AppSettings) {
+        if is_redacted(&self.ai_api_key) {
+            self.ai_api_key = latest.ai_api_key.clone();
+        }
+        if self.a2a_token.as_deref().is_some_and(is_redacted) {
+            self.a2a_token = latest.a2a_token.clone();
+        }
+
+        for provider in &mut self.providers {
+            let Some(current) = latest.providers.iter().find(|p| p.id == provider.id) else {
+                continue;
+            };
+            if is_redacted(&provider.api_key) {
+                provider.api_key = current.api_key.clone();
+            }
+            if is_redacted(&provider.copilot_github_token) {
+                provider.copilot_github_token = current.copilot_github_token.clone();
+            }
+            if is_redacted(&provider.copilot_github_refresh_token) {
+                provider.copilot_github_refresh_token =
+                    current.copilot_github_refresh_token.clone();
+            }
+            if is_redacted(&provider.copilot_token) {
+                provider.copilot_token = current.copilot_token.clone();
+            }
+        }
+
+        for server in &mut self.github_servers {
+            if !is_redacted(&server.token) {
+                continue;
+            }
+            if let Some(current) = latest
+                .github_servers
+                .iter()
+                .find(|candidate| candidate.hostname == server.hostname)
+            {
+                server.token = current.token.clone();
+            }
+        }
+
+        for (name, server) in &mut self.mcp_servers {
+            let Some(current) = latest.mcp_servers.get(name) else {
+                continue;
+            };
+            for (header, value) in &mut server.headers {
+                if is_redacted(value) {
+                    if let Some(original) = current.headers.get(header) {
+                        *value = original.clone();
+                    }
+                }
+            }
+            if let (Some(oauth), Some(current_oauth)) =
+                (server.oauth.as_mut(), current.oauth.as_ref())
+            {
+                if is_redacted(&oauth.client_secret) {
+                    oauth.client_secret = current_oauth.client_secret.clone();
+                }
+            }
+        }
     }
 }
 
@@ -309,6 +500,11 @@ pub struct AppSettings {
     /// Tokens are resolved via `gh auth token --hostname` when not set explicitly.
     #[serde(default)]
     pub github_servers: Vec<GitHubServer>,
+
+    /// Remote Model Context Protocol servers. `mcpServers` is accepted as an
+    /// alias so configurations can be copied from other MCP-capable clients.
+    #[serde(default, alias = "mcpServers")]
+    pub mcp_servers: std::collections::BTreeMap<String, McpServerConfig>,
 
     /// When true, capturing the text selected in the previously-focused window
     /// is automatically pre-filled into the launcher (prefixed with `__sel__:`)
@@ -360,6 +556,34 @@ impl AppSettings {
     /// callers don't need to change.
     pub fn resolve_ai_api_key(&self) -> String {
         self.ai_api_key.clone()
+    }
+
+    /// Keep the newest server-managed GitHub Copilot OAuth credential
+    /// generation when saving a potentially stale settings snapshot.
+    ///
+    /// GitHub rotates refresh tokens: once a refresh token has been exchanged,
+    /// an older Preferences page must never write that consumed generation back
+    /// to disk. OAuth fields are therefore managed only by the login/refresh/
+    /// logout paths; ordinary settings saves may edit provider metadata and
+    /// model selection but inherit credentials from the latest persisted state.
+    pub fn preserve_managed_copilot_credentials_from(&mut self, latest: &AppSettings) {
+        for provider in &mut self.providers {
+            if provider.kind != ProviderKind::GithubCopilot {
+                continue;
+            }
+            let Some(current) = latest.providers.iter().find(|candidate| {
+                candidate.id == provider.id && candidate.kind == ProviderKind::GithubCopilot
+            }) else {
+                continue;
+            };
+            provider.copilot_github_token = current.copilot_github_token.clone();
+            provider.copilot_github_refresh_token = current.copilot_github_refresh_token.clone();
+            provider.copilot_github_token_expiry = current.copilot_github_token_expiry;
+            provider.copilot_github_refresh_token_expiry =
+                current.copilot_github_refresh_token_expiry;
+            provider.copilot_token = current.copilot_token.clone();
+            provider.copilot_token_expiry = current.copilot_token_expiry;
+        }
     }
 
     /// Active LLM provider. Falls back to the first provider if the active id is
@@ -922,6 +1146,7 @@ impl Default for AppSettings {
             background_url: String::new(),
             plugin_dirs: vec![],
             github_servers: vec![],
+            mcp_servers: std::collections::BTreeMap::new(),
             capture_selection_on_open: false,
             backend_url: String::new(),
             a2a_enabled: false,
@@ -1434,6 +1659,171 @@ mod settings_tests {
     }
 
     #[test]
+    fn settings_save_preserves_latest_managed_copilot_credential_generation() {
+        let latest_copilot = Provider {
+            id: "cop".into(),
+            name: "GitHub Copilot".into(),
+            kind: ProviderKind::GithubCopilot,
+            model: "old-model".into(),
+            copilot_github_token: "latest-access".into(),
+            copilot_github_refresh_token: "latest-refresh".into(),
+            copilot_github_token_expiry: 2_000,
+            copilot_github_refresh_token_expiry: 3_000,
+            copilot_token: "latest-inner".into(),
+            copilot_token_expiry: 4_000,
+            ..Provider::default()
+        };
+        let latest = AppSettings {
+            providers: vec![latest_copilot],
+            ..AppSettings::default()
+        };
+
+        // Simulate a Preferences page opened before OAuth rotation. Its model
+        // edit is current, but every credential in its provider snapshot is a
+        // stale, already-consumed generation that must never reach disk again.
+        let mut incoming = AppSettings {
+            providers: vec![Provider {
+                id: "cop".into(),
+                name: "Renamed Copilot".into(),
+                kind: ProviderKind::GithubCopilot,
+                model: "new-model".into(),
+                copilot_github_token: "stale-access".into(),
+                copilot_github_refresh_token: "stale-refresh".into(),
+                copilot_github_token_expiry: 100,
+                copilot_github_refresh_token_expiry: 200,
+                copilot_token: "stale-inner".into(),
+                copilot_token_expiry: 300,
+                ..Provider::default()
+            }],
+            ..AppSettings::default()
+        };
+
+        incoming.preserve_managed_copilot_credentials_from(&latest);
+
+        let saved = &incoming.providers[0];
+        assert_eq!(saved.name, "Renamed Copilot");
+        assert_eq!(saved.model, "new-model");
+        assert_eq!(saved.copilot_github_token, "latest-access");
+        assert_eq!(saved.copilot_github_refresh_token, "latest-refresh");
+        assert_eq!(saved.copilot_github_token_expiry, 2_000);
+        assert_eq!(saved.copilot_github_refresh_token_expiry, 3_000);
+        assert_eq!(saved.copilot_token, "latest-inner");
+        assert_eq!(saved.copilot_token_expiry, 4_000);
+    }
+
+    #[test]
+    fn redacted_settings_round_trip_restores_server_managed_secrets() {
+        let mut latest = AppSettings {
+            ai_api_key: "real-top-level-key".into(),
+            a2a_token: Some("real-a2a-token".into()),
+            providers: vec![Provider {
+                id: "custom".into(),
+                api_key: "real-provider-key".into(),
+                ..Provider::default()
+            }],
+            github_servers: vec![GitHubServer {
+                hostname: "github.com".into(),
+                token: "real-github-token".into(),
+                ..GitHubServer::default()
+            }],
+            ..AppSettings::default()
+        };
+        latest.mcp_servers.insert(
+            "remote".into(),
+            McpServerConfig {
+                url: "https://mcp.example.com/mcp".into(),
+                headers: std::collections::BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer real-mcp-token".into(),
+                )]),
+                oauth: Some(McpOAuthConfig {
+                    client_id: "client".into(),
+                    client_secret: "real-client-secret".into(),
+                    ..McpOAuthConfig::default()
+                }),
+                ..McpServerConfig::default()
+            },
+        );
+
+        let mut submitted = latest.masked_for_display();
+        submitted.restore_redacted_secrets_from(&latest);
+
+        assert_eq!(submitted.ai_api_key, "real-top-level-key");
+        assert_eq!(submitted.a2a_token.as_deref(), Some("real-a2a-token"));
+        assert_eq!(submitted.providers[0].api_key, "real-provider-key");
+        assert_eq!(submitted.github_servers[0].token, "real-github-token");
+        let mcp = submitted.mcp_servers.get("remote").unwrap();
+        assert_eq!(mcp.headers["Authorization"], "Bearer real-mcp-token");
+        assert_eq!(
+            mcp.oauth.as_ref().unwrap().client_secret,
+            "real-client-secret"
+        );
+    }
+
+    #[test]
+    fn displayed_settings_redact_mcp_secrets_and_headers() {
+        let mut settings = AppSettings {
+            ai_api_key: "top-secret-ai-key".into(),
+            ..AppSettings::default()
+        };
+        settings.mcp_servers.insert(
+            "slackBlizzard".into(),
+            McpServerConfig {
+                transport_type: "http".into(),
+                url: "https://mcp.slack.com/mcp".into(),
+                headers: std::collections::BTreeMap::from([
+                    ("Authorization".into(), "Bearer secret".into()),
+                    ("X-Trace".into(), "public".into()),
+                    ("X-API-Key".into(), "secret-key".into()),
+                ]),
+                oauth: Some(McpOAuthConfig {
+                    client_id: "client-id".into(),
+                    client_secret: "client-secret".into(),
+                    client_secret_env: "SLACK_MCP_CLIENT_SECRET".into(),
+                    scopes: vec!["search:read".into()],
+                }),
+            },
+        );
+
+        let displayed = settings.masked_for_display();
+        let server = displayed.mcp_servers.get("slackBlizzard").unwrap();
+        assert_eq!(displayed.ai_api_key, "«redacted»");
+        assert_eq!(server.headers["Authorization"], "«redacted»");
+        assert_eq!(server.headers["X-API-Key"], "«redacted»");
+        assert_eq!(server.headers["X-Trace"], "public");
+        let oauth = server.oauth.as_ref().unwrap();
+        assert_eq!(oauth.client_id, "client-id");
+        assert_eq!(oauth.client_secret, "«redacted»");
+        assert_eq!(oauth.client_secret_env, "SLACK_MCP_CLIENT_SECRET");
+    }
+
+    #[test]
+    fn mcp_http_oauth_config_accepts_common_camel_case_shape() {
+        let mut raw = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = raw.as_object_mut().unwrap();
+        object.remove("mcp_servers");
+        object.insert(
+            "mcpServers".into(),
+            serde_json::json!({
+                "slackBlizzard": {
+                    "type": "http",
+                    "url": "https://mcp.slack.com/mcp",
+                    "oauth": {
+                        "clientId": "701236001767.11188027235169"
+                    }
+                }
+            }),
+        );
+        let settings: AppSettings = serde_json::from_value(raw).unwrap();
+        let slack = settings.mcp_servers.get("slackBlizzard").unwrap();
+        assert_eq!(slack.transport_type, "http");
+        assert_eq!(slack.url, "https://mcp.slack.com/mcp");
+        let oauth = slack.oauth.as_ref().unwrap();
+        assert_eq!(oauth.client_id, "701236001767.11188027235169");
+        assert!(oauth.client_secret.is_empty());
+    }
+
+    #[test]
     fn test_serialized_settings_do_not_include_backend_token() {
         let json = serde_json::to_string(&AppSettings::default()).unwrap();
         assert!(!json.contains("backend_token"));
@@ -1562,6 +1952,7 @@ mod settings_tests {
             background_url: String::new(),
             plugin_dirs: vec![],
             github_servers: vec![],
+            mcp_servers: std::collections::BTreeMap::new(),
             capture_selection_on_open: false,
             backend_url: String::new(),
             a2a_enabled: false,

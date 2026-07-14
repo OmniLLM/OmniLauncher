@@ -29,6 +29,7 @@ pub(crate) const SETTINGS_FIELDS: &[&str] = &[
     "background_url",
     "plugin_dirs",
     "github_servers",
+    "mcp_servers",
     "capture_selection_on_open",
     "backend_url",
     "a2a_enabled",
@@ -79,6 +80,78 @@ pub fn settings(out: &Output, args: &[String]) -> i32 {
         other => {
             out.failure(&format!(
                 "unknown settings command '{other}' — run `ol settings help`"
+            ));
+            2
+        }
+    }
+}
+
+/// Dispatch `ol mcp ...`.
+pub fn mcp(out: &Output, args: &[String]) -> i32 {
+    let settings = omnilauncher_lib::load_settings();
+    match args.first().map(String::as_str) {
+        Some("list" | "ls") => {
+            if settings.mcp_servers.is_empty() {
+                out.info("no MCP servers configured");
+            } else {
+                for (name, config) in &settings.mcp_servers {
+                    println!(
+                        "{:<24} {:<6} {}{}",
+                        name,
+                        config.transport_type,
+                        config.url,
+                        if config.oauth.is_some() {
+                            "  oauth"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
+            0
+        }
+        Some("login") | Some("logout") => {
+            let action = args[0].as_str();
+            let Some(name) = args.get(1) else {
+                out.failure(&format!("usage: ol mcp {action} <server-name>"));
+                return 2;
+            };
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    out.failure(&format!("failed to start async runtime: {error}"));
+                    return 1;
+                }
+            };
+            let result = if action == "login" {
+                runtime.block_on(omnilauncher_lib::mcp::login(&settings, name))
+            } else {
+                runtime.block_on(omnilauncher_lib::mcp::logout(&settings, name))
+            };
+            match result {
+                Ok(message) => {
+                    out.success(&message);
+                    0
+                }
+                Err(error) => {
+                    out.failure(&error);
+                    1
+                }
+            }
+        }
+        Some("help" | "--help" | "-h") | None => {
+            println!("MCP server management");
+            println!("  ol mcp list");
+            println!("  ol mcp login <server-name>");
+            println!("  ol mcp logout <server-name>");
+            0
+        }
+        Some(other) => {
+            out.failure(&format!(
+                "unknown MCP command '{other}' — run `ol mcp help`"
             ));
             2
         }
@@ -970,12 +1043,12 @@ fn provider_id_from_name(name: &str, settings: &AppSettings) -> String {
 }
 
 fn settings_show(out: &Output) -> i32 {
-    let settings = omnilauncher_lib::load_settings();
+    let settings = omnilauncher_lib::load_settings().masked_for_display();
     print_json(out, &settings)
 }
 
 fn settings_get(out: &Output, field: &str) -> i32 {
-    let settings = omnilauncher_lib::load_settings();
+    let settings = omnilauncher_lib::load_settings().masked_for_display();
     let value = match serde_json::to_value(settings) {
         Ok(value) => value,
         Err(e) => {

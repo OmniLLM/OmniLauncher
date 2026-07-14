@@ -8,6 +8,7 @@ pub mod http_util;
 pub mod launcher_config;
 pub mod live_server;
 pub mod log_masking;
+pub mod mcp;
 pub mod path_config;
 pub mod plugins;
 pub mod python_installer;
@@ -18,7 +19,8 @@ pub mod skills;
 pub use ai::router::{AiResponse, ConversationContext, Router};
 pub use plugins::{PluginManager, QueryResult};
 pub use settings::{
-    load_settings, provider_caps, save_settings, AppSettings, Provider, ProviderKind,
+    load_settings, provider_caps, save_settings, AppSettings, McpOAuthConfig, McpServerConfig,
+    Provider, ProviderKind,
 };
 pub use skills::{SkillInfo, SkillManager};
 

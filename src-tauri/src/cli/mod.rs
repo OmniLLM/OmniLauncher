@@ -147,6 +147,7 @@ fn dispatch_command(out: &Output, globals: &Globals, command: &str, args: &[Stri
         // ── Resource management ───────────────────────────────────────────
         "settings" => Dispatch::Handled(manage::settings(out, args)),
         "providers" => Dispatch::Handled(manage::providers(out, args)),
+        "mcp" => Dispatch::Handled(manage::mcp(out, args)),
         "skills" => Dispatch::Handled(manage::skills(out, args)),
         "plugins" => Dispatch::Handled(manage::plugins(out, args)),
 
@@ -234,6 +235,10 @@ const OPS_COMMANDS: &[OpsCommand] = &[
     OpsCommand {
         name: "providers",
         desc: "list/add/select/update LLM providers and models",
+    },
+    OpsCommand {
+        name: "mcp",
+        desc: "list and authorize remote MCP servers",
     },
     OpsCommand {
         name: "skills",

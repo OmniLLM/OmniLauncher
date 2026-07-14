@@ -85,6 +85,10 @@ ol providers set-active foundry
 ol providers set-model gpt-5-mini
 ol providers caps              # custom / github-copilot / azure-foundry capability table
 
+ol mcp list
+ol mcp login slackBlizzard     # one-time browser OAuth; refresh is automatic
+ol mcp logout slackBlizzard
+
 ol skills list
 ol skills view <name>
 ol skills install <url-or-SKILL.md-path>
@@ -108,6 +112,34 @@ ol completion bash            # generate shell completion (bash/zsh/fish/powersh
 Global flags apply anywhere: `--json` (machine-readable output), `--no-color` (also honors `NO_COLOR` and non-TTY pipes), `-q`/`--quiet`, and `--debug` (file logging to `~/.omnilauncher/omnilauncher.log`).
 
 Running `omnilauncher` with no arguments prints the same help as `ol`. The legacy `--server` / `--debug` flags still work.
+
+### MCP servers
+
+Remote Streamable HTTP MCP servers are configured in `settings.json`. Tools are
+discovered when the backend starts and registered as
+`mcp_<server>_<tool>` alongside built-in tools.
+
+```json
+{
+  "mcp_servers": {
+    "slackBlizzard": {
+      "type": "http",
+      "url": "https://mcp.slack.com/mcp",
+      "oauth": {
+        "clientId": "701236001767.11188027235169",
+        "clientSecretEnv": "SLACK_MCP_CLIENT_SECRET"
+      }
+    }
+  }
+}
+```
+
+`mcpServers` is accepted as an alias for `mcp_servers`. OAuth uses authorization
+code + PKCE. Access/refresh tokens are stored separately under
+`~/.config/omnilauncher/mcp-oauth/` with owner-only permissions and refreshed
+automatically. Slack currently advertises confidential OAuth, so keep its client
+secret in the configured environment variable rather than in `settings.json`.
+After editing the config, run `ol mcp login <name>` once, then restart the backend.
 
 ### Shell completion
 

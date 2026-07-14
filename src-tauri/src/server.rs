@@ -399,7 +399,7 @@ async fn handle_request(
             }
         }
         ("GET", "/api/settings") => {
-            let settings = state.settings.read().await.clone();
+            let settings = state.settings.read().await.masked_for_display();
             log::debug!(
                 "server get settings: base_url={} model={} theme={} max_results={} background_url={}",
                 settings.ai_base_url,
@@ -497,7 +497,7 @@ and try again."
                         a2a_port: input.a2a_port,
                         a2a_token: input.a2a_token,
                         a2a_public_url: input.a2a_public_url,
-                        ..current
+                        ..current.clone()
                     };
                     // Apply the incoming provider registry and active selection
                     // BEFORE syncing the legacy `ai_*` fields below. Order matters:
@@ -536,6 +536,14 @@ and try again."
                         updated.set_active_provider_model(updated.ai_model.clone());
                         updated.set_active_provider_api_key(updated.ai_api_key.clone());
                     }
+                    // OAuth credentials are server-managed and may have rotated
+                    // since this settings snapshot was loaded. GitHub refresh
+                    // tokens are single-use, so always merge the newest persisted
+                    // generation before an ordinary Preferences save; otherwise a
+                    // stale UI can resurrect a consumed token and force re-login.
+                    updated.restore_redacted_secrets_from(&current);
+                    let latest_persisted = crate::settings::load_settings();
+                    updated.preserve_managed_copilot_credentials_from(&latest_persisted);
                     let ok = save_settings(&updated);
                     if ok {
                         log::info!("server saved settings successfully");
@@ -579,7 +587,10 @@ and try again."
                     }
                     state
                         .event_bus
-                        .emit_json("omnilauncher://settings-saved", &updated)
+                        .emit_json(
+                            "omnilauncher://settings-saved",
+                            &updated.masked_for_display(),
+                        )
                         .await;
                     json_response(&ok)
                 }
@@ -1434,6 +1445,97 @@ Loaded from disk.
             stored.ai_retry_base_delay_ms, 4321,
             "ai_retry_base_delay_ms must be persisted into state (not silently dropped)"
         );
+    }
+
+    #[tokio::test]
+    async fn post_settings_preserves_latest_rotated_copilot_credentials() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.lock().await;
+        let config_dir = tempfile::tempdir().unwrap();
+        let previous_config_dir = std::env::var_os("OMNILAUNCHER_CONFIG_DIR");
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", config_dir.path());
+
+        let provider =
+            |access: &str, refresh: &str, inner: &str, model: &str| crate::settings::Provider {
+                id: "cop".into(),
+                name: "GitHub Copilot".into(),
+                kind: crate::settings::ProviderKind::GithubCopilot,
+                model: model.into(),
+                copilot_github_token: access.into(),
+                copilot_github_refresh_token: refresh.into(),
+                copilot_github_token_expiry: i64::MAX,
+                copilot_github_refresh_token_expiry: i64::MAX,
+                copilot_token: inner.into(),
+                copilot_token_expiry: i64::MAX,
+                ..crate::settings::Provider::default()
+            };
+
+        // Disk contains generation N+1 after an automatic refresh.
+        let mut latest = AppSettings {
+            providers: vec![provider(
+                "latest-access",
+                "latest-refresh",
+                "latest-inner",
+                "old-model",
+            )],
+            active_provider_id: "cop".into(),
+            ..AppSettings::default()
+        };
+        latest.sync_legacy_ai_fields_from_active_provider();
+        assert!(crate::settings::save_settings(&latest));
+
+        // Live/UI state still carries generation N. Saving a harmless model edit
+        // must not resurrect its already-consumed refresh token.
+        let mut stale = latest.clone();
+        stale.providers = vec![provider(
+            "stale-access",
+            "stale-refresh",
+            "stale-inner",
+            "new-model",
+        )];
+        stale.sync_legacy_ai_fields_from_active_provider();
+        let state = test_server_state();
+        *state.settings.write().await = stale.clone();
+
+        let body = serde_json::json!({
+            "ai_base_url": stale.ai_base_url,
+            "ai_model": stale.ai_model,
+            "ai_api_key": stale.ai_api_key,
+            "ai_timeout_secs": stale.ai_timeout_secs,
+            "ai_max_tool_iterations": stale.ai_max_tool_iterations,
+            "ai_max_retry_attempts": stale.ai_max_retry_attempts,
+            "ai_retry_base_delay_ms": stale.ai_retry_base_delay_ms,
+            "theme": stale.theme,
+            "hotkey": stale.hotkey,
+            "max_results": stale.max_results,
+            "background_url": stale.background_url,
+            "backend_url": stale.backend_url,
+            "providers": stale.providers,
+            "active_provider_id": "cop"
+        })
+        .to_string();
+        let request = format!(
+            "POST /api/settings HTTP/1.1\r\nX-OmniLauncher-Token: test-token\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let response = handle_request(&state, "POST", "/api/settings", "", &request).await;
+
+        let persisted = crate::settings::load_settings();
+        let saved = persisted.providers.iter().find(|p| p.id == "cop").unwrap();
+        assert_eq!(response.status, "200 OK");
+        assert_eq!(
+            saved.model, "new-model",
+            "ordinary provider edits must persist"
+        );
+        assert_eq!(saved.copilot_github_token, "latest-access");
+        assert_eq!(saved.copilot_github_refresh_token, "latest-refresh");
+        assert_eq!(saved.copilot_token, "latest-inner");
+
+        if let Some(value) = previous_config_dir {
+            std::env::set_var("OMNILAUNCHER_CONFIG_DIR", value);
+        } else {
+            std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
+        }
     }
 
     /// Regression test for the "Preferences silently wipes user settings" bug.
@@ -2318,7 +2420,8 @@ async fn reload_external_plugins_state(state: &ServerState) {
 /// held in `state.ai_client`, producing 401s against the old endpoint.
 ///
 /// Returns the active provider id after reload.
-async fn reload_settings_from_disk(state: &ServerState) -> String {    let mut updated = crate::load_settings();
+async fn reload_settings_from_disk(state: &ServerState) -> String {
+    let mut updated = crate::load_settings();
     updated.ensure_provider_registry();
 
     // Rebuild the AI client from the freshly loaded settings. Copilot startup
@@ -2404,7 +2507,6 @@ fn spawn_settings_watcher(state: ServerState) {
 fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }
-
 
 /// over the SSE bus so the desktop UI's `omnilauncher://plugin-runtime-progress`
 /// listener updates live — mirroring the Tauri command path in `main.rs`.

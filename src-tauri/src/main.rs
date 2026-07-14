@@ -167,6 +167,21 @@ pub fn serve_backend(args: &[String]) {
         omnilauncher_lib::plugins::scheduler::migrate_inline_commands_to_files();
         omnilauncher_lib::plugins::scheduler::start_scheduler();
 
+        // Discover remote MCP tools in the background. A slow or broken MCP
+        // server must not delay A2A/backend readiness; tools appear in the same
+        // registry as built-ins once discovery completes.
+        let mcp_settings = settings.read().await.clone();
+        let mcp_plugin_manager = plugin_manager.clone();
+        tokio::spawn(async move {
+            let mcp_plugins = omnilauncher_lib::mcp::connect_configured(&mcp_settings).await;
+            if !mcp_plugins.is_empty() {
+                let mut manager = mcp_plugin_manager.write().await;
+                for plugin in mcp_plugins {
+                    manager.register_override(plugin);
+                }
+            }
+        });
+
         let settings_snapshot = settings.read().await.clone();
         let a2a_host = if settings_snapshot.a2a_bind_lan {
             "0.0.0.0".to_string()
