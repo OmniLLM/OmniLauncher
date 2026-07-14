@@ -177,10 +177,8 @@ fn parse_github_subdir_url(source: &str) -> Option<GithubSubdirUrl> {
     let s = source.trim().trim_end_matches('/');
     let (scheme, rest) = if let Some(r) = s.strip_prefix("https://") {
         ("https", r)
-    } else if let Some(r) = s.strip_prefix("http://") {
-        ("http", r)
     } else {
-        return None;
+        ("http", s.strip_prefix("http://")?)
     };
     // host / owner / repo / kind / branch / subpath...
     let parts: Vec<&str> = rest.split('/').collect();
