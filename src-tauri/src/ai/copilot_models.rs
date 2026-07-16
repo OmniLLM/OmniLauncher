@@ -142,6 +142,34 @@ pub fn select_shape(model: &str, force_chat_completions: bool) -> CopilotShape {
     CopilotShape::Chat
 }
 
+/// Detect Copilot's `model_not_supported` 400 — the model is not available on
+/// this account/plan (or the id is stale), so it works on *neither*
+/// `/chat/completions` nor `/responses`.
+///
+/// This is distinct from [`is_unsupported_chat_completions_error`]
+/// (`unsupported_api_for_model`), which only means the *endpoint* is wrong and
+/// a `/responses` retry will succeed. `model_not_supported` must NOT trigger an
+/// endpoint reroute — that just produces a second identical 400. Instead the
+/// caller surfaces an actionable "pick a model your plan supports" error.
+///
+/// Live example (`api.githubcopilot.com`, model `claude-opus-4.8`):
+/// ```text
+/// HTTP 400 { "error": { "message": "The requested model is not supported.",
+///            "code": "model_not_supported", "param": "model",
+///            "type": "invalid_request_error" } }
+/// ```
+pub fn is_model_not_supported_error(status: u16, body: &str) -> bool {
+    if status != 400 {
+        return false;
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+        if v["error"]["code"].as_str() == Some("model_not_supported") {
+            return true;
+        }
+    }
+    body.to_ascii_lowercase().contains("model_not_supported")
+}
+
 /// Detect Copilot's `unsupported_api_for_model` 400 so a `/chat/completions`
 /// request can transparently fall back to `/responses`. Mirrors omnillm's
 /// `isUnsupportedChatCompletionsModel`.
@@ -214,6 +242,39 @@ mod tests {
         for m in ["gpt-4o", "claude-opus-4.6", "o2", "gemini-2.5-pro"] {
             assert!(!is_reasoning_model(m), "{m} should NOT be reasoning");
         }
+    }
+
+    #[test]
+    fn model_not_supported_detection() {
+        // The live shape from api.githubcopilot.com for an unavailable model.
+        assert!(is_model_not_supported_error(
+            400,
+            r#"{"error":{"message":"The requested model is not supported.","code":"model_not_supported","param":"model","type":"invalid_request_error"}}"#
+        ));
+        // Raw substring fallback.
+        assert!(is_model_not_supported_error(400, "model_not_supported"));
+        // Wrong status → not this error.
+        assert!(!is_model_not_supported_error(
+            500,
+            r#"{"error":{"code":"model_not_supported"}}"#
+        ));
+        // A different 400 (wrong endpoint) must NOT be misread as model_not_supported.
+        assert!(!is_model_not_supported_error(
+            400,
+            r#"{"error":{"code":"unsupported_api_for_model"}}"#
+        ));
+    }
+
+    #[test]
+    fn model_not_supported_and_unsupported_api_are_disjoint() {
+        let not_supported =
+            r#"{"error":{"code":"model_not_supported","message":"nope"}}"#;
+        let wrong_endpoint =
+            r#"{"error":{"code":"unsupported_api_for_model","message":"use /responses"}}"#;
+        assert!(is_model_not_supported_error(400, not_supported));
+        assert!(!is_unsupported_chat_completions_error(400, not_supported));
+        assert!(is_unsupported_chat_completions_error(400, wrong_endpoint));
+        assert!(!is_model_not_supported_error(400, wrong_endpoint));
     }
 
     #[test]

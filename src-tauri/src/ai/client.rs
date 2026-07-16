@@ -772,14 +772,32 @@ impl AiClient {
         match crate::ai::copilot_models::select_shape(&self.model, false) {
             crate::ai::copilot_models::CopilotShape::Responses => {
                 let url = format!("{base}/responses");
-                self.execute_responses(&client, &url, &messages, &tools, tool_choice)
+                match self
+                    .execute_responses(&client, &url, &messages, &tools, tool_choice)
                     .await
+                {
+                    Err(AiError::Api { status, body })
+                        if crate::ai::copilot_models::is_model_not_supported_error(
+                            status, &body,
+                        ) =>
+                    {
+                        Err(self.model_not_supported_error(status, &body))
+                    }
+                    other => other,
+                }
             }
             crate::ai::copilot_models::CopilotShape::Chat => {
                 let result = self
                     .execute_chat(&client, &self.chat_url, &api_messages, &tools, tool_choice)
                     .await;
                 match result {
+                    Err(AiError::Api { status, body })
+                        if crate::ai::copilot_models::is_model_not_supported_error(
+                            status, &body,
+                        ) =>
+                    {
+                        Err(self.model_not_supported_error(status, &body))
+                    }
                     Err(AiError::Api { status, body })
                         if crate::ai::copilot_models::is_unsupported_chat_completions_error(
                             status, &body,
@@ -797,6 +815,26 @@ impl AiClient {
                     other => other,
                 }
             }
+        }
+    }
+
+    /// Build an actionable error for Copilot's `model_not_supported` 400.
+    ///
+    /// Unlike `unsupported_api_for_model` (wrong endpoint → retry on
+    /// `/responses`), this means the configured model id is not available on the
+    /// signed-in account/plan — retrying on any endpoint yields the same 400. We
+    /// preserve the original status/body (so classification still treats it as a
+    /// permanent 400) but log a hint pointing the user at model selection.
+    fn model_not_supported_error(&self, status: u16, body: &str) -> AiError {
+        log::warn!(
+            "copilot: model '{}' is not supported by this account/plan (model_not_supported). \
+             Choose a model your Copilot subscription grants access to, then switch with \
+             `ol providers set-model <model> [provider-id]`.",
+            self.model
+        );
+        AiError::Api {
+            status,
+            body: body.to_string(),
         }
     }
 
