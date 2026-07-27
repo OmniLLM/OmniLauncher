@@ -233,13 +233,8 @@ tags: route, a2a
     #[tokio::test]
     async fn health_route_is_public_on_a2a_port() {
         let state = test_server_state();
-        let response = handle_a2a_request(
-            &state,
-            "GET",
-            "/health",
-            "GET /health HTTP/1.1\r\n\r\n",
-        )
-        .await;
+        let response =
+            handle_a2a_request(&state, "GET", "/health", "GET /health HTTP/1.1\r\n\r\n").await;
 
         assert_eq!(response.status, "200 OK");
         assert!(response.body.contains("\"protocol\":\"a2a\""));
@@ -269,12 +264,9 @@ tags: route, a2a
         assert_eq!(authorized.status, "200 OK");
         let card: super::super::types::AgentCard = serde_json::from_str(&authorized.body).unwrap();
         assert_eq!(card.name, "OmniLauncher");
-        assert_eq!(card.url, "http://127.0.0.1:18123");
-        assert!(card
-            .authentication
-            .schemes
-            .iter()
-            .any(|scheme| scheme == "bearer"));
+        assert_eq!(card.supported_interfaces[0].url, "http://127.0.0.1:18123");
+        assert_eq!(card.supported_interfaces[0].protocol_version, "1.0");
+        assert!(card.security_schemes.contains_key("bearer"));
         assert!(
             card.skills
                 .iter()
@@ -289,11 +281,14 @@ tags: route, a2a
             .expect("loaded skill should be exposed by the discovery route");
         assert_eq!(route_skill.name, "route-demo-skill");
         assert_eq!(
-            route_skill.description.as_deref(),
-            Some("Route demo skill for A2A discovery")
+            route_skill.description,
+            "Route demo skill for A2A discovery"
         );
         assert!(route_skill.tags.iter().any(|tag| tag == "route"));
-        assert!(route_skill.input_schema.is_some());
+        assert!(route_skill
+            .input_modes
+            .iter()
+            .any(|mode| mode == "application/json"));
     }
 
     #[tokio::test]
@@ -374,7 +369,7 @@ tags: route, a2a
 
         // Hub-shaped envelope: skillId names a plugin capability from the
         // test PluginManager.
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"role":"user","messageId":"m1","parts":[{"type":"text","text":"hi"}]},"contextId":"ctx-1","skillId":"plugin:tool:calculator"}}"#;
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{"message":{"role":"ROLE_USER","messageId":"m1","contextId":"ctx-1","parts":[{"text":"hi"}]},"skillId":"plugin:tool:calculator"}}"#;
         let content_length = body.len();
         let request = format!(
             "POST / HTTP/1.1\r\nAuthorization: Bearer test-token\r\nContent-Length: {content_length}\r\n\r\n{body}"
@@ -389,9 +384,10 @@ tags: route, a2a
             parsed["result"].is_object() || parsed["error"].is_object(),
             "response must have exactly one of result/error"
         );
-        // On success the task carries the context id back.
+        // On success the task carries the context id back, wrapped in the
+        // proto `SendMessageResponse` oneof member (§A.2.1).
         if parsed["result"].is_object() {
-            assert_eq!(parsed["result"]["contextId"], "ctx-1");
+            assert_eq!(parsed["result"]["task"]["contextId"], "ctx-1");
         }
     }
 }

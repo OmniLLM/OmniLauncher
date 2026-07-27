@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::types::{A2aArtifact, A2aMessage, A2aPart, A2aTask, A2aTaskState, A2aTaskStatus};
+use super::types::{A2aArtifact, A2aMessage, A2aTask, A2aTaskState, A2aTaskStatus};
 
 /// In-memory record for a single A2A task.
 #[derive(Debug, Clone)]
@@ -30,10 +30,7 @@ impl TaskRecord {
     /// Convert this registry record into the wire-format A2A task.
     pub fn to_a2a_task(&self) -> A2aTask {
         let status_message = if let Some(ref err) = self.error {
-            Some(A2aMessage {
-                role: "agent".to_string(),
-                parts: vec![A2aPart::Text { text: err.clone() }],
-            })
+            Some(A2aMessage::agent_text(err.clone()))
         } else {
             self.output_messages.last().cloned()
         };
@@ -44,7 +41,11 @@ impl TaskRecord {
             status: A2aTaskStatus {
                 state: self.state,
                 message: status_message,
-                timestamp: Some(self.updated_at.to_rfc3339()),
+                // §5.6.1: ISO 8601, UTC, 'Z' suffix — never a numeric offset.
+                timestamp: Some(
+                    self.updated_at
+                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                ),
             },
             artifacts: self.artifacts.clone(),
             history: self.output_messages.clone(),
@@ -242,12 +243,7 @@ mod tests {
         reg.mark_working(&id);
         assert_eq!(reg.get(&id).unwrap().state, A2aTaskState::Working);
 
-        let msg = A2aMessage {
-            role: "agent".to_string(),
-            parts: vec![A2aPart::Text {
-                text: "done".to_string(),
-            }],
-        };
+        let msg = A2aMessage::agent_text("done");
         reg.mark_completed(&id, vec![msg], vec![]);
         assert_eq!(reg.get(&id).unwrap().state, A2aTaskState::Completed);
     }
@@ -357,12 +353,7 @@ mod tests {
         let mut reg = TaskRegistry::new(100);
         let id = reg.create_submitted("hello".to_string(), None, None);
         reg.mark_working(&id);
-        let msg = A2aMessage {
-            role: "agent".to_string(),
-            parts: vec![A2aPart::Text {
-                text: "world".to_string(),
-            }],
-        };
+        let msg = A2aMessage::agent_text("world");
         reg.mark_completed(&id, vec![msg], vec![]);
 
         let a2a = reg.get(&id).unwrap().to_a2a_task();

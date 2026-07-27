@@ -15,8 +15,9 @@ use super::{
     capabilities::{self, build_capabilities, capability_to_agent_skill},
     tasks::TaskRegistry,
     types::{
-        A2aArtifact, A2aError, A2aMessage, A2aPart, A2aTask, AgentAuthentication,
-        AgentCapabilities, AgentCard, MessageSendRequest,
+        A2aArtifact, A2aError, A2aMessage, A2aPart, A2aTask, AgentCapabilities, AgentCard,
+        AgentInterface, HttpAuthSecurityScheme, MessageSendRequest, SecurityRequirement,
+        SecurityScheme, StringList, A2A_PROTOCOL_VERSION,
     },
 };
 
@@ -48,6 +49,11 @@ pub fn build_agent_card(base_url: &str, pm: &PluginManager) -> AgentCard {
 ///
 /// When a `SkillManager` is supplied, each loaded skill is advertised as an
 /// A2A skill (`skill:<name>`) alongside the plugin-derived capabilities.
+///
+/// The card follows the A2A v1.0 `AgentCard` shape: the endpoint is advertised
+/// via `supportedInterfaces` (replacing the pre-1.0 top-level `url`), auth via
+/// `securitySchemes`/`securityRequirements`, and — per **§A.2.2** —
+/// `extendedAgentCard` lives inside `capabilities`.
 pub fn build_agent_card_with_skills(
     base_url: &str,
     pm: &PluginManager,
@@ -62,19 +68,41 @@ pub fn build_agent_card_with_skills(
         name: "OmniLauncher".to_string(),
         description: "OmniLauncher desktop agent — launcher, AI chat, and developer tools"
             .to_string(),
-        url: base_url.to_string(),
-        version: Some("0.1.0".to_string()),
+        supported_interfaces: vec![AgentInterface {
+            url: base_url.to_string(),
+            protocol_binding: "JSONRPC".to_string(),
+            protocol_version: A2A_PROTOCOL_VERSION.to_string(),
+        }],
+        version: "0.1.0".to_string(),
         capabilities: AgentCapabilities {
             streaming: false,
             push_notifications: false,
-            state_transition_history: false,
+            // We serve a single card; there is no authenticated extended
+            // variant, so this is honestly false rather than aspirational.
+            extended_agent_card: false,
         },
-        authentication: AgentAuthentication {
-            schemes: vec!["bearer".to_string()],
-        },
+        security_schemes: [(
+            "bearer".to_string(),
+            SecurityScheme {
+                http_auth_security_scheme: Some(HttpAuthSecurityScheme {
+                    scheme: "Bearer".to_string(),
+                    description: Some(
+                        "Per-launch A2A token; see `ol settings get a2a_token`.".to_string(),
+                    ),
+                }),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        // No scopes: the token is all-or-nothing.
+        security_requirements: vec![SecurityRequirement {
+            schemes: [("bearer".to_string(), StringList::default())]
+                .into_iter()
+                .collect(),
+        }],
+        default_input_modes: vec!["text/plain".to_string(), "application/json".to_string()],
+        default_output_modes: vec!["text/plain".to_string(), "application/json".to_string()],
         skills,
-        default_input_modes: vec!["text/plain".to_string()],
-        default_output_modes: vec!["text/plain".to_string()],
     }
 }
 
@@ -233,12 +261,7 @@ async fn execute_conversational(
     )
     .await;
 
-    let message = A2aMessage {
-        role: "agent".to_string(),
-        parts: vec![A2aPart::Text {
-            text: response.content,
-        }],
-    };
+    let message = A2aMessage::agent_text(response.content);
 
     // If the AI returned structured results, include them as an artifact.
     let artifacts = if response.results.is_empty() {
@@ -248,10 +271,10 @@ async fn execute_conversational(
             artifact_id: super::tasks::generate_task_id(),
             name: Some("results".to_string()),
             description: Some("Structured query results".to_string()),
-            parts: vec![A2aPart::Data {
-                data: serde_json::to_value(&response.results).unwrap_or_default(),
-            }],
-            index: 0,
+            parts: vec![A2aPart::data(
+                serde_json::to_value(&response.results).unwrap_or_default(),
+            )],
+            metadata: None,
         }]
     };
 
@@ -300,15 +323,15 @@ pub async fn handle_task_cancel(
 fn build_request_context(request: &MessageSendRequest, max_turns: usize) -> ConversationContext {
     let mut ctx = ConversationContext::new(max_turns);
     for msg in &request.messages {
-        let text = request_message_text(msg);
+        let text = msg.text();
         if text.is_empty() {
             continue;
         }
-        // Normalize the A2A role onto our two conversational roles. Anything
-        // that isn't explicitly the agent/assistant is treated as a user turn.
-        let normalized = match msg.role.as_str() {
-            "agent" | "assistant" => Message::assistant(&text),
-            _ => Message::user(&text),
+        // Normalize the A2A role onto our two conversational roles.
+        let normalized = if msg.role.is_agent() {
+            Message::assistant(&text)
+        } else {
+            Message::user(&text)
         };
         ctx.messages.push(normalized);
     }
@@ -319,10 +342,10 @@ fn build_request_context(request: &MessageSendRequest, max_turns: usize) -> Conv
 /// Return the latest user-authored text in the request, used for skill matching.
 fn latest_user_text(request: &MessageSendRequest) -> String {
     for msg in request.messages.iter().rev() {
-        if matches!(msg.role.as_str(), "agent" | "assistant") {
+        if msg.role.is_agent() {
             continue;
         }
-        let text = request_message_text(msg);
+        let text = msg.text();
         if !text.is_empty() {
             return text;
         }
@@ -337,35 +360,27 @@ fn strip_skill_prefix(capability_id: &str) -> Option<&str> {
     capability_id.strip_prefix("skill:")
 }
 
-/// Concatenate all text parts of a single A2A message.
-fn request_message_text(msg: &A2aMessage) -> String {
-    let mut out = String::new();
-    for part in &msg.parts {
-        if let A2aPart::Text { text } = part {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(text);
-        }
-    }
-    out.trim().to_string()
-}
-
 /// Extract a short text summary from a message-send request.
 fn extract_text_summary(request: &MessageSendRequest) -> String {
     for msg in &request.messages {
         for part in &msg.parts {
-            if let A2aPart::Text { text } = part {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    // Truncate to a reasonable summary length.
-                    return if trimmed.len() > 200 {
-                        format!("{}…", &trimmed[..197])
-                    } else {
-                        trimmed.to_string()
-                    };
-                }
+            let Some(text) = part.as_text() else {
+                continue;
+            };
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
             }
+            // Truncate to a reasonable summary length, on a char boundary so
+            // multi-byte text can't panic the slice.
+            if trimmed.len() <= 200 {
+                return trimmed.to_string();
+            }
+            let cut = (0..=197)
+                .rev()
+                .find(|&i| trimmed.is_char_boundary(i))
+                .unwrap_or(0);
+            return format!("{}…", &trimmed[..cut]);
         }
     }
     "(empty request)".to_string()
@@ -379,6 +394,7 @@ mod tests {
 
     use std::sync::Arc;
 
+    use crate::a2a::types::{A2aPart, A2aRole};
     use crate::{
         ai::{client::AiClient, router::ConversationContext},
         plugins::{Plugin, Query, QueryResult},
@@ -466,10 +482,54 @@ mod tests {
         let card = build_agent_card("http://127.0.0.1:1423", &pm);
 
         assert_eq!(card.name, "OmniLauncher");
-        assert_eq!(card.authentication.schemes, vec!["bearer"]);
         assert!(!card.capabilities.streaming);
         assert!(!card.capabilities.push_notifications);
-        assert_eq!(card.url, "http://127.0.0.1:1423");
+
+        // v1.0 §A.2.2: extended-card support is a capability, not a top-level
+        // field.
+        assert!(!card.capabilities.extended_agent_card);
+
+        // v1.0 §4.4.1: the endpoint is advertised via `supportedInterfaces`,
+        // which replaced the pre-1.0 top-level `url`.
+        assert_eq!(card.supported_interfaces.len(), 1);
+        let iface = &card.supported_interfaces[0];
+        assert_eq!(iface.url, "http://127.0.0.1:1423");
+        assert_eq!(iface.protocol_binding, "JSONRPC");
+        assert_eq!(iface.protocol_version, "1.0");
+
+        // Auth is declared via spec `securitySchemes`, not the old
+        // `authentication.schemes` block.
+        let bearer = card
+            .security_schemes
+            .get("bearer")
+            .expect("bearer scheme should be declared");
+        assert_eq!(
+            bearer
+                .http_auth_security_scheme
+                .as_ref()
+                .map(|s| s.scheme.as_str()),
+            Some("Bearer")
+        );
+        assert_eq!(card.security_requirements.len(), 1);
+    }
+
+    #[test]
+    fn agent_card_serializes_without_legacy_fields() {
+        let pm = PluginManager::new();
+        let card = build_agent_card("http://127.0.0.1:1423", &pm);
+        let value = serde_json::to_value(&card).unwrap();
+
+        assert!(value.get("url").is_none(), "pre-1.0 top-level url emitted");
+        assert!(
+            value.get("authentication").is_none(),
+            "pre-1.0 authentication block emitted"
+        );
+        assert!(
+            value.get("supportsExtendedAgentCard").is_none(),
+            "§A.2.2: relocated field emitted at top level"
+        );
+        assert_eq!(value["capabilities"]["extendedAgentCard"], false);
+        assert_eq!(value["supportedInterfaces"][0]["protocolVersion"], "1.0");
     }
 
     #[test]
@@ -497,12 +557,13 @@ mod tests {
             .find(|skill| skill.id == "plugin:query:Query Only Test")
             .expect("query-only plugin should be exposed as an A2A capability");
         assert_eq!(query_skill.name, "Query Only Test");
-        assert_eq!(
-            query_skill.description.as_deref(),
-            Some("Searches query-only test data")
-        );
+        assert_eq!(query_skill.description, "Searches query-only test data");
         assert!(query_skill.tags.iter().any(|tag| tag == "qo"));
-        assert!(query_skill.input_schema.is_some());
+        // Schema-bearing capabilities accept structured JSON input.
+        assert!(query_skill
+            .input_modes
+            .iter()
+            .any(|mode| mode == "application/json"));
     }
 
     #[test]
@@ -534,10 +595,7 @@ tags: demo, a2a
             .find(|skill| skill.id == "skill:demo-skill")
             .expect("loaded skill should be exposed as an A2A capability");
         assert_eq!(skill.name, "demo-skill");
-        assert_eq!(
-            skill.description.as_deref(),
-            Some("Demo skill for A2A discovery")
-        );
+        assert_eq!(skill.description, "Demo skill for A2A discovery");
         assert!(skill.tags.iter().any(|tag| tag == "demo"));
     }
 
@@ -546,12 +604,10 @@ tags: demo, a2a
         let state = test_adapter_state_with_plugin(Box::new(QueryOnlyPlugin));
         let request = MessageSendRequest {
             tool: Some("plugin:query:Query Only Test".to_string()),
-            messages: vec![A2aMessage {
-                role: "user".to_string(),
-                parts: vec![A2aPart::Data {
-                    data: serde_json::json!({ "query": "needle" }),
-                }],
-            }],
+            messages: vec![A2aMessage::new(
+                A2aRole::User,
+                vec![A2aPart::data(serde_json::json!({ "query": "needle" }))],
+            )],
         };
 
         let task = handle_message_send(&state, request, None).await.unwrap();
@@ -563,21 +619,19 @@ tags: demo, a2a
             crate::a2a::types::A2aTaskState::Completed
         );
         let artifact = task.artifacts.first().expect("query results artifact");
-        let A2aPart::Data { data } = &artifact.parts[0] else {
-            panic!("query results artifact should be structured data");
-        };
+        let data = artifact.parts[0]
+            .as_data()
+            .expect("query results artifact should be structured data");
         assert_eq!(data["results"][0]["title"], "Needle Result");
     }
 
     #[test]
     fn extract_text_summary_from_request() {
         let req = MessageSendRequest {
-            messages: vec![A2aMessage {
-                role: "user".to_string(),
-                parts: vec![A2aPart::Text {
-                    text: "What time is it?".to_string(),
-                }],
-            }],
+            messages: vec![A2aMessage::new(
+                A2aRole::User,
+                vec![A2aPart::text("What time is it?")],
+            )],
             tool: None,
         };
         assert_eq!(extract_text_summary(&req), "What time is it?");
@@ -587,10 +641,7 @@ tags: demo, a2a
     fn extract_text_summary_truncates_long_input() {
         let long = "x".repeat(300);
         let req = MessageSendRequest {
-            messages: vec![A2aMessage {
-                role: "user".to_string(),
-                parts: vec![A2aPart::Text { text: long }],
-            }],
+            messages: vec![A2aMessage::new(A2aRole::User, vec![A2aPart::text(long)])],
             tool: None,
         };
         let summary = extract_text_summary(&req);
@@ -598,13 +649,8 @@ tags: demo, a2a
         assert!(summary.ends_with('…'));
     }
 
-    fn text_msg(role: &str, text: &str) -> A2aMessage {
-        A2aMessage {
-            role: role.to_string(),
-            parts: vec![A2aPart::Text {
-                text: text.to_string(),
-            }],
-        }
+    fn text_msg(role: A2aRole, text: &str) -> A2aMessage {
+        A2aMessage::new(role, vec![A2aPart::text(text)])
     }
 
     #[test]
@@ -613,7 +659,7 @@ tags: demo, a2a
         // ever adding the incoming query as a user turn, so the model answered
         // from stale shared context and ignored the request entirely.
         let req = MessageSendRequest {
-            messages: vec![text_msg("user", "show me all blz cn aws accounts")],
+            messages: vec![text_msg(A2aRole::User, "show me all blz cn aws accounts")],
             tool: None,
         };
 
@@ -634,9 +680,9 @@ tags: demo, a2a
         // assistant turns; everything else becomes a user turn.
         let req = MessageSendRequest {
             messages: vec![
-                text_msg("user", "first question"),
-                text_msg("agent", "first answer"),
-                text_msg("user", "second question"),
+                text_msg(A2aRole::User, "first question"),
+                text_msg(A2aRole::Agent, "first answer"),
+                text_msg(A2aRole::User, "second question"),
             ],
             tool: None,
         };
@@ -652,9 +698,9 @@ tags: demo, a2a
     fn latest_user_text_returns_most_recent_user_message() {
         let req = MessageSendRequest {
             messages: vec![
-                text_msg("user", "old question"),
-                text_msg("agent", "an answer"),
-                text_msg("user", "newest question"),
+                text_msg(A2aRole::User, "old question"),
+                text_msg(A2aRole::Agent, "an answer"),
+                text_msg(A2aRole::User, "newest question"),
             ],
             tool: None,
         };
@@ -667,12 +713,10 @@ tags: demo, a2a
         let state = test_adapter_state_with_plugin(Box::new(QueryOnlyPlugin));
         let request = MessageSendRequest {
             tool: Some("plugin:query:Query Only Test".to_string()),
-            messages: vec![A2aMessage {
-                role: "user".to_string(),
-                parts: vec![A2aPart::Data {
-                    data: serde_json::json!({ "query": "needle" }),
-                }],
-            }],
+            messages: vec![A2aMessage::new(
+                A2aRole::User,
+                vec![A2aPart::data(serde_json::json!({ "query": "needle" }))],
+            )],
         };
 
         let task = handle_message_send(&state, request, Some("ctx-777".to_string()))
@@ -758,12 +802,10 @@ tags: demo, a2a
         let state = state_with_demo_skill_only();
         let request = MessageSendRequest {
             tool: Some("skill:demo-skill".to_string()),
-            messages: vec![A2aMessage {
-                role: "user".to_string(),
-                parts: vec![A2aPart::Text {
-                    text: "run the demo skill".to_string(),
-                }],
-            }],
+            messages: vec![A2aMessage::new(
+                A2aRole::User,
+                vec![A2aPart::text("run the demo skill")],
+            )],
         };
 
         let task = handle_message_send(&state, request, None).await.unwrap();
@@ -793,12 +835,10 @@ tags: demo, a2a
         let state = test_adapter_state_with_plugin(Box::new(QueryOnlyPlugin));
         let request = MessageSendRequest {
             tool: Some("plugin:query:Query Only Test".to_string()),
-            messages: vec![A2aMessage {
-                role: "user".to_string(),
-                parts: vec![A2aPart::Data {
-                    data: serde_json::json!({ "query": "needle" }),
-                }],
-            }],
+            messages: vec![A2aMessage::new(
+                A2aRole::User,
+                vec![A2aPart::data(serde_json::json!({ "query": "needle" }))],
+            )],
         };
 
         let task = handle_message_send(&state, request, None).await.unwrap();
@@ -812,9 +852,9 @@ tags: demo, a2a
             .artifacts
             .first()
             .expect("direct dispatch must yield the plugin's query artifact");
-        let A2aPart::Data { data } = &artifact.parts[0] else {
-            panic!("query artifact should be structured data, not text");
-        };
+        let data = artifact.parts[0]
+            .as_data()
+            .expect("query artifact should be structured data, not text");
         assert_eq!(data["results"][0]["title"], "Needle Result");
     }
 
@@ -827,12 +867,10 @@ tags: demo, a2a
         let state = test_adapter_state_with_plugin(Box::new(QueryOnlyPlugin));
         let request = MessageSendRequest {
             tool: Some("plugin:tool:does_not_exist".to_string()),
-            messages: vec![A2aMessage {
-                role: "user".to_string(),
-                parts: vec![A2aPart::Text {
-                    text: "irrelevant".to_string(),
-                }],
-            }],
+            messages: vec![A2aMessage::new(
+                A2aRole::User,
+                vec![A2aPart::text("irrelevant")],
+            )],
         };
 
         let task = handle_message_send(&state, request, None).await.unwrap();

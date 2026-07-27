@@ -116,12 +116,24 @@ pub fn build_capabilities(pm: &PluginManager, skills: Option<&SkillManager>) -> 
 }
 
 pub fn capability_to_agent_skill(capability: &A2aCapability) -> AgentSkill {
+    // `description` and `tags` are REQUIRED in the v1.0 proto `AgentSkill`, so
+    // fall back to the skill name rather than emitting a null.
     AgentSkill {
         id: capability.id.clone(),
         name: capability.name.clone(),
-        description: capability.description.clone(),
-        input_schema: capability.input_schema.clone(),
+        description: capability
+            .description
+            .clone()
+            .unwrap_or_else(|| capability.name.clone()),
         tags: capability.tags.clone(),
+        examples: Vec::new(),
+        // Capabilities with a JSON-Schema input take structured arguments; the
+        // rest are plain text. Declared per-skill, overriding the card default.
+        input_modes: match capability.input_schema {
+            Some(_) => vec!["application/json".to_string(), "text/plain".to_string()],
+            None => vec!["text/plain".to_string()],
+        },
+        output_modes: vec!["text/plain".to_string(), "application/json".to_string()],
     }
 }
 
@@ -259,13 +271,7 @@ async fn execute_launcher_query(
 }
 
 fn text_response(output: String) -> (Vec<A2aMessage>, Vec<A2aArtifact>) {
-    (
-        vec![A2aMessage {
-            role: "agent".to_string(),
-            parts: vec![A2aPart::Text { text: output }],
-        }],
-        vec![],
-    )
+    (vec![A2aMessage::agent_text(output)], vec![])
 }
 
 fn query_results_response(results: Vec<QueryResult>) -> (Vec<A2aMessage>, Vec<A2aArtifact>) {
@@ -274,17 +280,10 @@ fn query_results_response(results: Vec<QueryResult>) -> (Vec<A2aMessage>, Vec<A2
         artifact_id: super::tasks::generate_task_id(),
         name: Some("query_results".to_string()),
         description: Some(format!("{count} launcher results")),
-        parts: vec![A2aPart::Data {
-            data: query_results_artifact(results),
-        }],
-        index: 0,
+        parts: vec![A2aPart::data(query_results_artifact(results))],
+        metadata: None,
     };
-    let message = A2aMessage {
-        role: "agent".to_string(),
-        parts: vec![A2aPart::Text {
-            text: format!("Found {count} result(s)"),
-        }],
-    };
+    let message = A2aMessage::agent_text(format!("Found {count} result(s)"));
     (vec![message], vec![artifact])
 }
 
@@ -293,9 +292,9 @@ fn extract_tool_args(request: &MessageSendRequest) -> Value {
         .messages
         .first()
         .and_then(|message| message.parts.first())
-        .map(|part| match part {
-            A2aPart::Data { data } => data.clone(),
-            A2aPart::Text { text } => json!({ "input": text }),
+        .map(|part| match part.as_data() {
+            Some(data) => data.clone(),
+            None => json!({ "input": part.as_text().unwrap_or_default() }),
         })
         .unwrap_or_else(|| json!({}))
 }
@@ -305,13 +304,13 @@ fn extract_query_text(request: &MessageSendRequest) -> String {
         .messages
         .first()
         .and_then(|message| message.parts.first())
-        .map(|part| match part {
-            A2aPart::Data { data } => data
+        .map(|part| match part.as_data() {
+            Some(data) => data
                 .get("query")
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .to_string(),
-            A2aPart::Text { text } => text.clone(),
+            None => part.as_text().unwrap_or_default().to_string(),
         })
         .unwrap_or_default()
 }
