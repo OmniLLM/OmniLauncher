@@ -29,8 +29,19 @@ pub struct A2aCapability {
 pub fn build_capabilities(pm: &PluginManager, skills: Option<&SkillManager>) -> Vec<A2aCapability> {
     let mut capabilities = Vec::new();
 
-    for schema in pm.all_tool_schemas() {
-        if let Some(func) = schema.get("function") {
+    // A plugin is exposed exactly once: as a tool capability when it publishes
+    // an OpenAI tool schema, otherwise as a query capability. Matching the two
+    // by name is unreliable (e.g. MCP plugins are named `MCP server/tool` while
+    // their schema function is `mcp_server_tool`), which previously produced a
+    // duplicate `plugin:query:*` entry for every `plugin:tool:*` entry.
+    for plugin in &pm.plugins {
+        let plugin_name = plugin.name().to_string();
+
+        if let Some(func) = plugin
+            .tool_schema()
+            .as_ref()
+            .and_then(|schema| schema.get("function").cloned())
+        {
             let name = func
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -50,16 +61,6 @@ pub fn build_capabilities(pm: &PluginManager, skills: Option<&SkillManager>) -> 
                 kind: A2aCapabilityKind::ToolSchemaPlugin,
                 target: name,
             });
-        }
-    }
-
-    for plugin in &pm.plugins {
-        let plugin_name = plugin.name().to_string();
-        let already_tool = capabilities.iter().any(|cap| {
-            cap.kind == A2aCapabilityKind::ToolSchemaPlugin
-                && (cap.name == plugin_name || cap.target == plugin_name)
-        });
-        if already_tool {
             continue;
         }
 
