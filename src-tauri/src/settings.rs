@@ -103,18 +103,30 @@ pub struct McpOAuthConfig {
     pub scopes: Vec<String>,
 }
 
-/// One remote MCP connection. OmniLauncher currently supports Streamable HTTP;
-/// the explicit `type` field keeps the config compatible with common MCP clients.
+/// One MCP connection. OmniLauncher supports Streamable HTTP (`type: "http"`)
+/// and local stdio child processes (`type: "stdio"`); the explicit `type` field
+/// keeps the config compatible with common MCP clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
     #[serde(rename = "type", default = "default_mcp_transport_type")]
     pub transport_type: String,
+    /// Endpoint for `http` servers. Unused (and normally absent) for `stdio`.
+    #[serde(default)]
     pub url: String,
     #[serde(default)]
     pub headers: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub oauth: Option<McpOAuthConfig>,
+    /// Executable for `stdio` servers. Unused for `http`.
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Extra environment for the `stdio` child process, layered over the
+    /// launcher's own environment.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for McpServerConfig {
@@ -124,6 +136,9 @@ impl Default for McpServerConfig {
             url: String::new(),
             headers: std::collections::BTreeMap::new(),
             oauth: None,
+            command: String::new(),
+            args: Vec::new(),
+            env: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -138,6 +153,7 @@ fn is_sensitive_header_name(name: &str) -> bool {
         || lower.contains("apikey")
         || lower.contains("token")
         || lower.contains("secret")
+        || lower.contains("password")
 }
 
 impl McpOAuthConfig {
@@ -154,6 +170,13 @@ impl McpServerConfig {
     pub fn masked_for_display(&self) -> Self {
         let mut masked = self.clone();
         for (name, value) in masked.headers.iter_mut() {
+            if !value.is_empty() && is_sensitive_header_name(name) {
+                *value = REDACTED.to_string();
+            }
+        }
+        // Child-process environments routinely carry credentials; mask them on
+        // the same rules used for headers.
+        for (name, value) in masked.env.iter_mut() {
             if !value.is_empty() && is_sensitive_header_name(name) {
                 *value = REDACTED.to_string();
             }
@@ -446,6 +469,13 @@ impl AppSettings {
             for (header, value) in &mut server.headers {
                 if is_redacted(value) {
                     if let Some(original) = current.headers.get(header) {
+                        *value = original.clone();
+                    }
+                }
+            }
+            for (key, value) in &mut server.env {
+                if is_redacted(value) {
+                    if let Some(original) = current.env.get(key) {
                         *value = original.clone();
                     }
                 }
@@ -1782,6 +1812,20 @@ mod settings_tests {
                     client_secret_env: "SLACK_MCP_CLIENT_SECRET".into(),
                     scopes: vec!["search:read".into()],
                 }),
+                ..Default::default()
+            },
+        );
+        settings.mcp_servers.insert(
+            "workiq".into(),
+            McpServerConfig {
+                transport_type: "stdio".into(),
+                command: "npx".into(),
+                args: vec!["-y".into(), "@microsoft/workiq@latest".into()],
+                env: std::collections::BTreeMap::from([
+                    ("WORKIQ_TOKEN".into(), "secret-token".into()),
+                    ("WORKIQ_REGION".into(), "us".into()),
+                ]),
+                ..Default::default()
             },
         );
 
@@ -1795,6 +1839,60 @@ mod settings_tests {
         assert_eq!(oauth.client_id, "client-id");
         assert_eq!(oauth.client_secret, "«redacted»");
         assert_eq!(oauth.client_secret_env, "SLACK_MCP_CLIENT_SECRET");
+
+        let stdio = displayed.mcp_servers.get("workiq").unwrap();
+        assert_eq!(stdio.env["WORKIQ_TOKEN"], "«redacted»");
+        assert_eq!(stdio.env["WORKIQ_REGION"], "us");
+        assert_eq!(stdio.command, "npx");
+    }
+
+    #[test]
+    fn submitting_masked_stdio_env_keeps_the_stored_value() {
+        let mut latest = AppSettings::default();
+        latest.mcp_servers.insert(
+            "workiq".into(),
+            McpServerConfig {
+                transport_type: "stdio".into(),
+                command: "npx".into(),
+                env: std::collections::BTreeMap::from([(
+                    "WORKIQ_TOKEN".into(),
+                    "real-token".into(),
+                )]),
+                ..Default::default()
+            },
+        );
+
+        let mut submitted = latest.masked_for_display();
+        submitted.restore_redacted_secrets_from(&latest);
+
+        let server = submitted.mcp_servers.get("workiq").unwrap();
+        assert_eq!(server.env["WORKIQ_TOKEN"], "real-token");
+    }
+
+    #[test]
+    fn mcp_stdio_config_parses_claude_style_shape() {
+        let mut raw = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = raw.as_object_mut().unwrap();
+        object.remove("mcp_servers");
+        object.insert(
+            "mcpServers".into(),
+            serde_json::json!({
+                "workiq": {
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "@microsoft/workiq@latest", "mcp"],
+                    "env": {"WORKIQ_REGION": "us"}
+                }
+            }),
+        );
+        let settings: AppSettings = serde_json::from_value(raw).unwrap();
+        let workiq = settings.mcp_servers.get("workiq").unwrap();
+        assert_eq!(workiq.transport_type, "stdio");
+        assert_eq!(workiq.command, "npx");
+        assert_eq!(workiq.args.len(), 3);
+        assert_eq!(workiq.env["WORKIQ_REGION"], "us");
+        // stdio servers legitimately carry no URL.
+        assert!(workiq.url.is_empty());
     }
 
     #[test]

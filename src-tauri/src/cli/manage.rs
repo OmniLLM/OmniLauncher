@@ -99,11 +99,20 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
                 out.info("no MCP servers configured");
             } else {
                 for (name, config) in &settings.mcp_servers {
+                    // stdio servers have no URL; show the command line instead
+                    // so `list` identifies every server the same way.
+                    let target = if config.transport_type.eq_ignore_ascii_case("stdio") {
+                        let mut parts = vec![config.command.clone()];
+                        parts.extend(config.args.iter().cloned());
+                        parts.join(" ")
+                    } else {
+                        config.url.clone()
+                    };
                     println!(
                         "{:<24} {:<6} {}{}",
                         name,
                         config.transport_type,
-                        config.url,
+                        target,
                         if config.oauth.is_some() {
                             "  oauth"
                         } else {
@@ -153,6 +162,8 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
             println!("  ol mcp add <server-name> <url> [--type http] [--header K=V]...");
             println!("                            [--oauth-client-id ID] [--oauth-client-secret-env VAR]");
             println!("                            [--oauth-scope SCOPE]... [--no-oauth]");
+            println!("  ol mcp add <server-name> --type stdio --command CMD [--arg VALUE]... [--env K=V]...");
+            println!("                            [--remove-env K]...");
             println!("  ol mcp update <server-name> [same flags as add; url optional]");
             println!("  ol mcp remove <server-name>");
             println!("  ol mcp login <server-name>");
@@ -195,16 +206,14 @@ fn mcp_add(out: &Output, args: &[String], update: bool) -> i32 {
     let mut config = settings.mcp_servers.get(&name).cloned().unwrap_or_default();
     let mut rest = &args[1..];
 
-    // In add mode the URL is a required positional argument.
+    // In add mode the URL is a required positional argument for http servers.
+    // stdio servers have no URL, so the requirement is checked after flags are
+    // parsed and the transport is known.
     if let Some(first) = rest.first() {
         if !first.starts_with('-') {
             config.url = first.clone();
             rest = &rest[1..];
         }
-    }
-    if !update && config.url.is_empty() {
-        out.failure(&format!("usage: ol mcp add {name} <url> [flags]"));
-        return 2;
     }
 
     let mut oauth = config.oauth.clone();
@@ -248,6 +257,38 @@ fn mcp_add(out: &Output, args: &[String], update: bool) -> i32 {
                 }
                 None => return 2,
             },
+            "--command" => match take_value(out, &mut index) {
+                Some(value) => config.command = value,
+                None => return 2,
+            },
+            "--arg" => match take_value(out, &mut index) {
+                Some(value) => config.args.push(value),
+                None => return 2,
+            },
+            "--clear-args" => {
+                config.args.clear();
+                index += 1;
+            }
+            "--env" => match take_value(out, &mut index) {
+                Some(value) => match value.split_once('=') {
+                    Some((key, env_value)) => {
+                        config
+                            .env
+                            .insert(key.trim().to_string(), env_value.to_string());
+                    }
+                    None => {
+                        out.failure("--env expects KEY=VALUE");
+                        return 2;
+                    }
+                },
+                None => return 2,
+            },
+            "--remove-env" => match take_value(out, &mut index) {
+                Some(value) => {
+                    config.env.remove(value.trim());
+                }
+                None => return 2,
+            },
             "--oauth-client-id" => match take_value(out, &mut index) {
                 Some(value) => oauth.get_or_insert_with(Default::default).client_id = value,
                 None => return 2,
@@ -257,13 +298,14 @@ fn mcp_add(out: &Output, args: &[String], update: bool) -> i32 {
                 None => return 2,
             },
             "--oauth-client-secret-env" => match take_value(out, &mut index) {
-                Some(value) => {
-                    oauth.get_or_insert_with(Default::default).client_secret_env = value
-                }
+                Some(value) => oauth.get_or_insert_with(Default::default).client_secret_env = value,
                 None => return 2,
             },
             "--oauth-scope" => match take_value(out, &mut index) {
-                Some(value) => oauth.get_or_insert_with(Default::default).scopes.push(value),
+                Some(value) => oauth
+                    .get_or_insert_with(Default::default)
+                    .scopes
+                    .push(value),
                 None => return 2,
             },
             "--no-oauth" => {
@@ -278,8 +320,16 @@ fn mcp_add(out: &Output, args: &[String], update: bool) -> i32 {
     }
     config.oauth = oauth;
 
-    if config.url.is_empty() {
-        out.failure("MCP server url must not be empty");
+    // Required fields depend on the transport, so validate once it is known.
+    if config.transport_type.eq_ignore_ascii_case("stdio") {
+        if config.command.trim().is_empty() {
+            out.failure(&format!(
+                "usage: ol mcp {verb} {name} --type stdio --command <executable> [--arg VALUE]..."
+            ));
+            return 2;
+        }
+    } else if config.url.is_empty() {
+        out.failure(&format!("usage: ol mcp {verb} {name} <url> [flags]"));
         return 2;
     }
 
@@ -288,7 +338,8 @@ fn mcp_add(out: &Output, args: &[String], update: bool) -> i32 {
         out.failure("failed to write settings");
         return 1;
     }
-    out.success(&format!("MCP server '{name}' {verb}d"));
+    let past_tense = if update { "updated" } else { "added" };
+    out.success(&format!("MCP server '{name}' {past_tense}"));
     0
 }
 

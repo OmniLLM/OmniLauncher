@@ -115,9 +115,10 @@ Running `omnilauncher` with no arguments prints the same help as `ol`. The legac
 
 ### MCP servers
 
-Remote Streamable HTTP MCP servers are configured in `settings.json`. Tools are
-discovered when the backend starts and registered as
-`mcp_<server>_<tool>` alongside built-in tools.
+MCP servers are configured in `settings.json`, over Streamable HTTP
+(`"type": "http"`) or as a local child process speaking stdio
+(`"type": "stdio"`). Tools are discovered when the backend starts and registered
+as `mcp_<server>_<tool>` alongside built-in tools.
 
 ```json
 {
@@ -129,17 +130,41 @@ discovered when the backend starts and registered as
         "clientId": "701236001767.11188027235169",
         "clientSecretEnv": "SLACK_MCP_CLIENT_SECRET"
       }
+    },
+    "workiq": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@microsoft/workiq@latest", "mcp", "--account", "you@example.com"],
+      "env": {}
     }
   }
 }
 ```
 
-`mcpServers` is accepted as an alias for `mcp_servers`. OAuth uses authorization
-code + PKCE. Access/refresh tokens are stored separately under
+`mcpServers` is accepted as an alias for `mcp_servers`.
+
+**HTTP servers** use `url` plus optional `headers` and `oauth`. OAuth uses
+authorization code + PKCE. Access/refresh tokens are stored separately under
 `~/.config/omnilauncher/mcp-oauth/` with owner-only permissions and refreshed
 automatically. Slack currently advertises confidential OAuth, so keep its client
 secret in the configured environment variable rather than in `settings.json`.
-After editing the config, run `ol mcp login <name>` once, then restart the backend.
+After adding one, run `ol mcp login <name>` once, then restart the backend.
+
+**stdio servers** use `command`, `args`, and `env`; the child process is spawned
+on connect, layered over the launcher's own environment, and lives as long as
+its tools are registered. Its stderr is discarded. `url`, `headers`, and `oauth`
+do not apply. Since the first run of an `npx`-style command may need to download
+the package, prefer a pre-installed absolute path if connection times out.
+`env` values whose name looks credential-bearing are redacted in the settings UI
+just like HTTP headers.
+
+Both kinds can be managed from the CLI:
+
+```sh
+ol mcp add slackBlizzard https://mcp.slack.com/mcp --oauth-client-id ID
+ol mcp add workiq --type stdio --command npx --arg -y --arg @microsoft/workiq@latest --arg mcp
+ol mcp list
+```
 
 ### Shell completion
 

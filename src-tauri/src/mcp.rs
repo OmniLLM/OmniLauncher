@@ -14,6 +14,7 @@ use rmcp::{
             StreamableHttpClient, StreamableHttpClientTransport,
             StreamableHttpClientTransportConfig,
         },
+        TokioChildProcess,
     },
     Peer, RoleClient, ServiceExt,
 };
@@ -223,25 +224,12 @@ fn oauth_client_secret(oauth: &McpOAuthConfig) -> Option<String> {
     (!oauth.client_secret.trim().is_empty()).then(|| oauth.client_secret.clone())
 }
 
-async fn finish_connection<C>(
+/// Turn an initialized MCP session into launcher plugins. Shared by every
+/// transport: only the handshake differs, tool discovery does not.
+async fn plugins_from_service(
     server_name: &str,
-    config: &McpServerConfig,
-    client: C,
-) -> Result<Vec<Box<dyn Plugin>>, String>
-where
-    C: StreamableHttpClient + Send + Sync + 'static,
-    C::Error: std::error::Error + Send + Sync + 'static,
-{
-    let transport_config = StreamableHttpClientTransportConfig::with_uri(config.url.clone())
-        .custom_headers(custom_headers(config)?)
-        .reinit_on_expired_session(true);
-    let transport = StreamableHttpClientTransport::with_client(client, transport_config);
-    let service = ().serve(transport).await.map_err(|e| {
-        format!(
-            "MCP server '{server_name}' initialization failed at {}: {e}",
-            config.url
-        )
-    })?;
+    service: RunningService<RoleClient, ()>,
+) -> Result<Vec<Box<dyn Plugin>>, String> {
     let peer = service.peer().clone();
     let tools = peer
         .list_all_tools()
@@ -268,13 +256,86 @@ where
         .collect())
 }
 
+async fn finish_connection<C>(
+    server_name: &str,
+    config: &McpServerConfig,
+    client: C,
+) -> Result<Vec<Box<dyn Plugin>>, String>
+where
+    C: StreamableHttpClient + Send + Sync + 'static,
+    C::Error: std::error::Error + Send + Sync + 'static,
+{
+    let transport_config = StreamableHttpClientTransportConfig::with_uri(config.url.clone())
+        .custom_headers(custom_headers(config)?)
+        .reinit_on_expired_session(true);
+    let transport = StreamableHttpClientTransport::with_client(client, transport_config);
+    let service = ().serve(transport).await.map_err(|e| {
+        format!(
+            "MCP server '{server_name}' initialization failed at {}: {e}",
+            config.url
+        )
+    })?;
+    plugins_from_service(server_name, service).await
+}
+
+/// Spawn a local MCP server as a child process and speak JSON-RPC over its
+/// stdin/stdout. The child is owned by the returned session, so it lives
+/// exactly as long as the plugins that use it.
+async fn connect_stdio(
+    server_name: &str,
+    config: &McpServerConfig,
+) -> Result<Vec<Box<dyn Plugin>>, String> {
+    if config.command.trim().is_empty() {
+        return Err(format!(
+            "MCP server '{server_name}' uses type 'stdio' but has no command"
+        ));
+    }
+    // OAuth and HTTP headers are transport-specific; dropping them silently
+    // would make a misconfigured server look like it simply has no tools.
+    if config.oauth.is_some() {
+        log::warn!("mcp: server '{server_name}' is stdio; ignoring its oauth configuration");
+    }
+    if !config.headers.is_empty() {
+        log::warn!("mcp: server '{server_name}' is stdio; ignoring its http headers");
+    }
+
+    let mut command = tokio::process::Command::new(config.command.trim());
+    command.args(&config.args);
+    for (key, value) in &config.env {
+        command.env(key, value);
+    }
+
+    let (transport, _stderr) = TokioChildProcess::builder(command)
+        // The child's stderr is its own diagnostic channel (Node warnings and
+        // similar); keep it out of the launcher's log.
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            format!(
+                "MCP server '{server_name}' failed to spawn '{}': {e}",
+                config.command
+            )
+        })?;
+
+    let service = ().serve(transport).await.map_err(|e| {
+        format!(
+            "MCP server '{server_name}' initialization failed running '{}': {e}",
+            config.command
+        )
+    })?;
+    plugins_from_service(server_name, service).await
+}
+
 async fn connect_one(
     server_name: &str,
     config: &McpServerConfig,
 ) -> Result<Vec<Box<dyn Plugin>>, String> {
+    if config.transport_type.eq_ignore_ascii_case("stdio") {
+        return connect_stdio(server_name, config).await;
+    }
     if !config.transport_type.eq_ignore_ascii_case("http") {
         return Err(format!(
-            "MCP server '{server_name}' uses unsupported type '{}'; only 'http' is supported",
+            "MCP server '{server_name}' uses unsupported type '{}'; only 'http' and 'stdio' are supported",
             config.transport_type
         ));
     }
@@ -416,6 +477,11 @@ pub async fn login(settings: &AppSettings, server_name: &str) -> Result<String, 
         .mcp_servers
         .get(server_name)
         .ok_or_else(|| format!("MCP server '{server_name}' is not configured"))?;
+    if config.transport_type.eq_ignore_ascii_case("stdio") {
+        return Err(format!(
+            "MCP server '{server_name}' is a stdio server; OAuth login applies only to http servers"
+        ));
+    }
     let oauth = config
         .oauth
         .as_ref()
@@ -792,6 +858,110 @@ mod tests {
             .execute_tool(serde_json::json!({"value": "hello"}))
             .await;
         assert!(output.contains("echo:hello"), "unexpected output: {output}");
+    }
+
+    /// A newline-delimited JSON-RPC MCP server, small enough to inline. stdio
+    /// transports frame one JSON object per line.
+    const STDIO_MOCK_SERVER: &str = r#"
+import json, os, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    method = message.get("method", "")
+    if method == "initialize":
+        result = {
+            "protocolVersion": message["params"]["protocolVersion"],
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "stdio-mock", "version": "1.0"},
+        }
+    elif method == "tools/list":
+        result = {"tools": [{
+            "name": "echo-tool",
+            "description": "Echo an input value",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+            },
+        }]}
+    elif method == "tools/call":
+        value = message["params"]["arguments"].get("value", "")
+        result = {
+            "content": [{"type": "text", "text": "echo:%s:%s" % (value, os.environ.get("MOCK_SUFFIX", ""))}],
+            "isError": False,
+        }
+    else:
+        result = {}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}) + "\n")
+    sys.stdout.flush()
+"#;
+
+    #[tokio::test]
+    async fn stdio_server_discovers_tools_and_receives_configured_env() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_err()
+        {
+            eprintln!("skipping: python3 is unavailable");
+            return;
+        }
+
+        let config = crate::settings::McpServerConfig {
+            transport_type: "stdio".into(),
+            command: "python3".into(),
+            args: vec!["-c".into(), STDIO_MOCK_SERVER.into()],
+            env: [("MOCK_SUFFIX".to_string(), "from-env".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+
+        let plugins = super::connect_one("localmock", &config).await.unwrap();
+        assert_eq!(plugins.len(), 1);
+        let schema = plugins[0].tool_schema().unwrap();
+        assert_eq!(schema["function"]["name"], "mcp_localmock_echo_tool");
+        let output = plugins[0]
+            .execute_tool(serde_json::json!({"value": "hello"}))
+            .await;
+        assert!(
+            output.contains("echo:hello:from-env"),
+            "unexpected output: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stdio_server_without_command_is_rejected() {
+        let config = crate::settings::McpServerConfig {
+            transport_type: "stdio".into(),
+            ..Default::default()
+        };
+        let Err(error) = super::connect_one("broken", &config).await else {
+            panic!("stdio server without a command must not connect");
+        };
+        assert!(error.contains("no command"), "unexpected error: {error}");
+    }
+
+    #[tokio::test]
+    async fn unknown_transport_type_is_rejected() {
+        let config = crate::settings::McpServerConfig {
+            transport_type: "carrier-pigeon".into(),
+            url: "https://example.com/mcp".into(),
+            ..Default::default()
+        };
+        let Err(error) = super::connect_one("odd", &config).await else {
+            panic!("unknown transport types must not connect");
+        };
+        assert!(
+            error.contains("'http' and 'stdio'"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
