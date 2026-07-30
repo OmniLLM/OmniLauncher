@@ -90,6 +90,10 @@ pub fn settings(out: &Output, args: &[String]) -> i32 {
 pub fn mcp(out: &Output, args: &[String]) -> i32 {
     let settings = omnilauncher_lib::load_settings();
     match args.first().map(String::as_str) {
+        Some("add") => mcp_add(out, &args[1..], false),
+        Some("update" | "set") => mcp_add(out, &args[1..], true),
+        Some("remove" | "rm" | "delete") => mcp_remove(out, args.get(1)),
+        Some("show" | "get") => mcp_show(out, args.get(1)),
         Some("list" | "ls") => {
             if settings.mcp_servers.is_empty() {
                 out.info("no MCP servers configured");
@@ -145,6 +149,12 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
         Some("help" | "--help" | "-h") | None => {
             println!("MCP server management");
             println!("  ol mcp list");
+            println!("  ol mcp show <server-name>");
+            println!("  ol mcp add <server-name> <url> [--type http] [--header K=V]...");
+            println!("                            [--oauth-client-id ID] [--oauth-client-secret-env VAR]");
+            println!("                            [--oauth-scope SCOPE]... [--no-oauth]");
+            println!("  ol mcp update <server-name> [same flags as add; url optional]");
+            println!("  ol mcp remove <server-name>");
             println!("  ol mcp login <server-name>");
             println!("  ol mcp logout <server-name>");
             0
@@ -154,6 +164,172 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
                 "unknown MCP command '{other}' — run `ol mcp help`"
             ));
             2
+        }
+    }
+}
+
+/// Create or update one entry in `settings.mcp_servers`.
+///
+/// `update` mode keeps every field that the caller did not mention, so a
+/// single flag can be changed without re-declaring the whole server.
+fn mcp_add(out: &Output, args: &[String], update: bool) -> i32 {
+    let verb = if update { "update" } else { "add" };
+    let Some(name) = args.first().filter(|n| !n.starts_with('-')).cloned() else {
+        out.failure(&format!("usage: ol mcp {verb} <server-name> ..."));
+        return 2;
+    };
+
+    let mut settings = omnilauncher_lib::load_settings();
+    let exists = settings.mcp_servers.contains_key(&name);
+    if update && !exists {
+        out.failure(&format!("MCP server '{name}' is not configured"));
+        return 1;
+    }
+    if !update && exists {
+        out.failure(&format!(
+            "MCP server '{name}' already exists — use `ol mcp update {name}`"
+        ));
+        return 1;
+    }
+
+    let mut config = settings.mcp_servers.get(&name).cloned().unwrap_or_default();
+    let mut rest = &args[1..];
+
+    // In add mode the URL is a required positional argument.
+    if let Some(first) = rest.first() {
+        if !first.starts_with('-') {
+            config.url = first.clone();
+            rest = &rest[1..];
+        }
+    }
+    if !update && config.url.is_empty() {
+        out.failure(&format!("usage: ol mcp add {name} <url> [flags]"));
+        return 2;
+    }
+
+    let mut oauth = config.oauth.clone();
+    let mut index = 0usize;
+    while index < rest.len() {
+        let flag = rest[index].as_str();
+        let take_value = |out: &Output, index: &mut usize| -> Option<String> {
+            let value = rest.get(*index + 1).cloned();
+            if value.is_none() {
+                out.failure(&format!("{flag} requires a value"));
+            }
+            *index += 2;
+            value
+        };
+        match flag {
+            "--url" => match take_value(out, &mut index) {
+                Some(value) => config.url = value,
+                None => return 2,
+            },
+            "--type" => match take_value(out, &mut index) {
+                Some(value) => config.transport_type = value,
+                None => return 2,
+            },
+            "--header" => match take_value(out, &mut index) {
+                Some(value) => match value.split_once('=') {
+                    Some((key, header_value)) => {
+                        config
+                            .headers
+                            .insert(key.trim().to_string(), header_value.to_string());
+                    }
+                    None => {
+                        out.failure("--header expects KEY=VALUE");
+                        return 2;
+                    }
+                },
+                None => return 2,
+            },
+            "--remove-header" => match take_value(out, &mut index) {
+                Some(value) => {
+                    config.headers.remove(value.trim());
+                }
+                None => return 2,
+            },
+            "--oauth-client-id" => match take_value(out, &mut index) {
+                Some(value) => oauth.get_or_insert_with(Default::default).client_id = value,
+                None => return 2,
+            },
+            "--oauth-client-secret" => match take_value(out, &mut index) {
+                Some(value) => oauth.get_or_insert_with(Default::default).client_secret = value,
+                None => return 2,
+            },
+            "--oauth-client-secret-env" => match take_value(out, &mut index) {
+                Some(value) => {
+                    oauth.get_or_insert_with(Default::default).client_secret_env = value
+                }
+                None => return 2,
+            },
+            "--oauth-scope" => match take_value(out, &mut index) {
+                Some(value) => oauth.get_or_insert_with(Default::default).scopes.push(value),
+                None => return 2,
+            },
+            "--no-oauth" => {
+                oauth = None;
+                index += 1;
+            }
+            other => {
+                out.failure(&format!("unknown flag '{other}' — run `ol mcp help`"));
+                return 2;
+            }
+        }
+    }
+    config.oauth = oauth;
+
+    if config.url.is_empty() {
+        out.failure("MCP server url must not be empty");
+        return 2;
+    }
+
+    settings.mcp_servers.insert(name.clone(), config);
+    if !omnilauncher_lib::save_settings(&settings) {
+        out.failure("failed to write settings");
+        return 1;
+    }
+    out.success(&format!("MCP server '{name}' {verb}d"));
+    0
+}
+
+/// Delete one entry from `settings.mcp_servers`.
+fn mcp_remove(out: &Output, name: Option<&String>) -> i32 {
+    let Some(name) = name else {
+        out.failure("usage: ol mcp remove <server-name>");
+        return 2;
+    };
+    let mut settings = omnilauncher_lib::load_settings();
+    if settings.mcp_servers.remove(name).is_none() {
+        out.failure(&format!("MCP server '{name}' is not configured"));
+        return 1;
+    }
+    if !omnilauncher_lib::save_settings(&settings) {
+        out.failure("failed to write settings");
+        return 1;
+    }
+    out.success(&format!("MCP server '{name}' removed"));
+    0
+}
+
+/// Print one server's config with secrets masked.
+fn mcp_show(out: &Output, name: Option<&String>) -> i32 {
+    let Some(name) = name else {
+        out.failure("usage: ol mcp show <server-name>");
+        return 2;
+    };
+    let settings = omnilauncher_lib::load_settings();
+    let Some(config) = settings.mcp_servers.get(name) else {
+        out.failure(&format!("MCP server '{name}' is not configured"));
+        return 1;
+    };
+    match serde_json::to_string_pretty(&config.masked_for_display()) {
+        Ok(text) => {
+            println!("{text}");
+            0
+        }
+        Err(error) => {
+            out.failure(&format!("failed to render config: {error}"));
+            1
         }
     }
 }
