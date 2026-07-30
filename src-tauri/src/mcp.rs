@@ -144,7 +144,16 @@ impl Plugin for McpToolPlugin {
     }
 
     async fn execute_tool(&self, args: serde_json::Value) -> String {
-        let arguments = args.as_object().cloned().unwrap_or_default();
+        let mut arguments = args.as_object().cloned().unwrap_or_default();
+        // Callers that can only supply free-form text (e.g. A2A text parts)
+        // hand us a synthetic `{"input": "..."}`. No MCP tool declares an
+        // `input` parameter, so remap it onto the tool's own required string
+        // parameter; otherwise the server rejects the call as missing args.
+        if let Some(value) = remap_input_placeholder(&arguments, &self.schema) {
+            if let Some(text) = arguments.remove("input") {
+                arguments.insert(value, text);
+            }
+        }
         let request =
             CallToolRequestParams::new(self.remote_name.clone()).with_arguments(arguments);
         match self.session.peer.call_tool(request).await {
@@ -153,6 +162,56 @@ impl Plugin for McpToolPlugin {
             Err(e) => format!("Error: MCP tool '{}' failed: {e}", self.remote_name),
         }
     }
+}
+
+/// If `arguments` is exactly the synthetic `{"input": "..."}` placeholder,
+/// return the name of the parameter it should be remapped to: the tool's sole
+/// required string parameter, or (when nothing is marked required) the single
+/// string property it declares. Returns `None` when the mapping is ambiguous or
+/// the tool genuinely accepts `input`.
+fn remap_input_placeholder(
+    arguments: &serde_json::Map<String, serde_json::Value>,
+    schema: &serde_json::Value,
+) -> Option<String> {
+    if arguments.len() != 1 || !arguments.get("input")?.is_string() {
+        return None;
+    }
+    let params = &schema["function"]["parameters"];
+    let properties = params.get("properties")?.as_object()?;
+    if properties.contains_key("input") {
+        return None;
+    }
+
+    let is_string = |name: &str| {
+        properties
+            .get(name)
+            .map(|p| {
+                let t = &p["type"];
+                t == "string" || t.as_array().is_some_and(|a| a.iter().any(|v| v == "string"))
+            })
+            .unwrap_or(false)
+    };
+
+    let required: Vec<&str> = params
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|r| r.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    // Exactly one required parameter, and it takes a string.
+    if let [only] = required.as_slice() {
+        return is_string(only).then(|| (*only).to_string());
+    }
+
+    // Nothing required: fall back only if there is a single string property.
+    if required.is_empty() {
+        let mut strings = properties.keys().filter(|k| is_string(k));
+        let first = strings.next()?;
+        if strings.next().is_none() {
+            return Some(first.clone());
+        }
+    }
+    None
 }
 
 fn sanitize_component(value: &str) -> String {
@@ -984,6 +1043,82 @@ for line in sys.stdin:
         assert_eq!(
             schema["function"]["parameters"]["properties"]["query"]["type"],
             "string"
+        );
+    }
+}
+
+#[cfg(test)]
+mod remap_input_tests {
+    use super::remap_input_placeholder;
+    use serde_json::json;
+
+    fn schema(params: serde_json::Value) -> serde_json::Value {
+        json!({"type":"function","function":{"name":"t","parameters":params}})
+    }
+    fn args(v: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    /// Regression: free-form text callers send `{"input": "..."}`, but no MCP
+    /// tool declares `input`. It must land on the tool's required parameter
+    /// (e.g. workiq `ask` -> `question`) or the server rejects the call.
+    #[test]
+    fn maps_input_to_sole_required_string() {
+        let s = schema(json!({
+            "properties": {"question": {"type":"string"}, "agentId": {"type":["string","null"]}},
+            "required": ["question"]
+        }));
+        assert_eq!(
+            remap_input_placeholder(&args(json!({"input":"show me upcoming meetings"})), &s),
+            Some("question".to_string())
+        );
+    }
+
+    #[test]
+    fn maps_to_single_string_property_when_nothing_required() {
+        let s = schema(json!({"properties": {"query": {"type":"string"}}}));
+        assert_eq!(
+            remap_input_placeholder(&args(json!({"input":"hi"})), &s),
+            Some("query".to_string())
+        );
+    }
+
+    #[test]
+    fn declines_when_multiple_required_params() {
+        let s = schema(json!({
+            "properties": {"a": {"type":"string"}, "b": {"type":"string"}},
+            "required": ["a","b"]
+        }));
+        assert_eq!(remap_input_placeholder(&args(json!({"input":"hi"})), &s), None);
+    }
+
+    #[test]
+    fn declines_when_required_param_is_not_a_string() {
+        let s = schema(json!({
+            "properties": {"entityUrls": {"type":"array"}},
+            "required": ["entityUrls"]
+        }));
+        assert_eq!(remap_input_placeholder(&args(json!({"input":"hi"})), &s), None);
+    }
+
+    #[test]
+    fn declines_when_tool_really_accepts_input() {
+        let s = schema(json!({
+            "properties": {"input": {"type":"string"}},
+            "required": ["input"]
+        }));
+        assert_eq!(remap_input_placeholder(&args(json!({"input":"hi"})), &s), None);
+    }
+
+    #[test]
+    fn leaves_real_named_args_untouched() {
+        let s = schema(json!({
+            "properties": {"question": {"type":"string"}},
+            "required": ["question"]
+        }));
+        assert_eq!(
+            remap_input_placeholder(&args(json!({"question":"hi"})), &s),
+            None
         );
     }
 }

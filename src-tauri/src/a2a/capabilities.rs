@@ -295,7 +295,16 @@ fn extract_tool_args(request: &MessageSendRequest) -> Value {
         .and_then(|message| message.parts.first())
         .map(|part| match part.as_data() {
             Some(data) => data.clone(),
-            None => json!({ "input": part.as_text().unwrap_or_default() }),
+            None => {
+                let text = part.as_text().unwrap_or_default();
+                // Text parts commonly carry a JSON-encoded argument object
+                // (A2A clients that cannot send DataParts). Parse it so the
+                // tool receives real named arguments instead of a bare string.
+                match serde_json::from_str::<Value>(text) {
+                    Ok(value) if value.is_object() => value,
+                    _ => json!({ "input": text }),
+                }
+            }
         })
         .unwrap_or_else(|| json!({}))
 }
@@ -311,7 +320,78 @@ fn extract_query_text(request: &MessageSendRequest) -> String {
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .to_string(),
-            None => part.as_text().unwrap_or_default().to_string(),
+            None => {
+                let text = part.as_text().unwrap_or_default();
+                // Mirror extract_tool_args: a JSON-encoded object in a text
+                // part should yield its "query" field, not the raw JSON.
+                match serde_json::from_str::<Value>(text) {
+                    Ok(value) if value.is_object() => value
+                        .get("query")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(text)
+                        .to_string(),
+                    _ => text.to_string(),
+                }
+            }
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod extract_args_tests {
+    use super::*;
+    use crate::a2a::types::{A2aMessage, A2aPart, A2aRole};
+
+    fn req_with(part: A2aPart) -> MessageSendRequest {
+        MessageSendRequest {
+            messages: vec![A2aMessage::new(A2aRole::User, vec![part])],
+            tool: None,
+        }
+    }
+
+    /// Regression: A2A clients that cannot emit DataParts send tool arguments
+    /// as a JSON-encoded text part. These must be parsed into named arguments,
+    /// otherwise MCP tools reject the call with "query is required".
+    #[test]
+    fn json_text_part_is_parsed_into_named_args() {
+        let req = req_with(A2aPart::text(r#"{"query":"azure functions","maxResults":2}"#));
+        assert_eq!(
+            extract_tool_args(&req),
+            json!({"query": "azure functions", "maxResults": 2})
+        );
+    }
+
+    #[test]
+    fn plain_text_part_still_falls_back_to_input() {
+        let req = req_with(A2aPart::text("Azure Private Link overview"));
+        assert_eq!(
+            extract_tool_args(&req),
+            json!({"input": "Azure Private Link overview"})
+        );
+    }
+
+    #[test]
+    fn non_object_json_text_falls_back_to_input() {
+        // A bare JSON scalar/array is not a valid argument object.
+        let req = req_with(A2aPart::text("[1,2,3]"));
+        assert_eq!(extract_tool_args(&req), json!({"input": "[1,2,3]"}));
+    }
+
+    #[test]
+    fn data_part_is_passed_through_unchanged() {
+        let req = req_with(A2aPart::data(json!({"query": "hello"})));
+        assert_eq!(extract_tool_args(&req), json!({"query": "hello"}));
+    }
+
+    #[test]
+    fn query_text_reads_query_field_from_json_text_part() {
+        let req = req_with(A2aPart::text(r#"{"query":"azure functions"}"#));
+        assert_eq!(extract_query_text(&req), "azure functions");
+    }
+
+    #[test]
+    fn query_text_keeps_plain_text_verbatim() {
+        let req = req_with(A2aPart::text("azure functions"));
+        assert_eq!(extract_query_text(&req), "azure functions");
+    }
 }
