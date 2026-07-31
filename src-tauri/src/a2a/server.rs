@@ -140,7 +140,19 @@ async fn handle_a2a_request(
                     "missing MCP server name".to_string(),
                 );
             }
-            let settings = state.adapter.settings.read().await.clone();
+            // Re-read from disk rather than using the in-memory snapshot. The
+            // login that triggers this reconnect may have just written a
+            // dynamically registered client_id into settings.json, and the
+            // snapshot loaded at startup would still say `oauth: null` —
+            // causing the connect to present no credentials at all and fail
+            // with "Auth required" despite valid tokens on disk.
+            let settings = crate::load_settings();
+            // Keep the running config in step so later reads (and the next
+            // agent-card build) see the same credentials.
+            {
+                let mut live = state.adapter.settings.write().await;
+                live.mcp_servers = settings.mcp_servers.clone();
+            }
             match crate::mcp::reconnect_server(&settings, name).await {
                 Ok(plugins) => {
                     let tool_count = plugins.len();
@@ -434,6 +446,70 @@ tags: route, a2a
                 .contains("not configured"),
             "expected the reason to name the missing configuration, got {body}"
         );
+    }
+
+    /// Regression: `ol mcp login` writes a freshly registered client_id to
+    /// settings.json, but the backend's in-memory snapshot was loaded at
+    /// startup and still says `oauth: null`. Reconnect must re-read from disk,
+    /// otherwise it connects with no credentials and fails with "Auth
+    /// required" even though valid tokens exist.
+    #[tokio::test]
+    async fn mcp_reconnect_rereads_settings_from_disk() {
+        let _guard = crate::path_config::CONFIG_DIR_ENV_LOCK.lock().await;
+        let config_dir = tempfile::tempdir().expect("temp config dir");
+        std::env::set_var("OMNILAUNCHER_CONFIG_DIR", config_dir.path());
+
+        // On disk: a server the startup snapshot never saw.
+        let mut on_disk = crate::load_settings();
+        on_disk.mcp_servers.insert(
+            "late-server".to_string(),
+            crate::settings::McpServerConfig {
+                transport_type: "http".to_string(),
+                url: "https://example.invalid/mcp".to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(crate::save_settings(&on_disk), "settings should persist");
+
+        // The live state deliberately does not know about it.
+        let state = test_server_state();
+        assert!(
+            !state
+                .adapter
+                .settings
+                .read()
+                .await
+                .mcp_servers
+                .contains_key("late-server"),
+            "precondition: snapshot must not already contain the server"
+        );
+
+        let response = handle_a2a_request(
+            &state,
+            "POST",
+            "/mcp/reconnect/late-server",
+            "POST /mcp/reconnect/late-server HTTP/1.1\r\nAuthorization: Bearer test-token\r\n\r\n",
+        )
+        .await;
+        let body: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+        // The host is unresolvable, so connecting fails — but it must fail on
+        // the transport, proving the config was found, not on "not configured".
+        assert_eq!(body["connected"], false);
+        let error = body["error"].as_str().unwrap_or_default();
+        assert!(
+            !error.contains("is not configured"),
+            "reconnect should have picked up the on-disk server, got {error}"
+        );
+        // The live snapshot must now carry the on-disk config too.
+        assert!(state
+            .adapter
+            .settings
+            .read()
+            .await
+            .mcp_servers
+            .contains_key("late-server"));
+
+        std::env::remove_var("OMNILAUNCHER_CONFIG_DIR");
     }
 
     #[tokio::test]
