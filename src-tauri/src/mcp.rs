@@ -525,6 +525,46 @@ async fn write_oauth_callback_response(
     let _ = stream.shutdown().await;
 }
 
+/// A server needs a dynamically registered client when it has no `oauth` block
+/// at all, or one whose `client_id` is blank. Both states mean "we have no
+/// client credentials to present".
+fn needs_registration(oauth: &Option<McpOAuthConfig>) -> bool {
+    oauth
+        .as_ref()
+        .is_none_or(|oauth| oauth.client_id.trim().is_empty())
+}
+
+/// Scopes to request at registration. An explicit configuration always wins;
+/// otherwise fall back to whatever the authorization server advertises, which
+/// is what a client with no prior knowledge of the server can ask for.
+fn resolve_scopes(configured: &[String], advertised: &[String]) -> Vec<String> {
+    if configured.is_empty() {
+        advertised.to_vec()
+    } else {
+        configured.to_vec()
+    }
+}
+
+/// Store a dynamically registered client back into settings so subsequent
+/// connects (which key off `config.oauth.is_some()`) can authenticate without
+/// another registration. Settings are re-read here rather than mutating the
+/// caller's snapshot, so a concurrent writer's unrelated changes survive.
+fn persist_registered_client(server_name: &str, oauth: &McpOAuthConfig) -> Result<(), String> {
+    let mut settings = crate::load_settings();
+    let config = settings
+        .mcp_servers
+        .get_mut(server_name)
+        .ok_or_else(|| format!("MCP server '{server_name}' is not configured"))?;
+    config.oauth = Some(oauth.clone());
+    if crate::save_settings(&settings) {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to save registered OAuth client for '{server_name}'"
+        ))
+    }
+}
+
 /// Complete an OAuth authorization-code + PKCE login for one configured MCP
 /// server. The browser callback is loopback-only; credentials are persisted by
 /// `FileCredentialStore` and subsequently refreshed by rmcp without another UI
@@ -541,10 +581,10 @@ pub async fn login(settings: &AppSettings, server_name: &str) -> Result<String, 
             "MCP server '{server_name}' is a stdio server; OAuth login applies only to http servers"
         ));
     }
-    let oauth = config
-        .oauth
-        .as_ref()
-        .ok_or_else(|| format!("MCP server '{server_name}' has no oauth configuration"))?;
+    // A missing `oauth` block is not an error: servers whose authorization
+    // server supports RFC 7591 dynamic client registration get a `client_id`
+    // minted below, matching what other MCP clients do transparently.
+    let oauth = config.oauth.clone();
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .map_err(|e| format!("bind MCP OAuth callback: {e}"))?;
@@ -562,15 +602,55 @@ pub async fn login(settings: &AppSettings, server_name: &str) -> Result<String, 
         .discover_metadata()
         .await
         .map_err(|e| format!("MCP OAuth metadata discovery failed: {e}"))?;
+    let registration_endpoint = metadata.registration_endpoint.clone();
+    let metadata_scopes = metadata.scopes_supported.clone().unwrap_or_default();
     manager.set_metadata(metadata);
-    let mut client_config = OAuthClientConfig::new(oauth.client_id.clone(), &redirect_uri)
-        .with_scopes(oauth.scopes.clone());
-    if let Some(secret) = oauth_client_secret(oauth) {
-        client_config = client_config.with_client_secret(secret);
-    }
-    manager
-        .configure_client(client_config)
-        .map_err(|e| format!("MCP OAuth client configuration failed: {e}"))?;
+
+    let oauth = if needs_registration(&oauth) {
+        if registration_endpoint.is_none() {
+            return Err(format!(
+                "MCP server '{server_name}' has no oauth configuration and its \
+                 authorization server does not advertise dynamic client \
+                 registration; set one explicitly with `ol mcp update \
+                 {server_name} --oauth-client-id <ID>`"
+            ));
+        }
+        let scopes = resolve_scopes(
+            oauth.as_ref().map(|o| o.scopes.as_slice()).unwrap_or(&[]),
+            &metadata_scopes,
+        );
+        let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
+        // `register_client` configures the client internally, so the manual
+        // `configure_client` below is deliberately skipped on this path.
+        let registered = manager
+            .register_client("OmniLauncher", &redirect_uri, &scope_refs)
+            .await
+            .map_err(|e| format!("MCP dynamic client registration failed: {e}"))?;
+        log::info!(
+            "mcp: registered OAuth client for '{server_name}' (client_id {})",
+            registered.client_id
+        );
+        let effective = McpOAuthConfig {
+            client_id: registered.client_id,
+            client_secret: registered.client_secret.clone().unwrap_or_default(),
+            client_secret_env: String::new(),
+            scopes,
+        };
+        persist_registered_client(server_name, &effective)?;
+        effective
+    } else {
+        let oauth = oauth.expect("needs_registration returns true for None");
+        let mut client_config = OAuthClientConfig::new(oauth.client_id.clone(), &redirect_uri)
+            .with_scopes(oauth.scopes.clone());
+        if let Some(secret) = oauth_client_secret(&oauth) {
+            client_config = client_config.with_client_secret(secret);
+        }
+        manager
+            .configure_client(client_config)
+            .map_err(|e| format!("MCP OAuth client configuration failed: {e}"))?;
+        oauth
+    };
+    let oauth = &oauth;
     let scope_refs: Vec<&str> = oauth.scopes.iter().map(String::as_str).collect();
     let authorization_url = manager
         .get_authorization_url(&scope_refs)
@@ -693,6 +773,61 @@ pub async fn connect_configured(settings: &AppSettings) -> Vec<Box<dyn Plugin>> 
 mod tests {
     use rmcp::{model::Tool, transport::CredentialStore};
     use serde_json::{Map, Value};
+
+    use crate::settings::McpOAuthConfig;
+
+    fn oauth_with(client_id: &str) -> Option<McpOAuthConfig> {
+        Some(McpOAuthConfig {
+            client_id: client_id.to_string(),
+            client_secret: String::new(),
+            client_secret_env: String::new(),
+            scopes: Vec::new(),
+        })
+    }
+
+    /// The whole point of the feature: a server configured with no `oauth`
+    /// block must be registrable rather than rejected outright.
+    #[test]
+    fn missing_oauth_block_needs_registration() {
+        assert!(super::needs_registration(&None));
+    }
+
+    /// A present-but-empty `client_id` carries no more credentials than an
+    /// absent block, so it must take the same registration path instead of
+    /// being sent to the authorization server as a blank client.
+    #[test]
+    fn blank_client_id_needs_registration() {
+        assert!(super::needs_registration(&oauth_with("")));
+        assert!(super::needs_registration(&oauth_with("   ")));
+    }
+
+    #[test]
+    fn configured_client_id_skips_registration() {
+        assert!(!super::needs_registration(&oauth_with("abc123")));
+    }
+
+    #[test]
+    fn configured_scopes_take_precedence_over_advertised() {
+        let configured = vec!["custom".to_string()];
+        let advertised = vec!["openid".to_string(), "email".to_string()];
+        assert_eq!(
+            super::resolve_scopes(&configured, &advertised),
+            vec!["custom".to_string()]
+        );
+    }
+
+    /// With nothing configured, a client that has never seen the server can
+    /// only ask for what the metadata advertises.
+    #[test]
+    fn empty_configured_scopes_fall_back_to_advertised() {
+        let advertised = vec!["openid".to_string(), "groups".to_string()];
+        assert_eq!(super::resolve_scopes(&[], &advertised), advertised);
+    }
+
+    #[test]
+    fn absent_scopes_everywhere_yields_empty() {
+        assert!(super::resolve_scopes(&[], &[]).is_empty());
+    }
     use std::sync::Arc;
 
     #[test]
