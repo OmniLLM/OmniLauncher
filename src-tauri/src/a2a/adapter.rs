@@ -108,6 +108,44 @@ pub fn build_agent_card_with_skills(
 
 // ── Message handling ────────────────────────────────────────────────────────
 
+/// Explain an `mcp_<server>_<tool>` miss using the server's last connection
+/// outcome, so the failure names the real cause instead of implying the tool
+/// does not exist. Returns an empty string for non-MCP tools.
+fn mcp_failure_detail(tool_name: &str) -> String {
+    let Some(rest) = tool_name.strip_prefix("mcp_") else {
+        return String::new();
+    };
+    // Tool names are `mcp_<server>_<tool>`; the server is the first segment,
+    // since `tool_to_openai_schema` sanitizes each part separately.
+    let statuses = crate::mcp::server_statuses();
+    let Some((server, status)) = statuses
+        .iter()
+        .find(|(name, _)| rest.starts_with(&format!("{name}_")))
+    else {
+        return format!(
+            " (no MCP server matching '{rest}' has reported a connection yet — \
+             discovery may have failed; check `ol mcp list`)"
+        );
+    };
+    if status.needs_login {
+        format!(
+            " (MCP server '{server}' is not authorized: {} — run `ol mcp login {server}`)",
+            status.error.as_deref().unwrap_or("authorization required")
+        )
+    } else if !status.connected {
+        format!(
+            " (MCP server '{server}' is not connected: {})",
+            status.error.as_deref().unwrap_or("unknown error")
+        )
+    } else {
+        format!(
+            " (MCP server '{server}' is connected with {} tools, but this tool \
+             is not among them)",
+            status.tool_count
+        )
+    }
+}
+
 /// Handle a `message/send` request.
 ///
 /// Detects whether the request is conversational (plain text, no `tool` field)
@@ -137,16 +175,38 @@ pub async fn handle_message_send(
     let tool_name = request.tool.clone();
     let resolved_kind = match tool_name.as_deref() {
         Some(name) => {
-            let pm = state.plugin_manager.read().await;
-            let sm = state.skill_manager.lock().await;
-            let kind = capabilities::find_capability(&pm, Some(&sm), name).map(|cap| cap.kind);
+            let kind = {
+                let pm = state.plugin_manager.read().await;
+                let sm = state.skill_manager.lock().await;
+                capabilities::find_capability(&pm, Some(&sm), name).map(|cap| cap.kind)
+            };
+            // A miss may just mean startup MCP discovery has not finished yet —
+            // it runs in the background so a slow server cannot delay readiness,
+            // which leaves a window where only built-ins are registered. Wait
+            // for the gate and look again before declaring the tool missing.
+            let kind = match kind {
+                Some(k) => Some(k),
+                None => {
+                    log::debug!("a2a: tool '{name}' not yet registered; awaiting MCP discovery");
+                    crate::mcp::wait_for_discovery(std::time::Duration::from_secs(30)).await;
+                    let pm = state.plugin_manager.read().await;
+                    let sm = state.skill_manager.lock().await;
+                    capabilities::find_capability(&pm, Some(&sm), name).map(|cap| cap.kind)
+                }
+            };
             match kind {
                 Some(k) => Some((name.to_string(), k)),
                 None => {
                     // Fail the task synchronously — no point spawning for an
-                    // unknown tool.
+                    // unknown tool. Include MCP server status: a bare "Tool not
+                    // found" for an `mcp_*` tool reads as "the tool does not
+                    // exist" when the real cause is an unconnected or
+                    // unauthorized server, which sent earlier debugging down
+                    // the wrong path entirely.
+                    let detail = mcp_failure_detail(name);
+                    log::warn!("a2a: Tool not found: {name}{detail}");
                     let mut reg = state.task_registry.lock().await;
-                    reg.mark_failed(&task_id, format!("Tool not found: {name}"));
+                    reg.mark_failed(&task_id, format!("Tool not found: {name}{detail}"));
                     return reg
                         .get(&task_id)
                         .map(|r| r.to_a2a_task())

@@ -4,7 +4,9 @@ use omnilauncher_lib::{
     settings::load_settings_with_overrides,
     SkillManager,
 };
-use simplelog::{ColorChoice, ConfigBuilder, LevelFilter, TermLogger, TerminalMode, WriteLogger};
+use simplelog::{
+    ColorChoice, CombinedLogger, ConfigBuilder, LevelFilter, TermLogger, TerminalMode, WriteLogger,
+};
 use std::{fs, fs::OpenOptions, path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 
@@ -96,15 +98,59 @@ fn main() {
         } else {
             LevelFilter::Info
         };
-        if TermLogger::init(
-            term_level,
-            ConfigBuilder::new().build(),
-            TerminalMode::Stderr,
-            ColorChoice::Never,
-        )
-        .is_ok()
-        {
-            log::info!("Running without debug file logging");
+        // The server usually runs as a daemon with stderr discarded, so a
+        // terminal-only logger means failures leave no trace and post-mortems
+        // have nothing to read. Persist WARN and above to the same file the
+        // debug logger uses; foreground CLI invocations keep stderr only.
+        let persisted = if cli::is_foreground_cli(&argv0, &rest) {
+            None
+        } else {
+            let path = debug_log_path();
+            path.parent()
+                .map(fs::create_dir_all)
+                .transpose()
+                .ok()
+                .and_then(|_| {
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                        .ok()
+                })
+                .map(|file| (path, file))
+        };
+        match persisted {
+            Some((path, file)) => {
+                let config = ConfigBuilder::new().set_time_format_rfc3339().build();
+                if CombinedLogger::init(vec![
+                    TermLogger::new(
+                        term_level,
+                        ConfigBuilder::new().build(),
+                        TerminalMode::Stderr,
+                        ColorChoice::Never,
+                    ),
+                    WriteLogger::new(LevelFilter::Warn, config, file),
+                ])
+                .is_ok()
+                {
+                    log::info!(
+                        "Running without --debug; warnings and errors persist to {}",
+                        path.display()
+                    );
+                }
+            }
+            None => {
+                if TermLogger::init(
+                    term_level,
+                    ConfigBuilder::new().build(),
+                    TerminalMode::Stderr,
+                    ColorChoice::Never,
+                )
+                .is_ok()
+                {
+                    log::info!("Running without debug file logging");
+                }
+            }
         }
     }
 
@@ -172,6 +218,10 @@ pub fn serve_backend(args: &[String]) {
         // registry as built-ins once discovery completes.
         let mcp_settings = settings.read().await.clone();
         let mcp_plugin_manager = plugin_manager.clone();
+        // Flag the window as open *before* spawning, so a request arriving
+        // between here and the first `connect_and_record` waits rather than
+        // failing fast on a tool that is about to register.
+        omnilauncher_lib::mcp::mark_discovery_started();
         tokio::spawn(async move {
             let mcp_plugins = omnilauncher_lib::mcp::connect_configured(&mcp_settings).await;
             if !mcp_plugins.is_empty() {
@@ -180,6 +230,10 @@ pub fn serve_backend(args: &[String]) {
                     manager.register_override(plugin);
                 }
             }
+            // Release dispatchers waiting on the startup window. Must run even
+            // when discovery yielded nothing, or every waiter would block for
+            // the full timeout on a host with no working MCP servers.
+            omnilauncher_lib::mcp::mark_discovery_complete();
         });
 
         let settings_snapshot = settings.read().await.clone();

@@ -788,6 +788,74 @@ fn record_status(name: &str, status: McpServerStatus) {
     }
 }
 
+/// Signals the state of the startup discovery pass.
+///
+/// Discovery runs in a background task so a slow MCP server cannot delay
+/// readiness, but that leaves a window where the server is already accepting
+/// requests while `tool_index` still holds built-ins only. A tool call landing
+/// in that window used to hard-fail with "Tool not found" for a server that was
+/// seconds away from connecting. Dispatch now awaits this gate first.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiscoveryState {
+    /// No discovery pass has been started — nothing to wait for. Embedders and
+    /// tests that never call `connect_configured` sit here permanently, so
+    /// waiting would stall them for the full timeout on every unknown tool.
+    NotStarted,
+    Running,
+    Complete,
+}
+
+static DISCOVERY: std::sync::OnceLock<tokio::sync::watch::Sender<DiscoveryState>> =
+    std::sync::OnceLock::new();
+
+fn discovery_gate() -> &'static tokio::sync::watch::Sender<DiscoveryState> {
+    DISCOVERY.get_or_init(|| tokio::sync::watch::channel(DiscoveryState::NotStarted).0)
+}
+
+/// Mark the startup discovery pass as in flight. Call before spawning it, so a
+/// request arriving during the window knows to wait rather than fail fast.
+pub fn mark_discovery_started() {
+    let _ = discovery_gate().send(DiscoveryState::Running);
+}
+
+/// Mark startup MCP discovery as complete, releasing any waiters.
+pub fn mark_discovery_complete() {
+    let _ = discovery_gate().send(DiscoveryState::Complete);
+}
+
+/// Wait until startup MCP discovery finishes, or `timeout` elapses.
+///
+/// Returns immediately if discovery has already completed or was never started.
+/// Returns `false` on timeout, which is not fatal — the caller proceeds and
+/// reports the tool as missing.
+pub async fn wait_for_discovery(timeout: std::time::Duration) -> bool {
+    await_gate(discovery_gate().subscribe(), timeout).await
+}
+
+/// Wait for `rx` to leave the `Running` state, or `timeout` to elapse. Split
+/// from [`wait_for_discovery`] so tests can drive a private channel — the real
+/// gate is process-global, so latching it in a test would leak into every test
+/// that ran afterwards.
+async fn await_gate(
+    mut rx: tokio::sync::watch::Receiver<DiscoveryState>,
+    timeout: std::time::Duration,
+) -> bool {
+    if *rx.borrow() != DiscoveryState::Running {
+        return true;
+    }
+    tokio::time::timeout(timeout, async move {
+        // `changed()` errors only if the sender is dropped; the real sender is
+        // 'static so that cannot happen in practice.
+        while rx.changed().await.is_ok() {
+            if *rx.borrow() != DiscoveryState::Running {
+                return;
+            }
+        }
+    })
+    .await
+    .is_ok()
+}
+
 /// Connect every configured MCP server, discover its tools, and return plugins
 /// ready for registration. One broken server does not disable the others.
 pub async fn connect_configured(settings: &AppSettings) -> Vec<Box<dyn Plugin>> {
@@ -1040,6 +1108,46 @@ mod tests {
             }
             _ => panic!("valid callback was rejected"),
         }
+    }
+
+    #[tokio::test]
+    async fn wait_for_discovery_blocks_until_marked_then_returns_immediately() {
+        // Regression: MCP discovery runs in a background task while the server
+        // already accepts requests, so a tool call landing in that window used
+        // to hard-fail with "Tool not found" for a server that connected
+        // seconds later. Dispatch must be able to wait the window out.
+        //
+        // The gate is process-global, so this drives it via a private receiver
+        // rather than the real one. Latching the real gate here would let
+        // whichever test ran first decide the outcome for every later test.
+        let (tx, rx) = tokio::sync::watch::channel(super::DiscoveryState::NotStarted);
+
+        // Never started: nothing to wait for, so callers must not block at all.
+        assert!(
+            super::await_gate(rx.clone(), std::time::Duration::ZERO).await,
+            "wait must return immediately when discovery was never started"
+        );
+
+        // In flight: a short wait must time out rather than pass.
+        tx.send(super::DiscoveryState::Running).unwrap();
+        assert!(
+            !super::await_gate(rx.clone(), std::time::Duration::from_millis(50)).await,
+            "wait must report timeout while discovery is still running"
+        );
+
+        // A waiter parked mid-flight is released by completion.
+        let parked = tokio::spawn(super::await_gate(
+            rx.clone(),
+            std::time::Duration::from_secs(5),
+        ));
+        tx.send(super::DiscoveryState::Complete).unwrap();
+        assert!(
+            parked.await.unwrap(),
+            "waiter must be released, not time out"
+        );
+
+        // Once complete the gate stays open, so later calls never block.
+        assert!(super::await_gate(rx, std::time::Duration::ZERO).await);
     }
 
     #[tokio::test]
