@@ -129,6 +129,38 @@ async fn handle_a2a_request(
             json_response(&statuses)
         }
 
+        // Reconnect one MCP server and register its tools into the live
+        // registry. Discovery otherwise runs only at startup, so a server
+        // authorized afterwards would stay invisible until a restart.
+        ("POST", path) if path.starts_with("/mcp/reconnect/") => {
+            let name = path.trim_start_matches("/mcp/reconnect/");
+            if name.is_empty() {
+                return LiveResponse::text(
+                    "400 Bad Request",
+                    "missing MCP server name".to_string(),
+                );
+            }
+            let settings = state.adapter.settings.read().await.clone();
+            match crate::mcp::reconnect_server(&settings, name).await {
+                Ok(plugins) => {
+                    let tool_count = plugins.len();
+                    let mut pm = state.adapter.plugin_manager.write().await;
+                    for plugin in plugins {
+                        pm.register_override(plugin);
+                    }
+                    json_response(&serde_json::json!({
+                        "connected": true,
+                        "toolCount": tool_count,
+                    }))
+                }
+                Err(error) => json_response(&serde_json::json!({
+                    "connected": false,
+                    "toolCount": 0,
+                    "error": error,
+                })),
+            }
+        }
+
         // JSON-RPC 2.0 endpoint — the single write route.
         ("POST", "/") => {
             let body = read_body(request);
@@ -361,6 +393,47 @@ tags: route, a2a
         let parsed: std::collections::HashMap<String, crate::mcp::McpServerStatus> =
             serde_json::from_str(&authorized.body).expect("status body should be a JSON map");
         assert!(parsed.is_empty());
+    }
+
+    /// The reconnect route mutates the live plugin registry, so it must be
+    /// unreachable without the bearer token.
+    #[tokio::test]
+    async fn mcp_reconnect_route_requires_bearer_token() {
+        let state = test_server_state();
+
+        let unauthorized = handle_a2a_request(
+            &state,
+            "POST",
+            "/mcp/reconnect/whatever",
+            "POST /mcp/reconnect/whatever HTTP/1.1\r\n\r\n",
+        )
+        .await;
+        assert_eq!(unauthorized.status, "401 Unauthorized");
+    }
+
+    /// An unknown server must report the failure in-band rather than 500ing,
+    /// so the CLI can surface the reason after a login.
+    #[tokio::test]
+    async fn mcp_reconnect_unknown_server_reports_error() {
+        let state = test_server_state();
+
+        let response = handle_a2a_request(
+            &state,
+            "POST",
+            "/mcp/reconnect/not-configured",
+            "POST /mcp/reconnect/not-configured HTTP/1.1\r\nAuthorization: Bearer test-token\r\n\r\n",
+        )
+        .await;
+        assert_eq!(response.status, "200 OK");
+        let body: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+        assert_eq!(body["connected"], false);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("not configured"),
+            "expected the reason to name the missing configuration, got {body}"
+        );
     }
 
     #[tokio::test]

@@ -265,6 +265,27 @@ pub fn probe_health(base_url: &str) -> Health {
 /// plain HTTP on loopback, so the CLI needs no blocking HTTP client. `token`,
 /// when present, is sent as a Bearer credential for authenticated routes.
 pub fn http_get(base_url: &str, path: &str, token: Option<&str>) -> Result<String, String> {
+    http_request("GET", base_url, path, token, Duration::from_secs(5))
+}
+
+/// `POST {base_url}{path}` with an empty body. Separate timeout because the
+/// backend may perform a full MCP handshake before responding.
+pub fn http_post(
+    base_url: &str,
+    path: &str,
+    token: Option<&str>,
+    timeout: Duration,
+) -> Result<String, String> {
+    http_request("POST", base_url, path, token, timeout)
+}
+
+fn http_request(
+    method: &str,
+    base_url: &str,
+    path: &str,
+    token: Option<&str>,
+    timeout: Duration,
+) -> Result<String, String> {
     let trimmed = base_url.trim_end_matches('/');
     let without_scheme = trimmed
         .strip_prefix("http://")
@@ -282,14 +303,17 @@ pub fn http_get(base_url: &str, path: &str, token: Option<&str>) -> Result<Strin
         .ok_or_else(|| format!("cannot resolve {connect_host}:{port}"))?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(600))
         .map_err(|e| format!("connect {connect_host}:{port}: {e}"))?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
 
     let auth = token
         .map(|t| format!("Authorization: Bearer {t}\r\n"))
         .unwrap_or_default();
-    let req =
-        format!("GET {path} HTTP/1.0\r\nHost: {host}\r\n{auth}Connection: close\r\n\r\n");
+    // HTTP/1.0 + Connection: close lets the body be read to EOF, so no
+    // chunked-encoding or content-length parsing is needed here.
+    let req = format!(
+        "{method} {path} HTTP/1.0\r\nHost: {host}\r\n{auth}Content-Length: 0\r\nConnection: close\r\n\r\n"
+    );
     stream
         .write_all(req.as_bytes())
         .map_err(|e| format!("write request: {e}"))?;

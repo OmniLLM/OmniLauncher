@@ -5,7 +5,7 @@
 //! plugin runtime dependencies) should also be manageable from the binary so
 //! `make` can stay build/install-only.
 
-use crate::cli::render::Output;
+use crate::cli::render::{Output, Status};
 use omnilauncher_lib::{
     plugins::plugin_manager_cmd, provider_caps, AppSettings, Provider, ProviderKind, SkillInfo,
     SkillManager,
@@ -98,6 +98,46 @@ fn fetch_mcp_statuses(
     serde_json::from_str(&body).ok()
 }
 
+/// Widest a TARGET cell may render before eliding. Keeps the STATUS column on
+/// screen for the long `mcp.blz.dev/mcp/<name>` URLs on an 80-column terminal.
+const TARGET_WIDTH: usize = 44;
+
+/// Ask the backend to reconnect one server after an interactive login.
+/// `None` means the backend is not reachable (so there is nothing to refresh);
+/// `Some(Err)` means it tried and failed.
+fn reconnect_mcp_server(
+    settings: &omnilauncher_lib::settings::AppSettings,
+    name: &str,
+) -> Option<Result<usize, String>> {
+    let token = settings
+        .a2a_token
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())?;
+    let url = format!("http://127.0.0.1:{}", settings.a2a_port);
+    // A cold MCP handshake (TLS + OAuth refresh + tool listing) is well past
+    // the default read timeout, so allow the backend's full connect window.
+    let body = super::process::http_post(
+        &url,
+        &format!("/mcp/reconnect/{name}"),
+        Some(token),
+        std::time::Duration::from_secs(70),
+    )
+    .ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
+    if parsed.get("connected").and_then(|v| v.as_bool()) == Some(true) {
+        Some(Ok(parsed
+            .get("toolCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize))
+    } else {
+        Some(Err(parsed
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error")
+            .to_string()))
+    }
+}
+
 /// Dispatch `ol mcp ...`.
 pub fn mcp(out: &Output, args: &[String]) -> i32 {
     let settings = omnilauncher_lib::load_settings();
@@ -109,12 +149,19 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
         Some("list" | "ls") => {
             if settings.mcp_servers.is_empty() {
                 out.info("no MCP servers configured");
-            } else {
-                // Connectivity lives in the backend process, not here. When it
-                // is down we show config only rather than implying everything
-                // is disconnected.
-                let statuses = fetch_mcp_statuses(&settings);
-                for (name, config) in &settings.mcp_servers {
+                return 0;
+            }
+            // Connectivity lives in the backend process, not here. When it is
+            // down we show config only rather than implying everything is
+            // disconnected.
+            let statuses = fetch_mcp_statuses(&settings);
+
+            // Build every cell first so column widths can be measured from
+            // real content instead of guessed.
+            let rows: Vec<(String, String, String, Status, String)> = settings
+                .mcp_servers
+                .iter()
+                .map(|(name, config)| {
                     // stdio servers have no URL; show the command line instead
                     // so `list` identifies every server the same way.
                     let target = if config.transport_type.eq_ignore_ascii_case("stdio") {
@@ -124,49 +171,81 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
                     } else {
                         config.url.clone()
                     };
-                    let status = statuses.as_ref().map(|map| match map.get(name) {
-                        Some(status) if status.connected => {
-                            format!("connected ({} tools)", status.tool_count)
+                    let (state, status) = match statuses.as_ref().map(|map| map.get(name)) {
+                        None => (Status::Down, String::new()),
+                        Some(Some(status)) if status.connected => (
+                            Status::Up,
+                            format!("connected ({} tools)", status.tool_count),
+                        ),
+                        Some(Some(status)) if status.needs_login => {
+                            (Status::Error, "auth required".to_string())
                         }
-                        Some(status) if status.needs_login => {
-                            "not connected — auth required".to_string()
-                        }
-                        Some(_) => "not connected".to_string(),
+                        Some(Some(_)) => (Status::Error, "not connected".to_string()),
                         // Configured but absent from the backend's map: it has
                         // not attempted this server since the config changed.
-                        None => "unknown".to_string(),
-                    });
+                        Some(None) => (Status::Down, "unknown".to_string()),
+                    };
+                    (
+                        name.clone(),
+                        config.transport_type.clone(),
+                        truncate(&target, TARGET_WIDTH),
+                        state,
+                        status,
+                    )
+                })
+                .collect();
+
+            let name_width = rows.iter().map(|r| r.0.len()).max().unwrap_or(4).max(4);
+            let type_width = rows.iter().map(|r| r.1.len()).max().unwrap_or(4).max(4);
+            let target_width = rows
+                .iter()
+                .map(|r| r.2.chars().count())
+                .max()
+                .unwrap_or(6)
+                .max(6);
+
+            let show_status = statuses.is_some();
+            let header = if show_status {
+                format!(
+                    "{:<name_width$}  {:<type_width$}  {:<target_width$}  {}",
+                    "NAME", "TYPE", "TARGET", "STATUS"
+                )
+            } else {
+                format!(
+                    "{:<name_width$}  {:<type_width$}  {}",
+                    "NAME", "TYPE", "TARGET"
+                )
+            };
+            println!("{}", out.dim(&header));
+
+            for (name, transport, target, state, status) in &rows {
+                if show_status {
                     println!(
-                        "{:<24} {:<6} {}{}{}",
+                        "{:<name_width$}  {:<type_width$}  {:<target_width$}  {} {}",
                         name,
-                        config.transport_type,
+                        transport,
                         target,
-                        if config.oauth.is_some() {
-                            "  oauth"
-                        } else {
-                            ""
-                        },
-                        status
-                            .map(|status| format!("  {status}"))
-                            .unwrap_or_default(),
+                        out.glyph(*state),
+                        status,
+                    );
+                } else {
+                    println!(
+                        "{:<name_width$}  {:<type_width$}  {}",
+                        name, transport, target
                     );
                 }
-                if statuses.is_none() {
-                    out.info("backend not running — connection status unavailable");
-                } else {
-                    let needs_login: Vec<&String> = settings
-                        .mcp_servers
-                        .keys()
-                        .filter(|name| {
-                            statuses
-                                .as_ref()
-                                .and_then(|map| map.get(*name))
-                                .is_some_and(|status| status.needs_login)
-                        })
-                        .collect();
-                    for name in needs_login {
-                        out.info(&format!("run `ol mcp login {name}` to authorize"));
-                    }
+            }
+
+            if !show_status {
+                out.info("backend not running — connection status unavailable");
+            } else {
+                for name in settings.mcp_servers.keys().filter(|name| {
+                    statuses
+                        .as_ref()
+                        .and_then(|map| map.get(*name))
+                        .is_some_and(|status| status.needs_login)
+                }) {
+                    out.info(&format!("run `ol mcp login {name}` to authorize"));
                 }
             }
             0
@@ -195,6 +274,23 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
             match result {
                 Ok(message) => {
                     out.success(&message);
+                    // A fresh authorization is useless until the backend
+                    // reconnects: MCP discovery runs only at startup, so
+                    // without this the server stays "not connected" until a
+                    // manual restart.
+                    if action == "login" {
+                        match reconnect_mcp_server(&settings, name) {
+                            Some(Ok(tool_count)) => out.success(&format!(
+                                "reconnected — {tool_count} tools now available"
+                            )),
+                            Some(Err(error)) => out.info(&format!(
+                                "authorized, but reconnect failed: {error}"
+                            )),
+                            None => out.info(
+                                "backend not running — tools load on next start",
+                            ),
+                        }
+                    }
                     0
                 }
                 Err(error) => {
@@ -421,16 +517,84 @@ fn mcp_show(out: &Output, name: Option<&String>) -> i32 {
         out.failure(&format!("MCP server '{name}' is not configured"));
         return 1;
     };
-    match serde_json::to_string_pretty(&config.masked_for_display()) {
-        Ok(text) => {
-            println!("{text}");
-            0
+    // `--json` keeps the raw config for scripting; the default view is a
+    // field list, since pretty-printed JSON buries the few facts a human is
+    // usually after (where it points, whether it is connected).
+    if out.json {
+        return match serde_json::to_string_pretty(&config.masked_for_display()) {
+            Ok(text) => {
+                println!("{text}");
+                0
+            }
+            Err(error) => {
+                out.failure(&format!("failed to render config: {error}"));
+                1
+            }
+        };
+    }
+
+    let masked = config.masked_for_display();
+    let mut fields: Vec<(&str, String)> = vec![("name", name.clone())];
+    fields.push(("type", masked.transport_type.clone()));
+    if masked.transport_type.eq_ignore_ascii_case("stdio") {
+        let mut command = vec![masked.command.clone()];
+        command.extend(masked.args.iter().cloned());
+        fields.push(("command", command.join(" ")));
+        if !masked.env.is_empty() {
+            for (key, value) in &masked.env {
+                fields.push(("env", format!("{key}={value}")));
+            }
         }
-        Err(error) => {
-            out.failure(&format!("failed to render config: {error}"));
-            1
+    } else {
+        fields.push(("url", masked.url.clone()));
+        for (key, value) in &masked.headers {
+            fields.push(("header", format!("{key}={value}")));
         }
     }
+    match &masked.oauth {
+        Some(oauth) => {
+            fields.push((
+                "oauth",
+                if oauth.client_id.trim().is_empty() {
+                    "configured (no client id)".to_string()
+                } else {
+                    format!("client {}", oauth.client_id)
+                },
+            ));
+            if !oauth.scopes.is_empty() {
+                fields.push(("scopes", oauth.scopes.join(" ")));
+            }
+        }
+        None => fields.push(("oauth", "none — registers on first login".to_string())),
+    }
+
+    let statuses = fetch_mcp_statuses(&settings);
+    match statuses.as_ref().map(|map| map.get(name)) {
+        None => fields.push(("status", "unknown (backend not running)".to_string())),
+        Some(Some(status)) if status.connected => {
+            fields.push(("status", format!("connected ({} tools)", status.tool_count)))
+        }
+        Some(Some(status)) => {
+            fields.push((
+                "status",
+                if status.needs_login {
+                    "not connected — auth required".to_string()
+                } else {
+                    "not connected".to_string()
+                },
+            ));
+            if let Some(error) = &status.error {
+                fields.push(("error", error.clone()));
+            }
+        }
+        Some(None) => fields.push(("status", "unknown".to_string())),
+    }
+
+    let label_width = fields.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    for (label, value) in &fields {
+        println!("{}  {}", out.dim(&format!("{label:>label_width$}")), value);
+    }
+    0
 }
 
 /// Dispatch `ol skills ...`.
@@ -1920,4 +2084,24 @@ fn truncate(s: &str, max: usize) -> String {
     let mut out = s.chars().take(max - 1).collect::<String>();
     out.push('…');
     out
+}
+
+#[cfg(test)]
+mod mcp_display_tests {
+    /// Long `mcp.blz.dev/mcp/<name>` URLs must elide rather than push the
+    /// STATUS column off an 80-column terminal.
+    #[test]
+    fn long_targets_elide_to_the_column_width() {
+        let url = "https://mcp.blz.dev/mcp/confluence-opscenter-with-a-very-long-suffix";
+        let rendered = super::truncate(url, super::TARGET_WIDTH);
+        assert_eq!(rendered.chars().count(), super::TARGET_WIDTH);
+        assert!(rendered.ends_with('…'));
+    }
+
+    /// Short targets must be left exactly as-is, with no stray ellipsis.
+    #[test]
+    fn short_targets_are_unchanged() {
+        let url = "https://learn.microsoft.com/api/mcp";
+        assert_eq!(super::truncate(url, super::TARGET_WIDTH), url);
+    }
 }

@@ -788,57 +788,90 @@ fn record_status(name: &str, status: McpServerStatus) {
 pub async fn connect_configured(settings: &AppSettings) -> Vec<Box<dyn Plugin>> {
     let mut plugins = Vec::new();
     for (name, config) in &settings.mcp_servers {
-        let connection = tokio::time::timeout(
-            std::time::Duration::from_secs(60),
-            connect_one(name, config),
-        )
-        .await;
-        match connection {
-            Ok(Ok(mut discovered)) => {
-                log::info!(
-                    "mcp: connected server '{}' and discovered {} tools",
-                    name,
-                    discovered.len()
-                );
-                record_status(
-                    name,
-                    McpServerStatus {
-                        connected: true,
-                        tool_count: discovered.len(),
-                        error: None,
-                        needs_login: false,
-                    },
-                );
-                plugins.append(&mut discovered);
-            }
-            Ok(Err(error)) => {
-                log::warn!("mcp: {error}");
-                record_status(
-                    name,
-                    McpServerStatus {
-                        connected: false,
-                        tool_count: 0,
-                        needs_login: is_auth_failure(&error),
-                        error: Some(error),
-                    },
-                );
-            }
-            Err(_) => {
-                let error = format!("server '{name}' connection timed out after 60s");
-                log::warn!("mcp: {error}");
-                record_status(
-                    name,
-                    McpServerStatus {
-                        connected: false,
-                        tool_count: 0,
-                        error: Some(error),
-                        needs_login: false,
-                    },
-                );
-            }
-        }
+        plugins.append(&mut connect_and_record(name, config).await);
     }
     plugins
+}
+
+/// Reconnect a single configured server, replacing its recorded status. Used
+/// after an interactive `ol mcp login` so a newly authorized server joins the
+/// running backend without a restart — discovery otherwise runs only at
+/// startup, leaving any later authorization invisible until then.
+pub async fn reconnect_server(
+    settings: &AppSettings,
+    server_name: &str,
+) -> Result<Vec<Box<dyn Plugin>>, String> {
+    let config = settings
+        .mcp_servers
+        .get(server_name)
+        .ok_or_else(|| format!("MCP server '{server_name}' is not configured"))?;
+    let plugins = connect_and_record(server_name, config).await;
+    if plugins.is_empty() {
+        // `connect_and_record` already stored the reason; surface it so the
+        // caller reports the real failure rather than a bare "0 tools".
+        let reason = server_statuses()
+            .get(server_name)
+            .and_then(|status| status.error.clone())
+            .unwrap_or_else(|| format!("MCP server '{server_name}' returned no tools"));
+        return Err(reason);
+    }
+    Ok(plugins)
+}
+
+/// Connect one server, recording the outcome for the status route. Shared by
+/// startup discovery and single-server reconnect so both report identically.
+async fn connect_and_record(name: &str, config: &McpServerConfig) -> Vec<Box<dyn Plugin>> {
+    let connection = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        connect_one(name, config),
+    )
+    .await;
+    match connection {
+        Ok(Ok(discovered)) => {
+            log::info!(
+                "mcp: connected server '{}' and discovered {} tools",
+                name,
+                discovered.len()
+            );
+            record_status(
+                name,
+                McpServerStatus {
+                    connected: true,
+                    tool_count: discovered.len(),
+                    error: None,
+                    needs_login: false,
+                },
+            );
+            discovered
+        }
+        Ok(Err(error)) => {
+            log::warn!("mcp: {error}");
+            record_status(
+                name,
+                McpServerStatus {
+                    connected: false,
+                    tool_count: 0,
+                    needs_login: is_auth_failure(&error),
+                    error: Some(error),
+                },
+            );
+            Vec::new()
+        }
+        Err(_) => {
+            let error = format!("server '{name}' connection timed out after 60s");
+            log::warn!("mcp: {error}");
+            record_status(
+                name,
+                McpServerStatus {
+                    connected: false,
+                    tool_count: 0,
+                    error: Some(error),
+                    needs_login: false,
+                },
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// Whether a connection error means "authorize this server" rather than a
