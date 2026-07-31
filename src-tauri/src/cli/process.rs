@@ -260,6 +260,62 @@ pub fn probe_health(base_url: &str) -> Health {
     }
 }
 
+/// Issue `GET {base_url}{path}` over a plain TCP socket and return the response
+/// body on 2xx. Shares `probe_health`'s rationale: the local backend speaks
+/// plain HTTP on loopback, so the CLI needs no blocking HTTP client. `token`,
+/// when present, is sent as a Bearer credential for authenticated routes.
+pub fn http_get(base_url: &str, path: &str, token: Option<&str>) -> Result<String, String> {
+    let trimmed = base_url.trim_end_matches('/');
+    let without_scheme = trimmed
+        .strip_prefix("http://")
+        .ok_or_else(|| "only plain http:// backend URLs are supported".to_string())?;
+    let (host, port) = match without_scheme.split_once(':') {
+        Some((h, p)) => (h, p.parse::<u16>().unwrap_or(80)),
+        None => (without_scheme, 80),
+    };
+    let connect_host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
+
+    let addr = (connect_host, port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut it| it.next())
+        .ok_or_else(|| format!("cannot resolve {connect_host}:{port}"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(600))
+        .map_err(|e| format!("connect {connect_host}:{port}: {e}"))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+
+    let auth = token
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
+    let req =
+        format!("GET {path} HTTP/1.0\r\nHost: {host}\r\n{auth}Connection: close\r\n\r\n");
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("write request: {e}"))?;
+    let mut buf = String::new();
+    if stream.read_to_string(&mut buf).is_err() && buf.is_empty() {
+        return Err("empty response from backend".to_string());
+    }
+
+    let status = buf
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(|| "malformed response from backend".to_string())?;
+    if !(200..300).contains(&status) {
+        return Err(format!("backend returned HTTP {status}"));
+    }
+    // Split headers from body at the blank line; tolerate bare-LF separators.
+    let body = buf
+        .split_once("\r\n\r\n")
+        .or_else(|| buf.split_once("\n\n"))
+        .map(|(_, body)| body.to_string())
+        .unwrap_or_default();
+    Ok(body)
+}
+
 /// Poll `probe_health` until it returns `Ok` or `timeout` elapses.
 pub fn wait_for_health(base_url: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;

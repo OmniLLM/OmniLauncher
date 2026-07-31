@@ -120,6 +120,15 @@ async fn handle_a2a_request(
             json_response(&card)
         }
 
+        // MCP connection status. The CLI runs in a separate process from the
+        // backend that owns the MCP sessions, so `ol mcp list` cannot observe
+        // connectivity on its own; this is how it learns which configured
+        // servers actually connected.
+        ("GET", "/mcp/status") => {
+            let statuses = crate::mcp::server_statuses();
+            json_response(&statuses)
+        }
+
         // JSON-RPC 2.0 endpoint — the single write route.
         ("POST", "/") => {
             let body = read_body(request);
@@ -326,6 +335,32 @@ tags: route, a2a
         let resp =
             handle_a2a_request(&state, "OPTIONS", "/anything", "OPTIONS / HTTP/1.1\r\n\r\n").await;
         assert_eq!(resp.status, "204 No Content");
+    }
+
+    #[tokio::test]
+    async fn mcp_status_route_requires_bearer_token_and_returns_json_map() {
+        let state = test_server_state();
+
+        // The status map can name configured servers and their failure
+        // reasons, so it must not be readable without the token.
+        let unauthorized =
+            handle_a2a_request(&state, "GET", "/mcp/status", "GET /mcp/status HTTP/1.1\r\n\r\n")
+                .await;
+        assert_eq!(unauthorized.status, "401 Unauthorized");
+
+        let authorized = handle_a2a_request(
+            &state,
+            "GET",
+            "/mcp/status",
+            "GET /mcp/status HTTP/1.1\r\nAuthorization: Bearer test-token\r\n\r\n",
+        )
+        .await;
+        assert_eq!(authorized.status, "200 OK");
+        // No MCP discovery runs in tests, so the map is empty but must still be
+        // a well-formed object the CLI can deserialize.
+        let parsed: std::collections::HashMap<String, crate::mcp::McpServerStatus> =
+            serde_json::from_str(&authorized.body).expect("status body should be a JSON map");
+        assert!(parsed.is_empty());
     }
 
     #[tokio::test]

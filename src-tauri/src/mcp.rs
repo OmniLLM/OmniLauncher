@@ -743,6 +743,46 @@ pub async fn logout(settings: &AppSettings, server_name: &str) -> Result<String,
     Ok(format!("cleared MCP OAuth credentials for '{server_name}'"))
 }
 
+/// Outcome of the most recent connection attempt for one MCP server. Recorded
+/// so `ol mcp list` can distinguish "configured" from "actually connected" —
+/// `connect_configured` previously only logged failures, leaving the CLI (a
+/// separate process) with no way to tell the two apart.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatus {
+    pub connected: bool,
+    pub tool_count: usize,
+    /// Present only when `connected` is false: why the attempt failed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error: Option<String>,
+    /// True when the failure is specifically a missing/expired authorization,
+    /// so callers can suggest `ol mcp login` rather than a generic message.
+    pub needs_login: bool,
+}
+
+/// Last known per-server connection status, keyed by server name. Written once
+/// per discovery pass by `connect_configured` and read by the status route.
+static SERVER_STATUS: std::sync::OnceLock<std::sync::RwLock<HashMap<String, McpServerStatus>>> =
+    std::sync::OnceLock::new();
+
+fn status_map() -> &'static std::sync::RwLock<HashMap<String, McpServerStatus>> {
+    SERVER_STATUS.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+/// Snapshot of every server's last connection outcome.
+pub fn server_statuses() -> HashMap<String, McpServerStatus> {
+    status_map()
+        .read()
+        .map(|map| map.clone())
+        .unwrap_or_default()
+}
+
+fn record_status(name: &str, status: McpServerStatus) {
+    if let Ok(mut map) = status_map().write() {
+        map.insert(name.to_string(), status);
+    }
+}
+
 /// Connect every configured MCP server, discover its tools, and return plugins
 /// ready for registration. One broken server does not disable the others.
 pub async fn connect_configured(settings: &AppSettings) -> Vec<Box<dyn Plugin>> {
@@ -760,13 +800,56 @@ pub async fn connect_configured(settings: &AppSettings) -> Vec<Box<dyn Plugin>> 
                     name,
                     discovered.len()
                 );
+                record_status(
+                    name,
+                    McpServerStatus {
+                        connected: true,
+                        tool_count: discovered.len(),
+                        error: None,
+                        needs_login: false,
+                    },
+                );
                 plugins.append(&mut discovered);
             }
-            Ok(Err(error)) => log::warn!("mcp: {error}"),
-            Err(_) => log::warn!("mcp: server '{name}' connection timed out after 60s"),
+            Ok(Err(error)) => {
+                log::warn!("mcp: {error}");
+                record_status(
+                    name,
+                    McpServerStatus {
+                        connected: false,
+                        tool_count: 0,
+                        needs_login: is_auth_failure(&error),
+                        error: Some(error),
+                    },
+                );
+            }
+            Err(_) => {
+                let error = format!("server '{name}' connection timed out after 60s");
+                log::warn!("mcp: {error}");
+                record_status(
+                    name,
+                    McpServerStatus {
+                        connected: false,
+                        tool_count: 0,
+                        error: Some(error),
+                        needs_login: false,
+                    },
+                );
+            }
         }
     }
     plugins
+}
+
+/// Whether a connection error means "authorize this server" rather than a
+/// transport or configuration fault. Matched on the message because the
+/// underlying rmcp error is stringified before it reaches us.
+fn is_auth_failure(error: &str) -> bool {
+    let lowered = error.to_lowercase();
+    lowered.contains("auth required")
+        || lowered.contains("requires oauth authorization")
+        || lowered.contains("unauthorized")
+        || lowered.contains("invalid_token")
 }
 
 #[cfg(test)]
@@ -827,6 +910,36 @@ mod tests {
     #[test]
     fn absent_scopes_everywhere_yields_empty() {
         assert!(super::resolve_scopes(&[], &[]).is_empty());
+    }
+
+    /// The messages these match are exactly what `connect_one` produces for an
+    /// unauthorized server; misclassifying them would send users chasing a
+    /// transport fault instead of running `ol mcp login`.
+    #[test]
+    fn auth_failures_are_recognized_for_login_hint() {
+        assert!(super::is_auth_failure(
+            "MCP server 'x' initialization failed at https://h/mcp/x: \
+             Transport error: Auth required, when send initialize request"
+        ));
+        assert!(super::is_auth_failure(
+            "MCP server 'x' requires OAuth authorization; run `ol mcp login x`"
+        ));
+        assert!(super::is_auth_failure("HTTP 401 Unauthorized"));
+        assert!(super::is_auth_failure(
+            r#"Bearer error="invalid_token", error_description="..."#
+        ));
+    }
+
+    /// Transport and configuration faults must not suggest logging in.
+    #[test]
+    fn non_auth_failures_do_not_suggest_login() {
+        assert!(!super::is_auth_failure(
+            "MCP server 'x' connection timed out after 60s"
+        ));
+        assert!(!super::is_auth_failure(
+            "MCP server 'x' uses unsupported type 'grpc'"
+        ));
+        assert!(!super::is_auth_failure("dns error: name not resolved"));
     }
     use std::sync::Arc;
 

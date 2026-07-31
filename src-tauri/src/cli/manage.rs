@@ -86,6 +86,18 @@ pub fn settings(out: &Output, args: &[String]) -> i32 {
     }
 }
 
+/// Ask the running backend which MCP servers are connected. Returns `None`
+/// when the backend is unreachable or unauthenticated, so callers can present
+/// "unavailable" rather than misreporting every server as disconnected.
+fn fetch_mcp_statuses(
+    settings: &omnilauncher_lib::settings::AppSettings,
+) -> Option<std::collections::HashMap<String, omnilauncher_lib::mcp::McpServerStatus>> {
+    let token = settings.a2a_token.as_deref().filter(|t| !t.trim().is_empty())?;
+    let url = format!("http://127.0.0.1:{}", settings.a2a_port);
+    let body = super::process::http_get(&url, "/mcp/status", Some(token)).ok()?;
+    serde_json::from_str(&body).ok()
+}
+
 /// Dispatch `ol mcp ...`.
 pub fn mcp(out: &Output, args: &[String]) -> i32 {
     let settings = omnilauncher_lib::load_settings();
@@ -98,6 +110,10 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
             if settings.mcp_servers.is_empty() {
                 out.info("no MCP servers configured");
             } else {
+                // Connectivity lives in the backend process, not here. When it
+                // is down we show config only rather than implying everything
+                // is disconnected.
+                let statuses = fetch_mcp_statuses(&settings);
                 for (name, config) in &settings.mcp_servers {
                     // stdio servers have no URL; show the command line instead
                     // so `list` identifies every server the same way.
@@ -108,8 +124,20 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
                     } else {
                         config.url.clone()
                     };
+                    let status = statuses.as_ref().map(|map| match map.get(name) {
+                        Some(status) if status.connected => {
+                            format!("connected ({} tools)", status.tool_count)
+                        }
+                        Some(status) if status.needs_login => {
+                            "not connected — auth required".to_string()
+                        }
+                        Some(_) => "not connected".to_string(),
+                        // Configured but absent from the backend's map: it has
+                        // not attempted this server since the config changed.
+                        None => "unknown".to_string(),
+                    });
                     println!(
-                        "{:<24} {:<6} {}{}",
+                        "{:<24} {:<6} {}{}{}",
                         name,
                         config.transport_type,
                         target,
@@ -117,8 +145,28 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
                             "  oauth"
                         } else {
                             ""
-                        }
+                        },
+                        status
+                            .map(|status| format!("  {status}"))
+                            .unwrap_or_default(),
                     );
+                }
+                if statuses.is_none() {
+                    out.info("backend not running — connection status unavailable");
+                } else {
+                    let needs_login: Vec<&String> = settings
+                        .mcp_servers
+                        .keys()
+                        .filter(|name| {
+                            statuses
+                                .as_ref()
+                                .and_then(|map| map.get(*name))
+                                .is_some_and(|status| status.needs_login)
+                        })
+                        .collect();
+                    for name in needs_login {
+                        out.info(&format!("run `ol mcp login {name}` to authorize"));
+                    }
                 }
             }
             0
