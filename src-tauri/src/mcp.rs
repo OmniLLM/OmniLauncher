@@ -639,7 +639,12 @@ pub async fn login(settings: &AppSettings, server_name: &str) -> Result<String, 
         persist_registered_client(server_name, &effective)?;
         effective
     } else {
-        let oauth = oauth.expect("needs_registration returns true for None");
+        let mut oauth = oauth.expect("needs_registration returns true for None");
+        // A pre-configured client with no scopes would otherwise request none,
+        // and an authorization server that grants only what is asked for
+        // (Slack) issues a token that cannot call a single tool. Fall back to
+        // the advertised scopes, exactly as the registration path does.
+        oauth.scopes = resolve_scopes(&oauth.scopes, &metadata_scopes);
         let mut client_config = OAuthClientConfig::new(oauth.client_id.clone(), &redirect_uri)
             .with_scopes(oauth.scopes.clone());
         if let Some(secret) = oauth_client_secret(&oauth) {
@@ -943,6 +948,22 @@ mod tests {
     #[test]
     fn absent_scopes_everywhere_yields_empty() {
         assert!(super::resolve_scopes(&[], &[]).is_empty());
+    }
+
+    /// Regression: a pre-configured client (no dynamic registration) with an
+    /// empty scope list must still fall back to the advertised scopes. Slack
+    /// grants only what is requested, so asking for nothing yields a token
+    /// that cannot call a single tool — the authorization "succeeds" and every
+    /// subsequent connect fails with "Auth required".
+    #[test]
+    fn configured_client_without_scopes_falls_back_to_advertised() {
+        let advertised = vec![
+            "search:read.public".to_string(),
+            "users:read".to_string(),
+            "chat:write".to_string(),
+        ];
+        let configured: Vec<String> = Vec::new();
+        assert_eq!(super::resolve_scopes(&configured, &advertised), advertised);
     }
 
     /// The messages these match are exactly what `connect_one` produces for an
