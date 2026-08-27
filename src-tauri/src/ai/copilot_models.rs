@@ -55,8 +55,8 @@ static COPILOT_MODEL_SHAPES: LazyLock<HashMap<&'static str, CopilotShape>> = Laz
         ("gemini-3.1-pro-preview", Chat),
         ("gemini-3.5-flash", Chat),
         // OpenAI GPT-5 family on Copilot
-        ("gpt-5.4", Chat),      // supports both; prefer chat
-        ("gpt-5-mini", Chat),   // supports both; prefer chat
+        ("gpt-5.4", Chat),    // supports both; prefer chat
+        ("gpt-5-mini", Chat), // supports both; prefer chat
         ("gpt-5.3-codex", Responses),
         ("gpt-5.4-mini", Responses),
         ("gpt-5.5", Responses),
@@ -90,10 +90,7 @@ pub fn is_gpt5_family(model: &str) -> bool {
     let m = model.trim().to_ascii_lowercase();
     // `gpt-5` optionally followed by `.`, `-`, `o`, or end-of-string.
     if let Some(rest) = m.strip_prefix("gpt-5") {
-        rest.is_empty()
-            || rest.starts_with('.')
-            || rest.starts_with('-')
-            || rest.starts_with('o')
+        rest.is_empty() || rest.starts_with('.') || rest.starts_with('-') || rest.starts_with('o')
     } else {
         false
     }
@@ -105,9 +102,9 @@ pub fn is_gpt5_family(model: &str) -> bool {
 pub fn is_reasoning_model(model: &str) -> bool {
     let lower = model.trim().to_ascii_lowercase();
     let o_series = ["o1", "o3", "o4"].iter().any(|p| {
-        lower.strip_prefix(*p).is_some_and(|rest| {
-            rest.is_empty() || rest.starts_with('-') || rest.starts_with('.')
-        })
+        lower
+            .strip_prefix(*p)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('-') || rest.starts_with('.'))
     });
     o_series || is_gpt5_family(&lower)
 }
@@ -188,7 +185,8 @@ pub fn is_unsupported_chat_completions_error(status: u16, body: &str) -> bool {
             }
         }
     }
-    body.to_ascii_lowercase().contains("unsupported_api_for_model")
+    body.to_ascii_lowercase()
+        .contains("unsupported_api_for_model")
 }
 
 #[cfg(test)]
@@ -209,10 +207,16 @@ mod tests {
     fn shape_heuristic_on_cache_miss() {
         // Unknown gpt-5 family → responses (except -mini).
         assert_eq!(select_shape("gpt-5-codex", false), CopilotShape::Responses);
-        assert_eq!(select_shape("gpt-5.9-turbo", false), CopilotShape::Responses);
+        assert_eq!(
+            select_shape("gpt-5.9-turbo", false),
+            CopilotShape::Responses
+        );
         assert_eq!(select_shape("gpt-5.9-mini", false), CopilotShape::Chat);
         // Unknown mai-code-* → responses.
-        assert_eq!(select_shape("mai-code-anything", false), CopilotShape::Responses);
+        assert_eq!(
+            select_shape("mai-code-anything", false),
+            CopilotShape::Responses
+        );
         // Unknown non-family → chat.
         assert_eq!(select_shape("claude-sonnet-9", false), CopilotShape::Chat);
         assert_eq!(select_shape("some-new-model", false), CopilotShape::Chat);
@@ -267,8 +271,7 @@ mod tests {
 
     #[test]
     fn model_not_supported_and_unsupported_api_are_disjoint() {
-        let not_supported =
-            r#"{"error":{"code":"model_not_supported","message":"nope"}}"#;
+        let not_supported = r#"{"error":{"code":"model_not_supported","message":"nope"}}"#;
         let wrong_endpoint =
             r#"{"error":{"code":"unsupported_api_for_model","message":"use /responses"}}"#;
         assert!(is_model_not_supported_error(400, not_supported));
@@ -291,7 +294,10 @@ mod tests {
             400,
             "raw unsupported_api_for_model text"
         ));
-        assert!(!is_unsupported_chat_completions_error(400, "some other 400"));
+        assert!(!is_unsupported_chat_completions_error(
+            400,
+            "some other 400"
+        ));
         assert!(!is_unsupported_chat_completions_error(
             500,
             r#"{"error":{"code":"unsupported_api_for_model"}}"#

@@ -387,9 +387,13 @@ tags: route, a2a
 
         // The status map can name configured servers and their failure
         // reasons, so it must not be readable without the token.
-        let unauthorized =
-            handle_a2a_request(&state, "GET", "/mcp/status", "GET /mcp/status HTTP/1.1\r\n\r\n")
-                .await;
+        let unauthorized = handle_a2a_request(
+            &state,
+            "GET",
+            "/mcp/status",
+            "GET /mcp/status HTTP/1.1\r\n\r\n",
+        )
+        .await;
         assert_eq!(unauthorized.status, "401 Unauthorized");
 
         let authorized = handle_a2a_request(

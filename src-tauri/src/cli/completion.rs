@@ -177,6 +177,7 @@ pub(crate) fn command() -> Command {
         .subcommand(providers_command())
         .subcommand(skills_command())
         .subcommand(plugins_command())
+        .subcommand(mcp_command())
         // ── Completion / help / version ───────────────────────────────────
         .subcommand(
             Command::new("completion")
@@ -190,6 +191,77 @@ pub(crate) fn command() -> Command {
         )
         .subcommand(Command::new("help").about("show help"))
         .subcommand(Command::new("version").about("print version"))
+}
+
+fn mcp_command() -> Command {
+    Command::new("mcp")
+        .about("manage MCP servers")
+        .subcommand(Command::new("list").visible_alias("ls"))
+        .subcommand(
+            Command::new("show")
+                .visible_alias("get")
+                .arg(with_completer(
+                    resource_name_arg("server-name"),
+                    complete_mcp_server_names,
+                )),
+        )
+        .subcommand(
+            Command::new("add")
+                .arg(resource_name_arg("server-name"))
+                .arg(path_arg("url", ValueHint::Url))
+                .args(mcp_config_flags()),
+        )
+        .subcommand(
+            Command::new("update")
+                .visible_alias("set")
+                .arg(with_completer(
+                    resource_name_arg("server-name"),
+                    complete_mcp_server_names,
+                ))
+                .arg(path_arg("url", ValueHint::Url))
+                .args(mcp_config_flags()),
+        )
+        .subcommand(
+            Command::new("remove")
+                .visible_aliases(["rm", "delete"])
+                .arg(with_completer(
+                    resource_name_arg("server-name"),
+                    complete_mcp_server_names,
+                )),
+        )
+        // The positional is optional: a bare `ol mcp login` opens the
+        // interactive selector, and only OAuth-capable servers are offered.
+        .subcommand(Command::new("login").arg(with_completer(
+            resource_name_arg("server-name"),
+            complete_mcp_login_names,
+        )))
+        .subcommand(Command::new("logout").arg(with_completer(
+            resource_name_arg("server-name"),
+            complete_mcp_server_names,
+        )))
+        .subcommand(Command::new("help"))
+}
+
+/// Flags shared by `ol mcp add` and `ol mcp update`.
+fn mcp_config_flags() -> Vec<Arg> {
+    vec![
+        named_arg("type").value_parser(["http", "stdio"]),
+        named_arg("header").action(ArgAction::Append),
+        named_arg("remove-header").action(ArgAction::Append),
+        named_arg("command"),
+        named_arg("arg").action(ArgAction::Append),
+        Arg::new("clear-args")
+            .long("clear-args")
+            .action(ArgAction::SetTrue),
+        named_arg("env").action(ArgAction::Append),
+        named_arg("remove-env").action(ArgAction::Append),
+        named_arg("oauth-client-id"),
+        named_arg("oauth-client-secret-env"),
+        named_arg("oauth-scope").action(ArgAction::Append),
+        Arg::new("no-oauth")
+            .long("no-oauth")
+            .action(ArgAction::SetTrue),
+    ]
 }
 
 fn settings_command() -> Command {
@@ -464,6 +536,40 @@ fn complete_provider_ids(current: &OsStr) -> Vec<CompletionCandidate> {
     };
     let settings = omnilauncher_lib::load_settings();
     candidates(filter_candidates(prefix, provider_ids(&settings)))
+}
+
+/// Every configured MCP server name (the map is already sorted).
+fn mcp_server_names(settings: &AppSettings) -> Vec<String> {
+    settings.mcp_servers.keys().cloned().collect()
+}
+
+/// MCP servers that `ol mcp login` can authorize. Mirrors the runtime filter in
+/// `manage::oauth_login_candidates`: stdio servers have no OAuth flow.
+fn mcp_login_names(settings: &AppSettings) -> Vec<String> {
+    settings
+        .mcp_servers
+        .iter()
+        .filter(|(_, config)| !config.transport_type.eq_ignore_ascii_case("stdio"))
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Completer for configured MCP server names.
+fn complete_mcp_server_names(current: &OsStr) -> Vec<CompletionCandidate> {
+    let Some(prefix) = prefix_str(current) else {
+        return Vec::new();
+    };
+    let settings = omnilauncher_lib::load_settings();
+    candidates(filter_candidates(prefix, mcp_server_names(&settings)))
+}
+
+/// Completer for MCP server names that support `ol mcp login`.
+fn complete_mcp_login_names(current: &OsStr) -> Vec<CompletionCandidate> {
+    let Some(prefix) = prefix_str(current) else {
+        return Vec::new();
+    };
+    let settings = omnilauncher_lib::load_settings();
+    candidates(filter_candidates(prefix, mcp_login_names(&settings)))
 }
 
 /// Completer for known provider model names.
@@ -741,6 +847,60 @@ mod tests {
         for shell in Shell::ALL {
             assert_eq!(print(Some(shell.name())), 0, "{} failed", shell.name());
         }
+    }
+
+    #[test]
+    fn mcp_schema_mirrors_the_runtime_commands() {
+        let mcp = command()
+            .get_subcommands()
+            .find(|c| c.get_name() == "mcp")
+            .cloned()
+            .expect("mcp must be advertised for completion");
+        let names: Vec<&str> = mcp.get_subcommands().map(|c| c.get_name()).collect();
+        for expected in ["list", "show", "add", "update", "remove", "login", "logout"] {
+            assert!(names.contains(&expected), "mcp {expected} missing");
+        }
+    }
+
+    /// `ol mcp login` with no name opens the selector, so completion must not
+    /// mark the positional as required.
+    #[test]
+    fn mcp_login_server_name_is_optional() {
+        let login = command()
+            .get_subcommands()
+            .find(|c| c.get_name() == "mcp")
+            .and_then(|mcp| {
+                mcp.get_subcommands()
+                    .find(|c| c.get_name() == "login")
+                    .cloned()
+            })
+            .expect("mcp login must exist");
+        let arg = login
+            .get_arguments()
+            .find(|a| a.get_id() == "server-name")
+            .expect("login takes a server name");
+        assert!(!arg.is_required_set());
+    }
+
+    #[test]
+    fn mcp_login_candidates_exclude_stdio_servers() {
+        use omnilauncher_lib::settings::McpServerConfig;
+        let mut settings = AppSettings::default();
+        for (name, transport) in [("alpha", "http"), ("beta", "stdio")] {
+            settings.mcp_servers.insert(
+                name.to_string(),
+                McpServerConfig {
+                    transport_type: transport.to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(mcp_server_names(&settings), vec!["alpha", "beta"]);
+        assert_eq!(
+            mcp_login_names(&settings),
+            vec!["alpha"],
+            "stdio servers cannot be logged into"
+        );
     }
 
     #[test]

@@ -35,6 +35,7 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 rand = "0.8"
 clap = "4.5"
+crossterm = "0.29"
 clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 http = "1"
 reqwest13 = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "rustls"] }

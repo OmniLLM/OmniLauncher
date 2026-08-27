@@ -87,6 +87,7 @@ ol providers caps              # custom / github-copilot / azure-foundry capabil
 
 ol mcp list
 ol mcp login slackBlizzard     # one-time browser OAuth; refresh is automatic
+ol mcp login                   # no name: pick one or more servers interactively
 ol mcp logout slackBlizzard
 
 ol skills list
@@ -148,7 +149,12 @@ authorization code + PKCE. Access/refresh tokens are stored separately under
 `~/.config/omnilauncher/mcp-oauth/` with owner-only permissions and refreshed
 automatically. Slack currently advertises confidential OAuth, so keep its client
 secret in the configured environment variable rather than in `settings.json`.
-After adding one, run `ol mcp login <name>` once, then restart the backend.
+After adding one, run `ol mcp login <name>` once; the CLI reconnects the running
+backend for you, and otherwise the tools load on its next start. Running
+`ol mcp login` without a name opens a checklist of the OAuth-capable servers
+(↑/↓ to move, space to toggle, enter to confirm, esc to cancel) and authorizes
+each selected server in turn. It needs a terminal, so scripts and `--json` must
+name the server explicitly.
 
 **stdio servers** use `command`, `args`, and `env`; the child process is spawned
 on connect, layered over the launcher's own environment, and lives as long as
