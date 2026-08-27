@@ -92,7 +92,10 @@ pub fn settings(out: &Output, args: &[String]) -> i32 {
 fn fetch_mcp_statuses(
     settings: &omnilauncher_lib::settings::AppSettings,
 ) -> Option<std::collections::HashMap<String, omnilauncher_lib::mcp::McpServerStatus>> {
-    let token = settings.a2a_token.as_deref().filter(|t| !t.trim().is_empty())?;
+    let token = settings
+        .a2a_token
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())?;
     let url = format!("http://127.0.0.1:{}", settings.a2a_port);
     let body = super::process::http_get(&url, "/mcp/status", Some(token)).ok()?;
     serde_json::from_str(&body).ok()
@@ -136,6 +139,152 @@ fn reconnect_mcp_server(
             .unwrap_or("unknown error")
             .to_string()))
     }
+}
+
+/// Servers that `ol mcp login` can authorize, in the settings' (alphabetical)
+/// order. `stdio` servers are excluded because they run as local child
+/// processes and have no OAuth flow — `mcp::login` rejects them outright.
+///
+/// A missing `oauth` block is *not* disqualifying: those servers can still
+/// register a client dynamically (RFC 7591) during login.
+fn oauth_login_candidates(
+    settings: &omnilauncher_lib::settings::AppSettings,
+) -> Vec<(&str, &omnilauncher_lib::settings::McpServerConfig)> {
+    settings
+        .mcp_servers
+        .iter()
+        .filter(|(_, config)| !config.transport_type.eq_ignore_ascii_case("stdio"))
+        .map(|(name, config)| (name.as_str(), config))
+        .collect()
+}
+
+/// Authorize each named server in turn, then ask the backend to reconnect it.
+///
+/// Logins are strictly sequential: each one opens a browser tab and owns a
+/// loopback callback listener for up to five minutes, so running them
+/// concurrently would leave the user racing several tabs at once.
+///
+/// A failure is reported and the run continues to the next server; the exit
+/// code is 1 if *any* login failed. Reconnect failures are informational only —
+/// the credentials were still obtained.
+fn run_mcp_logins<Login, Reconnect>(
+    out: &Output,
+    names: &[String],
+    mut login: Login,
+    mut reconnect: Reconnect,
+) -> i32
+where
+    Login: FnMut(&str) -> Result<String, String>,
+    Reconnect: FnMut(&str) -> Option<Result<usize, String>>,
+{
+    let multiple = names.len() > 1;
+    let mut failed = false;
+    for (index, name) in names.iter().enumerate() {
+        if multiple {
+            if index > 0 {
+                out.info("");
+            }
+            out.info(&format!("[{}/{}] {name}", index + 1, names.len()));
+        }
+        match login(name) {
+            Ok(message) => {
+                out.success(&message);
+                // A fresh authorization is useless until the backend
+                // reconnects: MCP discovery runs only at startup, so without
+                // this the server stays "not connected" until a manual restart.
+                match reconnect(name) {
+                    Some(Ok(tool_count)) => {
+                        out.success(&format!("reconnected — {tool_count} tools now available"))
+                    }
+                    Some(Err(error)) => {
+                        out.info(&format!("authorized, but reconnect failed: {error}"))
+                    }
+                    None => out.info("backend not running — tools load on next start"),
+                }
+            }
+            Err(error) => {
+                out.failure(&error);
+                failed = true;
+            }
+        }
+    }
+    i32::from(failed)
+}
+
+/// `ol mcp login [server-name]`.
+///
+/// With a name, authorize exactly that server. Without one, show an
+/// interactive checklist of the OAuth-capable servers so several can be
+/// authorized in one pass.
+fn mcp_login(
+    out: &Output,
+    settings: &omnilauncher_lib::settings::AppSettings,
+    args: &[String],
+) -> i32 {
+    let names = match args.first() {
+        Some(name) => vec![name.clone()],
+        None => {
+            // Never block a script on stdin: without a TTY (or under --json,
+            // where a TUI would corrupt the output) this stays a usage error.
+            if out.json || !super::multi_select::is_interactive() {
+                out.failure("usage: ol mcp login <server-name>");
+                return 2;
+            }
+            let candidates = oauth_login_candidates(settings);
+            if candidates.is_empty() {
+                out.failure(if settings.mcp_servers.is_empty() {
+                    "no MCP servers configured — run `ol mcp add <name> <url>` first"
+                } else {
+                    "no MCP servers support login — stdio servers do not use OAuth"
+                });
+                return 1;
+            }
+            let items: Vec<super::multi_select::SelectionItem> = candidates
+                .iter()
+                .map(|(name, config)| super::multi_select::SelectionItem {
+                    label: (*name).to_string(),
+                    hint: truncate(&config.url, TARGET_WIDTH),
+                })
+                .collect();
+            match super::multi_select::select_many("Select MCP servers to authorize:", &items) {
+                Ok(super::multi_select::SelectionOutcome::Selected(indices)) => {
+                    if indices.is_empty() {
+                        out.info("nothing selected");
+                        return 0;
+                    }
+                    indices
+                        .into_iter()
+                        .map(|i| candidates[i].0.to_string())
+                        .collect()
+                }
+                Ok(super::multi_select::SelectionOutcome::Cancelled) => {
+                    out.info("cancelled");
+                    return 0;
+                }
+                Err(error) => {
+                    out.failure(&format!("could not read from the terminal: {error}"));
+                    return 1;
+                }
+            }
+        }
+    };
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            out.failure(&format!("failed to start async runtime: {error}"));
+            return 1;
+        }
+    };
+    run_mcp_logins(
+        out,
+        &names,
+        |name| runtime.block_on(omnilauncher_lib::mcp::login(settings, name)),
+        |name| reconnect_mcp_server(settings, name),
+    )
 }
 
 /// Dispatch `ol mcp ...`.
@@ -250,10 +399,10 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
             }
             0
         }
-        Some("login") | Some("logout") => {
-            let action = args[0].as_str();
+        Some("login") => mcp_login(out, &settings, &args[1..]),
+        Some("logout") => {
             let Some(name) = args.get(1) else {
-                out.failure(&format!("usage: ol mcp {action} <server-name>"));
+                out.failure("usage: ol mcp logout <server-name>");
                 return 2;
             };
             let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -266,31 +415,9 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
                     return 1;
                 }
             };
-            let result = if action == "login" {
-                runtime.block_on(omnilauncher_lib::mcp::login(&settings, name))
-            } else {
-                runtime.block_on(omnilauncher_lib::mcp::logout(&settings, name))
-            };
-            match result {
+            match runtime.block_on(omnilauncher_lib::mcp::logout(&settings, name)) {
                 Ok(message) => {
                     out.success(&message);
-                    // A fresh authorization is useless until the backend
-                    // reconnects: MCP discovery runs only at startup, so
-                    // without this the server stays "not connected" until a
-                    // manual restart.
-                    if action == "login" {
-                        match reconnect_mcp_server(&settings, name) {
-                            Some(Ok(tool_count)) => out.success(&format!(
-                                "reconnected — {tool_count} tools now available"
-                            )),
-                            Some(Err(error)) => out.info(&format!(
-                                "authorized, but reconnect failed: {error}"
-                            )),
-                            None => out.info(
-                                "backend not running — tools load on next start",
-                            ),
-                        }
-                    }
                     0
                 }
                 Err(error) => {
@@ -310,7 +437,7 @@ pub fn mcp(out: &Output, args: &[String]) -> i32 {
             println!("                            [--remove-env K]...");
             println!("  ol mcp update <server-name> [same flags as add; url optional]");
             println!("  ol mcp remove <server-name>");
-            println!("  ol mcp login <server-name>");
+            println!("  ol mcp login [server-name]   (no name: pick several interactively)");
             println!("  ol mcp logout <server-name>");
             0
         }
@@ -590,7 +717,11 @@ fn mcp_show(out: &Output, name: Option<&String>) -> i32 {
         Some(None) => fields.push(("status", "unknown".to_string())),
     }
 
-    let label_width = fields.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    let label_width = fields
+        .iter()
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or(0);
     for (label, value) in &fields {
         println!("{}  {}", out.dim(&format!("{label:>label_width$}")), value);
     }
@@ -2103,5 +2234,156 @@ mod mcp_display_tests {
     fn short_targets_are_unchanged() {
         let url = "https://learn.microsoft.com/api/mcp";
         assert_eq!(super::truncate(url, super::TARGET_WIDTH), url);
+    }
+}
+
+#[cfg(test)]
+mod mcp_login_tests {
+    use super::*;
+    use omnilauncher_lib::settings::{AppSettings, McpServerConfig};
+
+    fn settings_with(servers: &[(&str, &str)]) -> AppSettings {
+        let mut settings = AppSettings::default();
+        for (name, transport) in servers {
+            settings.mcp_servers.insert(
+                (*name).to_string(),
+                McpServerConfig {
+                    transport_type: (*transport).to_string(),
+                    url: format!("https://example.test/{name}"),
+                    ..Default::default()
+                },
+            );
+        }
+        settings
+    }
+
+    #[test]
+    fn candidates_exclude_stdio_servers() {
+        let settings = settings_with(&[("alpha", "http"), ("beta", "stdio"), ("gamma", "HTTP")]);
+        let names: Vec<&str> = oauth_login_candidates(&settings)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(names, vec!["alpha", "gamma"], "stdio has no OAuth flow");
+    }
+
+    /// `type` is matched case-insensitively elsewhere, so `STDIO` must be
+    /// filtered out too rather than offered and then rejected by `mcp::login`.
+    #[test]
+    fn candidates_ignore_transport_case() {
+        let settings = settings_with(&[("alpha", "STDIO")]);
+        assert!(oauth_login_candidates(&settings).is_empty());
+    }
+
+    /// Servers without an `oauth` block still register a client dynamically,
+    /// so they must remain selectable.
+    #[test]
+    fn candidates_include_servers_without_oauth_config() {
+        let settings = settings_with(&[("alpha", "http")]);
+        assert!(settings.mcp_servers["alpha"].oauth.is_none());
+        assert_eq!(oauth_login_candidates(&settings).len(), 1);
+    }
+
+    #[test]
+    fn candidates_are_alphabetical() {
+        let settings = settings_with(&[("zeta", "http"), ("alpha", "http")]);
+        let names: Vec<&str> = oauth_login_candidates(&settings)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(names, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn every_selected_server_is_logged_in_sequentially() {
+        let out = Output::default();
+        let mut seen: Vec<String> = Vec::new();
+        let names = vec!["alpha".to_string(), "beta".to_string()];
+        let code = run_mcp_logins(
+            &out,
+            &names,
+            |name| {
+                seen.push(name.to_string());
+                Ok(format!("authorized {name}"))
+            },
+            |_| Some(Ok(3)),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(seen, vec!["alpha", "beta"]);
+    }
+
+    /// One bad server must not abort the rest of the batch, but it must still
+    /// be visible in the exit status.
+    #[test]
+    fn a_failure_continues_the_batch_and_exits_nonzero() {
+        let out = Output::default();
+        let mut attempted: Vec<String> = Vec::new();
+        let names = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
+        let code = run_mcp_logins(
+            &out,
+            &names,
+            |name| {
+                attempted.push(name.to_string());
+                if name == "beta" {
+                    Err("authorization declined".to_string())
+                } else {
+                    Ok(format!("authorized {name}"))
+                }
+            },
+            |_| Some(Ok(1)),
+        );
+        assert_eq!(code, 1);
+        assert_eq!(attempted, vec!["alpha", "beta", "gamma"]);
+    }
+
+    /// A server that failed to authorize has nothing to reconnect.
+    #[test]
+    fn reconnect_is_skipped_for_failed_logins() {
+        let out = Output::default();
+        let mut reconnected: Vec<String> = Vec::new();
+        let names = vec!["alpha".to_string()];
+        let code = run_mcp_logins(
+            &out,
+            &names,
+            |_| Err("nope".to_string()),
+            |name| {
+                reconnected.push(name.to_string());
+                Some(Ok(0))
+            },
+        );
+        assert_eq!(code, 1);
+        assert!(reconnected.is_empty());
+    }
+
+    /// The credentials are on disk either way, so a reconnect problem (or an
+    /// absent backend) must not turn a successful login into a failure.
+    #[test]
+    fn reconnect_problems_do_not_fail_the_login() {
+        let out = Output::default();
+        let names = vec!["alpha".to_string()];
+        let failed_reconnect = run_mcp_logins(
+            &out,
+            &names,
+            |_| Ok("ok".to_string()),
+            |_| Some(Err("handshake timed out".to_string())),
+        );
+        let no_backend = run_mcp_logins(&out, &names, |_| Ok("ok".to_string()), |_| None);
+        assert_eq!((failed_reconnect, no_backend), (0, 0));
+    }
+
+    #[test]
+    fn an_empty_selection_does_nothing() {
+        let out = Output::default();
+        let mut calls = 0;
+        let code = run_mcp_logins(
+            &out,
+            &[],
+            |_| {
+                calls += 1;
+                Ok(String::new())
+            },
+            |_| None,
+        );
+        assert_eq!((code, calls), (0, 0));
     }
 }
