@@ -13,6 +13,7 @@
 
 pub mod completion;
 pub mod manage;
+mod multi_select;
 pub mod ops;
 pub mod process;
 pub mod render;
