@@ -354,7 +354,9 @@ mod extract_args_tests {
     /// otherwise MCP tools reject the call with "query is required".
     #[test]
     fn json_text_part_is_parsed_into_named_args() {
-        let req = req_with(A2aPart::text(r#"{"query":"azure functions","maxResults":2}"#));
+        let req = req_with(A2aPart::text(
+            r#"{"query":"azure functions","maxResults":2}"#,
+        ));
         assert_eq!(
             extract_tool_args(&req),
             json!({"query": "azure functions", "maxResults": 2})

@@ -187,7 +187,9 @@ fn remap_input_placeholder(
             .get(name)
             .map(|p| {
                 let t = &p["type"];
-                t == "string" || t.as_array().is_some_and(|a| a.iter().any(|v| v == "string"))
+                t == "string"
+                    || t.as_array()
+                        .is_some_and(|a| a.iter().any(|v| v == "string"))
             })
             .unwrap_or(false)
     };
@@ -1499,7 +1501,10 @@ mod remap_input_tests {
             "properties": {"a": {"type":"string"}, "b": {"type":"string"}},
             "required": ["a","b"]
         }));
-        assert_eq!(remap_input_placeholder(&args(json!({"input":"hi"})), &s), None);
+        assert_eq!(
+            remap_input_placeholder(&args(json!({"input":"hi"})), &s),
+            None
+        );
     }
 
     #[test]
@@ -1508,7 +1513,10 @@ mod remap_input_tests {
             "properties": {"entityUrls": {"type":"array"}},
             "required": ["entityUrls"]
         }));
-        assert_eq!(remap_input_placeholder(&args(json!({"input":"hi"})), &s), None);
+        assert_eq!(
+            remap_input_placeholder(&args(json!({"input":"hi"})), &s),
+            None
+        );
     }
 
     #[test]
@@ -1517,7 +1525,10 @@ mod remap_input_tests {
             "properties": {"input": {"type":"string"}},
             "required": ["input"]
         }));
-        assert_eq!(remap_input_placeholder(&args(json!({"input":"hi"})), &s), None);
+        assert_eq!(
+            remap_input_placeholder(&args(json!({"input":"hi"})), &s),
+            None
+        );
     }
 
     #[test]
