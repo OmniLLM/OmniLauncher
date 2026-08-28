@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Weak},
+};
 
 use async_trait::async_trait;
 use http::{HeaderName, HeaderValue};
@@ -300,6 +304,7 @@ async fn plugins_from_service(
         _service: service,
         peer,
     });
+    record_session(server_name, &session);
 
     Ok(tools
         .into_iter()
@@ -772,8 +777,18 @@ pub struct McpServerStatus {
 static SERVER_STATUS: std::sync::OnceLock<std::sync::RwLock<HashMap<String, McpServerStatus>>> =
     std::sync::OnceLock::new();
 
+/// Live sessions corresponding to successful connection records. Weak
+/// references ensure this status index never keeps an otherwise unused MCP
+/// connection alive.
+static SERVER_SESSIONS: std::sync::OnceLock<std::sync::RwLock<HashMap<String, Weak<McpSession>>>> =
+    std::sync::OnceLock::new();
+
 fn status_map() -> &'static std::sync::RwLock<HashMap<String, McpServerStatus>> {
     SERVER_STATUS.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+fn session_map() -> &'static std::sync::RwLock<HashMap<String, Weak<McpSession>>> {
+    SERVER_SESSIONS.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
 }
 
 /// Snapshot of every server's last connection outcome.
@@ -782,6 +797,68 @@ pub fn server_statuses() -> HashMap<String, McpServerStatus> {
         .read()
         .map(|map| map.clone())
         .unwrap_or_default()
+}
+
+fn record_session(name: &str, session: &Arc<McpSession>) {
+    if let Ok(mut map) = session_map().write() {
+        map.insert(name.to_string(), Arc::downgrade(session));
+    }
+}
+
+/// Probe every previously connected session before returning its status.
+///
+/// A successful startup handshake is only historical evidence: an OAuth token
+/// can expire or be revoked while the backend keeps running. `ol mcp list`
+/// calls this path so its "connected" label reflects a request that succeeded
+/// now. Probes run concurrently and are individually bounded so one unhealthy
+/// server cannot hold up the whole list.
+pub async fn live_server_statuses() -> HashMap<String, McpServerStatus> {
+    let sessions: Vec<(String, Arc<McpSession>)> = session_map()
+        .read()
+        .map(|map| {
+            map.iter()
+                .filter_map(|(name, session)| session.upgrade().map(|s| (name.clone(), s)))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let probes = sessions.into_iter().map(|(name, session)| async move {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(4),
+            session.peer.list_all_tools(),
+        )
+        .await;
+        let status = match result {
+            Ok(Ok(tools)) => McpServerStatus {
+                connected: true,
+                tool_count: tools.len(),
+                error: None,
+                needs_login: false,
+            },
+            Ok(Err(error)) => status_from_live_error(error.to_string()),
+            Err(_) => McpServerStatus {
+                connected: false,
+                tool_count: 0,
+                error: Some(format!("MCP server '{name}' status probe timed out")),
+                needs_login: false,
+            },
+        };
+        (name, status)
+    });
+
+    for (name, status) in futures_util::future::join_all(probes).await {
+        record_status(&name, status);
+    }
+    server_statuses()
+}
+
+fn status_from_live_error(error: String) -> McpServerStatus {
+    McpServerStatus {
+        connected: false,
+        tool_count: 0,
+        needs_login: is_auth_failure(&error),
+        error: Some(error),
+    }
 }
 
 fn record_status(name: &str, status: McpServerStatus) {
@@ -955,6 +1032,7 @@ async fn connect_and_record(name: &str, config: &McpServerConfig) -> Vec<Box<dyn
 fn is_auth_failure(error: &str) -> bool {
     let lowered = error.to_lowercase();
     lowered.contains("auth required")
+        || lowered.contains("authorization required")
         || lowered.contains("requires oauth authorization")
         || lowered.contains("unauthorized")
         || lowered.contains("invalid_token")
@@ -1052,6 +1130,21 @@ mod tests {
         assert!(super::is_auth_failure(
             r#"Bearer error="invalid_token", error_description="..."#
         ));
+        assert!(super::is_auth_failure("OAuth authorization required"));
+    }
+
+    /// A failed live probe replaces the stale successful startup record and
+    /// preserves the actionable login hint shown by `ol mcp list`.
+    #[test]
+    fn live_oauth_failure_is_reported_as_auth_required() {
+        let status = super::status_from_live_error("OAuth authorization required".to_string());
+        assert!(!status.connected);
+        assert_eq!(status.tool_count, 0);
+        assert!(status.needs_login);
+        assert_eq!(
+            status.error.as_deref(),
+            Some("OAuth authorization required")
+        );
     }
 
     /// Transport and configuration faults must not suggest logging in.

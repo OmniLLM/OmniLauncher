@@ -125,7 +125,7 @@ async fn handle_a2a_request(
         // connectivity on its own; this is how it learns which configured
         // servers actually connected.
         ("GET", "/mcp/status") => {
-            let statuses = crate::mcp::server_statuses();
+            let statuses = crate::mcp::live_server_statuses().await;
             json_response(&statuses)
         }
 
